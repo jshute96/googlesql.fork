@@ -61,9 +61,13 @@ build:darwin --cxxopt="-mmacosx-version-min=11.0"
 # C++20 is required to build GoogleSQL, hence `-cxxopt=-std=c++20`. On MacOS
 # `--host_cxxopt=-std=c++20` is also needed.
 # "--java_runtime_version=remotejdk_11": to make the build more hermetic.
+#
+# These are set only on `build`. The `run`, `test`, and `coverage` commands
+# inherit `build` options, so re-specifying them (especially `--config=clang`,
+# whose expansion repeats `--cxxopt` flags) would apply the flags twice, change
+# the option fingerprint, and discard the analysis cache when alternating
+# between e.g. `bazel build` and `bazel test`, forcing a full rebuild.
 build --cxxopt=-std=c++20 --host_cxxopt=-std=c++20 --config=clang --java_runtime_version=remotejdk_11
-run --cxxopt=-std=c++20 --host_cxxopt=-std=c++20 --config=clang --java_runtime_version=remotejdk_11
-test --cxxopt=-std=c++20 --host_cxxopt=-std=c++20 --config=clang --java_runtime_version=remotejdk_11
 
 # Force Go to build in PIE mode to avoid "relocation R_X86_64_64" errors on
 # modern Linux environments where the LLVM toolchain enforces PIE.
