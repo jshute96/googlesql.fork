@@ -1883,3 +1883,20 @@ INSERT INTO `project-987654321`.a.b
 VALUES
   (1)
 
+==
+
+# INSERT ... BY NAME
+INSERT INTO T BY NAME
+SELECT 1 AS a, 2 AS b
+--
+==
+
+# BY NAME together with an insert mode.
+INSERT OR UPDATE INTO T BY NAME
+SELECT 1 AS a
+--
+==
+
+# An explicit column list with BY NAME parses; the analyzer rejects it.
+INSERT INTO T (a, b) BY NAME
+SELECT 1 AS a, 2 AS b

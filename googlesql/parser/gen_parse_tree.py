@@ -7514,6 +7514,17 @@ def main(argv):
               comment='Deprecated',
           ),
           Field('insert_mode', SCALAR_INSERT_MODE, tag_id=9),
+          Field(
+              'insert_by_name',
+              SCALAR_BOOL,
+              tag_id=12,
+              comment="""
+            True for INSERT ... BY NAME, where the columns to insert into are
+            matched by name against the output column names of query(), rather
+            than positionally.  When true, column_list() must be absent and the
+            source must be query() (not rows()).
+              """,
+          ),
       ],
       extra_public_defs="""
   const ASTGeneralizedPathExpression* GetTargetPathForNested() const {

@@ -1122,12 +1122,18 @@ ASTTruncateStatement::GetTargetPathForNonNested() const {
 }
 
 std::string ASTInsertStatement::SingleNodeDebugString() const {
-  if (insert_mode_ == DEFAULT_MODE) {
-    return ASTNode::SingleNodeDebugString();
-  } else {
-    return absl::StrCat(ASTNode::SingleNodeDebugString(),
-                        "(insert_mode=", GetSQLForInsertMode(), ")");
+  std::vector<std::string> modifiers;
+  if (insert_mode_ != DEFAULT_MODE) {
+    modifiers.push_back(absl::StrCat("insert_mode=", GetSQLForInsertMode()));
   }
+  if (insert_by_name_) {
+    modifiers.push_back("insert_by_name=true");
+  }
+  if (modifiers.empty()) {
+    return ASTNode::SingleNodeDebugString();
+  }
+  return absl::StrCat(ASTNode::SingleNodeDebugString(), "(",
+                      absl::StrJoin(modifiers, ", "), ")");
 }
 
 std::string ASTInsertStatement::GetSQLForInsertMode() const {

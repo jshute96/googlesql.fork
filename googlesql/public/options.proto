@@ -2257,6 +2257,16 @@ enum LanguageFeature {
     (language_feature_options).in_development = true
   ];
 
+  // Enables INSERT ... BY NAME, where the columns of the target table to insert
+  // into are matched by name against the output column names of the source
+  // query, rather than positionally.  Target columns absent from the source
+  // query are filled with their default values (or NULL).  No explicit column
+  // list may be given, and the source must be a query (not VALUES).
+  FEATURE_INSERT_BY_NAME = 14128 [
+    (language_feature_options).language_version = VERSION_1_4,
+    (language_feature_options).in_development = true
+  ];
+
   // EXPERIMENTAL FEATURES -
   //    Do not add features in this section. Use the in_development annotation
   //    instead.

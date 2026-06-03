@@ -2397,3 +2397,104 @@ FROM
 |> SELECT
      AnotherKeyValue.Key AS Key,
      AnotherKeyValue.value AS value;
+==
+
+# ==========================================================================
+# INSERT ... BY NAME
+#
+# BY NAME matches the output column names of the source query against the
+# columns of the target table, instead of matching positionally.  Target
+# columns absent from the query are filled with their default value (or NULL).
+# An explicit column list is not allowed, and the source must be a query.
+# ==========================================================================
+
+# BY NAME matches the query's output column names to the table's columns.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+SELECT 1 AS key, "v" AS value
+--
+==
+
+# BY NAME matches by name regardless of order; here the query lists value first
+# so the resulting insert_column_list is [Value, Key].
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+SELECT "v" AS value, 1 AS key
+--
+==
+
+# Matching is case-insensitive.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+SELECT 1 AS KEY, "v" AS Value
+--
+==
+
+# Columns omitted from the query keep their default value (or NULL); here
+# default_col is omitted and is filled by its default expression.
+[language_features=INSERT_BY_NAME]
+INSERT INTO TableWithDefaultColumn BY NAME
+SELECT 1 AS id, 2 AS a
+--
+==
+
+# BY NAME from another table.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+SELECT Key, value FROM AnotherKeyValue
+--
+==
+
+# BY NAME works together with an insert mode.
+[language_features=INSERT_BY_NAME]
+INSERT OR UPDATE INTO KeyValue BY NAME
+SELECT 1 AS key, "v" AS value
+--
+==
+
+# BY NAME is rejected when the feature is not enabled.
+INSERT INTO KeyValue BY NAME
+SELECT 1 AS key, "v" AS value
+--
+==
+
+# BY NAME cannot be combined with an explicit column list.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue (key, value) BY NAME
+SELECT 1 AS key, "v" AS value
+--
+==
+
+# BY NAME requires a query; VALUES is not allowed.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+VALUES (1, "v")
+--
+==
+
+# A query column whose name is not a column of the target table is an error.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+SELECT 1 AS key, "v" AS not_a_column
+--
+==
+
+# Two query columns matching the same target column name is an error.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+SELECT 1 AS key, 2 AS key
+--
+==
+
+# Anonymous query columns cannot be matched by name.
+[language_features=INSERT_BY_NAME]
+INSERT INTO KeyValue BY NAME
+SELECT 1, "v"
+--
+==
+
+# BY NAME is not allowed in a nested INSERT.
+[language_features=INSERT_BY_NAME]
+UPDATE TestTable t SET
+  (INSERT KitchenSink.repeated_int64_val BY NAME SELECT 1 AS x)
+WHERE true
