@@ -72,6 +72,41 @@ bazel run //googlesql/tools/execute_query:execute_query -- --web   # interactive
 version is pinned in `.bazelversion`. See `README.md` for full instructions and
 `execute_query.md` for the tool.
 
+### What a build actually needs
+
+- **Bazel** at the `.bazelversion` version (install it if the container has
+  none — e.g. the `bazel-<ver>-linux-x86_64` release binary).
+- A **C++20** compiler. The default `--config=clang` (see `.bazelrc`) builds
+  with an LLVM toolchain that `toolchains_llvm` downloads, so a host clang is
+  not strictly required, but `tzdata` is.
+- A host **Go** toolchain and host **autotools** (`make`, `cmake`, `ninja`,
+  `pkg-config`, `autoconf`, `automake`, `m4`). `MODULE.bazel` is configured to
+  use the host's Go (`go_sdk.host()`) and the preinstalled `rules_foreign_cc`
+  toolchains rather than downloading them — the Go tool `textmapper` (lexer gen)
+  and the ICU build (via `rules_foreign_cc`) depend on these being installed.
+- First build is **slow**: the generated `resolved_ast` sources and ICU
+  (autoconf + make) dominate. Expect tens of minutes from a cold cache.
+
+### Building behind a restricted-network sandbox (e.g. Claude Code on the web)
+
+If the egress proxy uses a TLS-inspecting allowlist (GitHub + a few hosts
+allowed; `bcr.bazel.build`, `mirror.bazel.build`, `go.dev`/`dl.google.com`
+blocked), two non-committed settings get a build working — put them in
+`~/.bazelrc` (or a `SessionStart` hook):
+
+```
+# Trust the proxy's TLS-inspection CA in Bazel's server JVM (avoids PKIX errors).
+# The OS-managed system cacerts already contains it.
+startup --host_jvm_args=-Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts
+startup --host_jvm_args=-Djavax.net.ssl.trustStorePassword=changeit
+
+# bcr.bazel.build is blocked; use the GitHub-hosted mirror of the registry.
+common --registry=https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/main/
+```
+
+The host-Go / host-tool settings above (in `MODULE.bazel`) are the committed
+half of the same story: they avoid the blocked Go-SDK and tool-source mirrors.
+
 ## Background reading
 
 The README links external papers worth skimming: *GoogleSQL: A SQL Language as a
