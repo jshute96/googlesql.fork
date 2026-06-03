@@ -1061,3 +1061,47 @@ FROM KeyValue
 ERROR: INSERT is only allowed as part of the outermost query in a statement [at 3:1]
 |> INSERT INTO KeyValue
 ^
+==
+
+# Pipe INSERT supports BY NAME, matching the pipe input's column names against
+# the target table columns.  Here the input lists value before key, so they are
+# matched by name rather than by position.
+[language_features=NONE,+PIPES,+PIPE_INSERT,+INSERT_BY_NAME]
+SELECT "abc" AS value, 5 AS key
+|> INSERT INTO KeyValue BY NAME
+--
+GeneralizedQueryStmt
++-query=
+  +-PipeInsertScan
+    +-insert_stmt=
+      +-InsertStmt
+        +-table_scan=
+        | +-TableScan(column_list=KeyValue.[Key#3, Value#4], table=KeyValue, column_index_list=[0, 1])
+        +-insert_column_list=KeyValue.[Value#4, Key#3]
+        +-query=
+        | +-ProjectScan
+        |   +-column_list=$query.[value#1, key#2]
+        |   +-expr_list=
+        |   | +-value#1 := Literal(type=STRING, value="abc")
+        |   | +-key#2 := Literal(type=INT64, value=5)
+        |   +-input_scan=
+        |     +-SingleRowScan
+        +-query_output_column_list=$query.[value#1, key#2]
+        +-column_access_list=WRITE,WRITE
+
+
+[REWRITTEN AST]
+InsertStmt
++-table_scan=
+| +-TableScan(column_list=KeyValue.[Key#3, Value#4], table=KeyValue, column_index_list=[0, 1])
++-insert_column_list=KeyValue.[Value#4, Key#3]
++-query=
+| +-ProjectScan
+|   +-column_list=$query.[value#1, key#2]
+|   +-expr_list=
+|   | +-value#1 := Literal(type=STRING, value="abc")
+|   | +-key#2 := Literal(type=INT64, value=5)
+|   +-input_scan=
+|     +-SingleRowScan
++-query_output_column_list=$query.[value#1, key#2]
++-column_access_list=WRITE,WRITE

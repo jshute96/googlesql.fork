@@ -2409,92 +2409,196 @@ FROM
 # ==========================================================================
 
 # BY NAME matches the query's output column names to the table's columns.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 SELECT 1 AS key, "v" AS value
 --
+InsertStmt
++-table_scan=
+| +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
++-insert_column_list=KeyValue.[Key#1, Value#2]
++-query=
+| +-ProjectScan
+|   +-column_list=$insert.[key#3, value#4]
+|   +-expr_list=
+|   | +-key#3 := Literal(type=INT64, value=1)
+|   | +-value#4 := Literal(type=STRING, value="v")
+|   +-input_scan=
+|     +-SingleRowScan
++-query_output_column_list=$insert.[key#3, value#4]
++-column_access_list=WRITE,WRITE
 ==
 
 # BY NAME matches by name regardless of order; here the query lists value first
 # so the resulting insert_column_list is [Value, Key].
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 SELECT "v" AS value, 1 AS key
 --
+InsertStmt
++-table_scan=
+| +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
++-insert_column_list=KeyValue.[Value#2, Key#1]
++-query=
+| +-ProjectScan
+|   +-column_list=$insert.[value#3, key#4]
+|   +-expr_list=
+|   | +-value#3 := Literal(type=STRING, value="v")
+|   | +-key#4 := Literal(type=INT64, value=1)
+|   +-input_scan=
+|     +-SingleRowScan
++-query_output_column_list=$insert.[value#3, key#4]
++-column_access_list=WRITE,WRITE
 ==
 
 # Matching is case-insensitive.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 SELECT 1 AS KEY, "v" AS Value
 --
+InsertStmt
++-table_scan=
+| +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
++-insert_column_list=KeyValue.[Key#1, Value#2]
++-query=
+| +-ProjectScan
+|   +-column_list=$insert.[KEY#3, Value#4]
+|   +-expr_list=
+|   | +-KEY#3 := Literal(type=INT64, value=1)
+|   | +-Value#4 := Literal(type=STRING, value="v")
+|   +-input_scan=
+|     +-SingleRowScan
++-query_output_column_list=$insert.[KEY#3, Value#4]
++-column_access_list=WRITE,WRITE
 ==
 
 # Columns omitted from the query keep their default value (or NULL); here
 # default_col is omitted and is filled by its default expression.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO TableWithDefaultColumn BY NAME
 SELECT 1 AS id, 2 AS a
 --
+InsertStmt
++-table_scan=
+| +-TableScan(column_list=TableWithDefaultColumn.[id#1, a#2, default_col#3], table=TableWithDefaultColumn, column_index_list=[0, 1, 2])
++-insert_column_list=TableWithDefaultColumn.[id#1, a#2]
++-query=
+| +-ProjectScan
+|   +-column_list=$insert.[id#4, a#5]
+|   +-expr_list=
+|   | +-id#4 := Literal(type=INT64, value=1)
+|   | +-a#5 := Literal(type=INT64, value=2)
+|   +-input_scan=
+|     +-SingleRowScan
++-query_output_column_list=$insert.[id#4, a#5]
++-column_access_list=WRITE,WRITE,WRITE
 ==
 
 # BY NAME from another table.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 SELECT Key, value FROM AnotherKeyValue
 --
+InsertStmt
++-table_scan=
+| +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
++-insert_column_list=KeyValue.[Key#1, Value#2]
++-query=
+| +-ProjectScan
+|   +-column_list=AnotherKeyValue.[Key#3, value#4]
+|   +-input_scan=
+|     +-TableScan(column_list=AnotherKeyValue.[Key#3, value#4], table=AnotherKeyValue, column_index_list=[0, 1])
++-query_output_column_list=AnotherKeyValue.[Key#3, value#4]
++-column_access_list=WRITE,WRITE
 ==
 
 # BY NAME works together with an insert mode.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT OR UPDATE INTO KeyValue BY NAME
 SELECT 1 AS key, "v" AS value
 --
+InsertStmt
++-table_scan=
+| +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
++-insert_mode=OR UPDATE
++-insert_column_list=KeyValue.[Key#1, Value#2]
++-query=
+| +-ProjectScan
+|   +-column_list=$insert.[key#3, value#4]
+|   +-expr_list=
+|   | +-key#3 := Literal(type=INT64, value=1)
+|   | +-value#4 := Literal(type=STRING, value="v")
+|   +-input_scan=
+|     +-SingleRowScan
++-query_output_column_list=$insert.[key#3, value#4]
++-column_access_list=WRITE,WRITE
 ==
 
 # BY NAME is rejected when the feature is not enabled.
 INSERT INTO KeyValue BY NAME
 SELECT 1 AS key, "v" AS value
 --
+ERROR: INSERT BY NAME is not supported [at 1:1]
+INSERT INTO KeyValue BY NAME
+^
 ==
 
 # BY NAME cannot be combined with an explicit column list.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue (key, value) BY NAME
 SELECT 1 AS key, "v" AS value
 --
+ERROR: INSERT cannot specify both an explicit column list and BY NAME [at 1:22]
+INSERT INTO KeyValue (key, value) BY NAME
+                     ^
 ==
 
 # BY NAME requires a query; VALUES is not allowed.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 VALUES (1, "v")
 --
+ERROR: INSERT BY NAME requires a query and cannot be used with VALUES [at 1:1]
+INSERT INTO KeyValue BY NAME
+^
 ==
 
 # A query column whose name is not a column of the target table is an error.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 SELECT 1 AS key, "v" AS not_a_column
 --
+ERROR: Column not_a_column in the input query of INSERT BY NAME is not present in table KeyValue [at 2:1]
+SELECT 1 AS key, "v" AS not_a_column
+^
 ==
 
 # Two query columns matching the same target column name is an error.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 SELECT 1 AS key, 2 AS key
 --
+ERROR: INSERT BY NAME has input columns with duplicate name: key [at 2:1]
+SELECT 1 AS key, 2 AS key
+^
 ==
 
 # Anonymous query columns cannot be matched by name.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 INSERT INTO KeyValue BY NAME
 SELECT 1, "v"
 --
+ERROR: INSERT BY NAME requires the input query to produce columns with explicit names that match columns of the target table [at 2:1]
+SELECT 1, "v"
+^
 ==
 
 # BY NAME is not allowed in a nested INSERT.
-[language_features=INSERT_BY_NAME]
+[language_features=NONE,+INSERT_BY_NAME]
 UPDATE TestTable t SET
   (INSERT KitchenSink.repeated_int64_val BY NAME SELECT 1 AS x)
 WHERE true
+--
+ERROR: Nested INSERTs cannot use BY NAME [at 2:4]
+  (INSERT KitchenSink.repeated_int64_val BY NAME SELECT 1 AS x)
+   ^

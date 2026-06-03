@@ -1889,14 +1889,70 @@ VALUES
 INSERT INTO T BY NAME
 SELECT 1 AS a, 2 AS b
 --
+InsertStatement(insert_by_name=true) [0-43] [INSERT INTO...a, 2 AS b]
+  PathExpression [12-13] [T]
+    Identifier(T) [12-13] [T]
+  Query [22-43] [SELECT 1 AS a, 2 AS b]
+    Select [22-43] [SELECT 1 AS a, 2 AS b]
+      SelectList [29-43] [1 AS a, 2 AS b]
+        SelectColumn [29-35] [1 AS a]
+          IntLiteral(1) [29-30] [1]
+          Alias [31-35] [AS a]
+            Identifier(a) [34-35] [a]
+        SelectColumn [37-43] [2 AS b]
+          IntLiteral(2) [37-38] [2]
+          Alias [39-43] [AS b]
+            Identifier(b) [42-43] [b]
+--
+INSERT INTO T BY NAME
+SELECT
+  1 AS a,
+  2 AS b
 ==
 
 # BY NAME together with an insert mode.
 INSERT OR UPDATE INTO T BY NAME
 SELECT 1 AS a
 --
+InsertStatement(insert_mode=UPDATE, insert_by_name=true) [0-45] [INSERT OR...SELECT 1 AS a]
+  PathExpression [22-23] [T]
+    Identifier(T) [22-23] [T]
+  Query [32-45] [SELECT 1 AS a]
+    Select [32-45] [SELECT 1 AS a]
+      SelectList [39-45] [1 AS a]
+        SelectColumn [39-45] [1 AS a]
+          IntLiteral(1) [39-40] [1]
+          Alias [41-45] [AS a]
+            Identifier(a) [44-45] [a]
+--
+INSERT OR UPDATE INTO T BY NAME
+SELECT
+  1 AS a
 ==
 
 # An explicit column list with BY NAME parses; the analyzer rejects it.
 INSERT INTO T (a, b) BY NAME
 SELECT 1 AS a, 2 AS b
+--
+InsertStatement(insert_by_name=true) [0-50] [INSERT INTO...a, 2 AS b]
+  PathExpression [12-13] [T]
+    Identifier(T) [12-13] [T]
+  ColumnList [14-20] [(a, b)]
+    Identifier(a) [15-16] [a]
+    Identifier(b) [18-19] [b]
+  Query [29-50] [SELECT 1 AS a, 2 AS b]
+    Select [29-50] [SELECT 1 AS a, 2 AS b]
+      SelectList [36-50] [1 AS a, 2 AS b]
+        SelectColumn [36-42] [1 AS a]
+          IntLiteral(1) [36-37] [1]
+          Alias [38-42] [AS a]
+            Identifier(a) [41-42] [a]
+        SelectColumn [44-50] [2 AS b]
+          IntLiteral(2) [44-45] [2]
+          Alias [46-50] [AS b]
+            Identifier(b) [49-50] [b]
+--
+INSERT INTO T(a, b) BY NAME
+SELECT
+  1 AS a,
+  2 AS b
