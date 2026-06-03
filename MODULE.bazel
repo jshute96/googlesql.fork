@@ -96,6 +96,11 @@ maven.install(
 )
 use_repo(maven, "maven")
 
+# Go SDK. Use the host's installed Go toolchain instead of downloading one, since
+# the Go SDK download hosts (go.dev / dl.google.com) are not always reachable.
+go_sdk = use_extension("@io_bazel_rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.host()
+
 # Go dependencies.
 go_deps = use_extension("@bazel_gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
@@ -132,6 +137,19 @@ use_repo(
     "mstch",
     "native_utils",
     "org_publicsuffix",
+)
+
+# Use the host's preinstalled make/cmake/ninja for rules_foreign_cc builds (e.g.
+# ICU) instead of building those tools from source, whose download mirrors
+# (mirror.bazel.build / ftpmirror.gnu.org) are not always reachable.
+register_toolchains(
+    "@rules_foreign_cc//toolchains:preinstalled_make_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_cmake_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_ninja_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_autoconf_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_automake_toolchain",
+    "@rules_foreign_cc//toolchains:preinstalled_m4_toolchain",
 )
 
 # Dev toolchain.

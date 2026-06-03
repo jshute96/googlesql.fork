@@ -1,0 +1,6 @@
+# Bazel convenience symlinks created in the workspace root.
+/bazel-*
+
+# Bazel module lockfile. Not tracked upstream and may capture
+# environment-specific registry URLs.
+/MODULE.bazel.lock
