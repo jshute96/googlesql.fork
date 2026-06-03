@@ -327,6 +327,21 @@ absl::Status Resolver::ResolveInsertValuesRow(
   return absl::OkStatus();
 }
 
+// Builds a case-insensitive map from column name to ResolvedColumn for the
+// columns of <table_scan>, used to resolve INSERT target columns by name. Names
+// that map to more than one column are added to <ambiguous_column_names> and
+// left in the map pointing at an arbitrary one of the duplicates.
+static void BuildInsertTargetColumnMap(
+    const ResolvedTableScan& table_scan,
+    IdStringHashMapCase<ResolvedColumn>* column_map,
+    IdStringHashSetCase* ambiguous_column_names) {
+  for (const ResolvedColumn& column : table_scan.column_list()) {
+    if (!googlesql_base::InsertIfNotPresent(column_map, column.name_id(), column)) {
+      googlesql_base::InsertIfNotPresent(ambiguous_column_names, column.name_id());
+    }
+  }
+}
+
 // <insert_columns> is the list of columns inserted into the target table.
 // <output_column_list> returns the list of columns produced by <output> that
 // map positionally into <insert_columns>.
@@ -384,7 +399,6 @@ absl::Status Resolver::ResolveInsertQuery(
   // query output, just like an explicit column list would.
   if (insert_by_name) {
     GOOGLESQL_RET_CHECK(target_table_scan != nullptr);
-    GOOGLESQL_RET_CHECK(insert_columns->empty());
     GOOGLESQL_RETURN_IF_ERROR(MatchInsertColumnsByName(
         ast_location, *target_table_scan, *query_name_list, insert_columns));
   }
@@ -413,6 +427,9 @@ absl::Status Resolver::ResolveInsertQuery(
       if (!coercer_.AssignableTo(input_argument_type, insert_type,
                                  /* is_explicit = */ false, &unused) &&
           untyped_literal_map.Find((*output_column_list)[i]) == nullptr) {
+        // TODO: This points at the source query rather than the specific
+        // output column; see MatchInsertColumnsByName for how this could be
+        // improved for a simple SELECT source.
         return MakeSqlErrorAt(ast_location)
                << "Query column " << (i + 1) << " has type "
                << current_type->ShortTypeName(product_mode())
@@ -437,17 +454,18 @@ absl::Status Resolver::ResolveInsertQuery(
 absl::Status Resolver::MatchInsertColumnsByName(
     const ASTNode* ast_location, const ResolvedTableScan& table_scan,
     const NameList& query_name_list, ResolvedColumnList* insert_columns) {
-  // Build a name -> column map for the target table, tracking ambiguous names.
+  GOOGLESQL_RET_CHECK(insert_columns->empty());
   IdStringHashMapCase<ResolvedColumn> table_scan_columns;
   IdStringHashSetCase ambiguous_column_names;
-  for (const ResolvedColumn& column : table_scan.column_list()) {
-    if (!googlesql_base::InsertIfNotPresent(&table_scan_columns, column.name_id(),
-                                     column)) {
-      googlesql_base::InsertIfNotPresent(&ambiguous_column_names, column.name_id());
-    }
-  }
+  BuildInsertTargetColumnMap(table_scan, &table_scan_columns,
+                             &ambiguous_column_names);
 
-  GOOGLESQL_RET_CHECK(insert_columns->empty());
+  // TODO: These errors point at the source query as a whole rather than at the
+  // specific output column that is bad. The same coarse location applies to the
+  // positional column-type errors in ResolveInsertQuery for a regular INSERT.
+  // When the source is a simple ASTSelect we could thread its
+  // ASTSelectColumnList through and point at the offending ASTSelectColumn,
+  // falling back to the query location for set operations and pipe input.
   IdStringHashSetCase visited_column_names;
   for (const NamedColumn& named_column : query_name_list.columns()) {
     const IdString column_name_id = named_column.name();
@@ -695,20 +713,22 @@ absl::Status Resolver::ResolveInsertStatement(
       out_resolved_columns_to_catalog_columns_for_target_scan.begin(),
       out_resolved_columns_to_catalog_columns_for_target_scan.end());
 
-  IdStringHashMapCase<ResolvedColumn> table_scan_columns;
-  IdStringHashSetCase ambiguous_column_names;
-  for (const ResolvedColumn& column : resolved_table_scan->column_list()) {
-    if (!googlesql_base::InsertIfNotPresent(&table_scan_columns, column.name_id(),
-                                 column)) {
-      googlesql_base::InsertIfNotPresent(&ambiguous_column_names, column.name_id());
-    }
-  }
-
   ResolvedColumnList insert_columns;
   IdStringHashSetCase visited_column_names;
 
   const bool has_column_list = ast_statement->column_list() != nullptr;
   const bool insert_by_name = ast_statement->insert_by_name();
+
+  // The target column name map is only needed when resolving an explicit column
+  // list or the implicit (OMIT) expansion. For BY NAME the matching is done
+  // later against the source query, in MatchInsertColumnsByName.
+  IdStringHashMapCase<ResolvedColumn> table_scan_columns;
+  IdStringHashSetCase ambiguous_column_names;
+  if (!insert_by_name) {
+    BuildInsertTargetColumnMap(*resolved_table_scan, &table_scan_columns,
+                               &ambiguous_column_names);
+  }
+
   if (insert_by_name) {
     if (!language().LanguageFeatureEnabled(FEATURE_INSERT_BY_NAME)) {
       return MakeSqlErrorAt(ast_statement) << "INSERT BY NAME is not supported";
