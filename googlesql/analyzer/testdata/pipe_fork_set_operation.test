@@ -196,25 +196,17 @@ FROM KeyValue
 --
 QueryStmt
 +-output_column_list=
-| +-$fork_union_input.Key#3 AS Key [INT64]
-| +-$fork_union_input.Value#4 AS Value [STRING]
+| +-KeyValue.Key#1 AS Key [INT64]
+| +-KeyValue.Value#2 AS Value [STRING]
 +-query=
-  +-WithScan
-    +-column_list=$fork_union_input.[Key#3, Value#4]
-    +-with_entry_list=
-    | +-WithEntry
-    |   +-with_query_name="$fork_union_input"
-    |   +-with_subquery=
-    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
-    +-query=
-      +-FilterScan
-        +-column_list=$fork_union_input.[Key#3, Value#4]
-        +-input_scan=
-        | +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
-        +-filter_expr=
-          +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
-            +-ColumnRef(type=INT64, column=$fork_union_input.Key#3)
-            +-Literal(type=INT64, value=5)
+  +-FilterScan
+    +-column_list=KeyValue.[Key#1, Value#2]
+    +-input_scan=
+    | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-filter_expr=
+      +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
+        +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+        +-Literal(type=INT64, value=5)
 ==
 
 # Empty fork branches (the default `()`) each return the input table.
