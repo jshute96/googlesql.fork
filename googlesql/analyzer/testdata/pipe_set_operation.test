@@ -2815,3 +2815,23 @@ QueryStmt
         +-scan=
         | +-TableScan(column_list=KeyValue.[Key#3, Value#4], node_source="table_clause", table=KeyValue, column_index_list=[0, 1])
         +-output_column_list=KeyValue.[Key#3, Value#4]
+==
+
+# A no-argument set operation is only allowed immediately after a pipe FORK
+# (to merge the fork branches).  Anywhere else it is an error.
+FROM KeyValue
+|> UNION ALL
+--
+ERROR: A set operation in pipe syntax requires at least one input query, unless it immediately follows a pipe FORK (to merge the fork's branches) [at 2:1]
+|> UNION ALL
+^
+==
+
+# Same, after another pipe operator.
+FROM KeyValue
+|> WHERE true
+|> INTERSECT DISTINCT
+--
+ERROR: A set operation in pipe syntax requires at least one input query, unless it immediately follows a pipe FORK (to merge the fork's branches) [at 3:1]
+|> INTERSECT DISTINCT
+^
