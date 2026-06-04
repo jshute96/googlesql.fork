@@ -1,0 +1,67 @@
+# Compliance tests for a no-argument set operation (UNION/INTERSECT) after a
+# pipe FORK, which merges the fork's table-producing branches back into a single
+# table.  See FEATURE_PIPE_FORK_SET_OPERATION.
+[prepare_database]
+CREATE TABLE T3 AS
+SELECT 1 AS k UNION ALL SELECT 2 UNION ALL SELECT 3
+--
+ARRAY<STRUCT<k INT64>>[{1}, {2}, {3}]
+==
+
+[default required_features=PIPES,PIPE_FORK,PIPE_FORK_SET_OPERATION]
+[name=pipe_fork_merge_union_all]
+FROM T3
+|> FORK ( |> WHERE k >= 2 ), ( |> WHERE k <= 2 )
+|> UNION ALL
+--
+ARRAY<STRUCT<k INT64>>[unknown order:{1}, {2}, {2}, {3}]
+==
+
+[name=pipe_fork_merge_union_distinct]
+FROM T3
+|> FORK ( |> WHERE k >= 2 ), ( |> WHERE k <= 2 )
+|> UNION DISTINCT
+--
+ARRAY<STRUCT<k INT64>>[unknown order:{1}, {2}, {3}]
+==
+
+[name=pipe_fork_merge_intersect_distinct]
+FROM T3
+|> FORK ( |> WHERE k >= 2 ), ( |> WHERE k <= 2 )
+|> INTERSECT DISTINCT
+--
+ARRAY<STRUCT<k INT64>>[{2}]
+==
+
+[name=pipe_fork_merge_single_branch]
+FROM T3
+|> FORK ( |> WHERE k = 2 )
+|> UNION ALL
+--
+ARRAY<STRUCT<k INT64>>[{2}]
+==
+
+[name=pipe_fork_merge_three_branches]
+FROM T3
+|> FORK ( |> WHERE k = 1 ), ( |> WHERE k = 2 ), ( |> WHERE k = 3 )
+|> UNION ALL
+--
+ARRAY<STRUCT<k INT64>>[unknown order:{1}, {2}, {3}]
+==
+
+[name=pipe_fork_merge_resume_pipeline]
+FROM T3
+|> FORK ( |> WHERE k >= 2 ), ( |> WHERE k <= 2 )
+|> UNION ALL
+|> AGGREGATE COUNT(*) AS n
+--
+ARRAY<STRUCT<n INT64>>[{4}]
+==
+
+[name=pipe_fork_merge_by_name]
+[required_features=PIPES,PIPE_FORK,PIPE_FORK_SET_OPERATION,BY_NAME]
+FROM (SELECT 1 AS a, 10 AS b)
+|> FORK ( |> SELECT a, b ), ( |> SELECT b, a )
+|> UNION ALL BY NAME
+--
+ARRAY<STRUCT<a INT64, b INT64>>[unknown order:{1, 10}, {1, 10}]
