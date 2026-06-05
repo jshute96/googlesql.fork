@@ -354,6 +354,18 @@ ERROR: Queries in UNION ALL have mismatched column count; FORK branch 1 has 1 co
                            ^
 ==
 
+# A set operation following FORK must be no-arg (it merges the branches), so a
+# set operation with an input query gives a targeted error rather than the
+# generic terminal-FORK error.
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> UNION ALL (SELECT 1)
+--
+ERROR: A set operation following pipe FORK merges the FORK's output tables and cannot have an input query; write it with no input query (for example, `|> UNION ALL`) [at 3:15]
+|> UNION ALL (SELECT 1)
+              ^
+==
+
 # EXCEPT is not symmetric, so it cannot merge fork branches.
 FROM KeyValue
 |> FORK ( |> WHERE true ), ( |> WHERE false )

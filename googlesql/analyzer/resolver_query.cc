@@ -1289,21 +1289,18 @@ absl::Status Resolver::ResolvePipeOperatorList(
         }
         break;
       case AST_PIPE_FORK: {
-        // A no-argument set operation (`|> UNION ALL` / `|> INTERSECT` with no
-        // input query) immediately after FORK merges the fork's branches back
-        // into a single table.  In that case FORK is not terminal and the
-        // pipeline resumes.  See ResolvePipeForkSetOperation.
+        // A set operation immediately after FORK merges the fork's output
+        // tables back into a single table (it must be a no-argument set
+        // operation; ResolvePipeForkSetOperation enforces that and the other
+        // rules).  In that case FORK is not terminal and the pipeline resumes.
+        // Any other set operation after FORK is also routed there so it gets a
+        // FORK-specific error rather than the generic terminal-FORK error.
         const ASTPipeSetOperation* merge_set_operation = nullptr;
-        if (op_idx + 1 < pipe_operator_list.size()) {
-          const ASTPipeOperator* next_operator =
-              pipe_operator_list[op_idx + 1];
-          if (next_operator->node_kind() == AST_PIPE_SET_OPERATION) {
-            const auto* next_set_operation =
-                next_operator->GetAs<ASTPipeSetOperation>();
-            if (next_set_operation->inputs().empty()) {
-              merge_set_operation = next_set_operation;
-            }
-          }
+        if (op_idx + 1 < pipe_operator_list.size() &&
+            pipe_operator_list[op_idx + 1]->node_kind() ==
+                AST_PIPE_SET_OPERATION) {
+          merge_set_operation =
+              pipe_operator_list[op_idx + 1]->GetAs<ASTPipeSetOperation>();
         }
         if (merge_set_operation != nullptr) {
           // The merge gets the inferred type if it is the last pipe operator.
@@ -2495,6 +2492,18 @@ absl::Status Resolver::ResolvePipeForkSetOperation(
   if (!language().LanguageFeatureEnabled(FEATURE_PIPE_FORK)) {
     return MakeSqlErrorAt(pipe_fork) << "Pipe FORK not supported";
   }
+
+  // A set operation following FORK merges the FORK's output tables, so it must
+  // be a no-argument set operation.  A normal set operation with input queries
+  // can never follow FORK (FORK is otherwise terminal), so reject that here
+  // with a targeted error instead of the generic terminal-operator error.
+  if (!set_operation->inputs().empty()) {
+    return MakeSqlErrorAt(set_operation->inputs().front())
+           << "A set operation following pipe FORK merges the FORK's output "
+              "tables and cannot have an input query; write it with no input "
+              "query (for example, `|> UNION ALL`)";
+  }
+
   if (!language().LanguageFeatureEnabled(FEATURE_PIPE_FORK_SET_OPERATION)) {
     return MakeSqlErrorAt(set_operation)
            << "Merging pipe FORK branches with a set operation is not supported";
