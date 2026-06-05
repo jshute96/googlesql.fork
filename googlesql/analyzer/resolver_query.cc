@@ -2493,6 +2493,13 @@ absl::Status Resolver::ResolvePipeForkSetOperation(
     return MakeSqlErrorAt(pipe_fork) << "Pipe FORK not supported";
   }
 
+  // When the feature is off, no set operation can follow FORK, so report that
+  // first (before complaining about the set operation's input queries).
+  if (!language().LanguageFeatureEnabled(FEATURE_PIPE_FORK_SET_OPERATION)) {
+    return MakeSqlErrorAt(set_operation)
+           << "Merging pipe FORK branches with a set operation is not supported";
+  }
+
   // A set operation following FORK merges the FORK's output tables, so it must
   // be a no-argument set operation.  A normal set operation with input queries
   // can never follow FORK (FORK is otherwise terminal), so reject that here
@@ -2500,13 +2507,7 @@ absl::Status Resolver::ResolvePipeForkSetOperation(
   if (!set_operation->inputs().empty()) {
     return MakeSqlErrorAt(set_operation->inputs().front())
            << "A set operation following pipe FORK merges the FORK's output "
-              "tables and cannot have an input query; write it with no input "
-              "query (for example, `|> UNION ALL`)";
-  }
-
-  if (!language().LanguageFeatureEnabled(FEATURE_PIPE_FORK_SET_OPERATION)) {
-    return MakeSqlErrorAt(set_operation)
-           << "Merging pipe FORK branches with a set operation is not supported";
+              "tables and cannot have an input query";
   }
 
   // Only the symmetric set operations can merge fork branches.  EXCEPT is not

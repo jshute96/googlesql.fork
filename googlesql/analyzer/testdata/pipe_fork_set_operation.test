@@ -361,7 +361,7 @@ FROM KeyValue
 |> FORK ( |> WHERE true ), ( |> WHERE false )
 |> UNION ALL (SELECT 1)
 --
-ERROR: A set operation following pipe FORK merges the FORK's output tables and cannot have an input query; write it with no input query (for example, `|> UNION ALL`) [at 3:15]
+ERROR: A set operation following pipe FORK merges the FORK's output tables and cannot have an input query [at 3:15]
 |> UNION ALL (SELECT 1)
               ^
 ==
@@ -397,4 +397,17 @@ FROM KeyValue
 --
 ERROR: Merging pipe FORK branches with a set operation is not supported [at 3:1]
 |> UNION ALL
+^
+==
+
+# With the feature off, the not-supported error takes precedence over the
+# input-query error.
+[language_features=MAXIMUM,+PIPES,+PIPE_FORK]
+[supported_statement_kinds=QUERY,GENERALIZED_QUERY]
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> UNION ALL (SELECT 1)
+--
+ERROR: Merging pipe FORK branches with a set operation is not supported [at 3:1]
+|> UNION ALL (SELECT 1)
 ^
