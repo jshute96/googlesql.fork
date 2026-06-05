@@ -1142,7 +1142,8 @@ absl::Status Resolver::ResolvePipeOperatorList(
   // which will be used in the error if there's a next operator.
   const char* terminal_operator_name = nullptr;
 
-  for (const ASTPipeOperator* pipe_operator : pipe_operator_list) {
+  for (int op_idx = 0; op_idx < pipe_operator_list.size(); ++op_idx) {
+    const ASTPipeOperator* pipe_operator = pipe_operator_list[op_idx];
     // We'll infer the type for the last pipe operator only.
     // TODO: We could could push this to earlier pipe operators if later
     // ones like WHERE don't change output.
@@ -1287,12 +1288,40 @@ absl::Status Resolver::ResolvePipeOperatorList(
           terminal_operator_name = "IF (with terminal operators inside)";
         }
         break;
-      case AST_PIPE_FORK:
-        GOOGLESQL_RETURN_IF_ERROR(ResolvePipeFork(
-            pipe_operator->GetAs<ASTPipeFork>(), outer_scope, &current_scope,
-            current_scan, current_name_list, allow_terminal));
-        terminal_operator_name = "FORK";
+      case AST_PIPE_FORK: {
+        // A set operation immediately after FORK merges the fork's output
+        // tables back into a single table (it must be a no-argument set
+        // operation; ResolvePipeForkSetOperation enforces that and the other
+        // rules).  In that case FORK is not terminal and the pipeline resumes.
+        // Any other set operation after FORK is also routed there so it gets a
+        // FORK-specific error rather than the generic terminal-FORK error.
+        const ASTPipeSetOperation* merge_set_operation = nullptr;
+        if (op_idx + 1 < pipe_operator_list.size() &&
+            pipe_operator_list[op_idx + 1]->node_kind() ==
+                AST_PIPE_SET_OPERATION) {
+          merge_set_operation =
+              pipe_operator_list[op_idx + 1]->GetAs<ASTPipeSetOperation>();
+        }
+        if (merge_set_operation != nullptr) {
+          // The merge gets the inferred type if it is the last pipe operator.
+          const Type* merge_inferred_type =
+              (op_idx + 1 == pipe_operator_list.size() - 1)
+                  ? inferred_type_for_query
+                  : nullptr;
+          GOOGLESQL_RETURN_IF_ERROR(ResolvePipeForkSetOperation(
+              pipe_operator->GetAs<ASTPipeFork>(), merge_set_operation,
+              outer_scope, current_scan, current_name_list,
+              merge_inferred_type));
+          ++op_idx;  // Consume the set operation; it's part of the FORK merge.
+          // Not a terminal operator: the pipeline resumes with one table.
+        } else {
+          GOOGLESQL_RETURN_IF_ERROR(ResolvePipeFork(
+              pipe_operator->GetAs<ASTPipeFork>(), outer_scope, &current_scope,
+              current_scan, current_name_list, allow_terminal));
+          terminal_operator_name = "FORK";
+        }
         break;
+      }
       case AST_PIPE_TEE:
         GOOGLESQL_RETURN_IF_ERROR(ResolvePipeTee(
             pipe_operator->GetAs<ASTPipeTee>(), outer_scope, &current_scope,
@@ -2451,6 +2480,179 @@ absl::Status Resolver::ResolvePipeFork(
 }
 
 NOINLINE_PREVENT_HUGE_STACK_FRAMES
+absl::Status Resolver::ResolvePipeForkSetOperation(
+    const ASTPipeFork* pipe_fork, const ASTPipeSetOperation* set_operation,
+    const NameScope* outer_scope,
+    std::unique_ptr<const ResolvedScan>* current_scan,
+    std::shared_ptr<const NameList>* current_name_list,
+    const Type* inferred_type_for_pipe) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  analyzer_output_properties_.AddFeatureLabel("PipeOperator:FORK_SET_OPERATION");
+
+  if (!language().LanguageFeatureEnabled(FEATURE_PIPE_FORK)) {
+    return MakeSqlErrorAt(pipe_fork) << "Pipe FORK not supported";
+  }
+
+  // When the feature is off, no set operation can follow FORK, so report that
+  // first (before complaining about the set operation's input queries).
+  if (!language().LanguageFeatureEnabled(FEATURE_PIPE_FORK_SET_OPERATION)) {
+    return MakeSqlErrorAt(set_operation)
+           << "Merging pipe FORK branches with a set operation is not supported";
+  }
+
+  // A set operation following FORK merges the FORK's output tables, so it must
+  // be a no-argument set operation.  A normal set operation with input queries
+  // can never follow FORK (FORK is otherwise terminal), so reject that here
+  // with a targeted error instead of the generic terminal-operator error.
+  if (!set_operation->inputs().empty()) {
+    return MakeSqlErrorAt(set_operation->inputs().front())
+           << "A set operation following pipe FORK merges the FORK's output "
+              "tables and cannot have an input query";
+  }
+
+  // Only the symmetric set operations can merge fork branches.  EXCEPT is not
+  // symmetric, so it is not allowed.
+  if (set_operation->metadata()->op_type()->value() ==
+      ASTSetOperation::EXCEPT) {
+    return MakeSqlErrorAt(set_operation->metadata()->op_type())
+           << "Pipe FORK branches cannot be merged with EXCEPT; only UNION and "
+              "INTERSECT are supported";
+  }
+
+  const ResolvedColumnList input_column_list = (*current_scan)->column_list();
+
+  // Resolves one FORK branch over the original fork-input columns, exactly like
+  // a normal FORK subpipeline (so value-table-ness, range variables, etc. are
+  // preserved).  Returns an error if the branch doesn't produce a table.
+  auto resolve_branch =
+      [&](const ASTSubpipeline* ast_subpipeline,
+          std::shared_ptr<const NameList>* branch_name_list)
+      -> absl::StatusOr<std::unique_ptr<const ResolvedSubpipeline>> {
+    *branch_name_list = (*current_name_list)->CopyWithIsValueTable();
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<const ResolvedSubpipeline> resolved_subpipeline,
+        ResolveSubpipeline(ast_subpipeline, outer_scope, input_column_list,
+                           /*input_is_ordered=*/false, branch_name_list,
+                           /*allow_terminal=*/false));
+    // v1 only supports branches that produce a table.  A branch that ends in a
+    // terminal operator (and so produces no table) is rejected here.  (Mixing
+    // side-effect-only branches with the merge is not yet supported.)
+    if (*branch_name_list == nullptr) {
+      return MakeSqlErrorAt(ast_subpipeline)
+             << "Each FORK branch merged by a set operation must produce a "
+                "table; a branch with a terminal operator is not supported here";
+    }
+    return resolved_subpipeline;
+  };
+
+  const absl::Span<const ASTSubpipeline* const> subpipelines =
+      pipe_fork->subpipeline_list();
+  // The grammar guarantees a FORK has at least one branch.
+  GOOGLESQL_RET_CHECK(!subpipelines.empty());
+
+  // A single branch needs no set operation: the merged result is just that
+  // branch's table, read directly from the fork input.  No shared CTE is
+  // needed because the input is used only once.  Any hint on the (degenerate)
+  // set operation has no set operation to apply to and is ignored.
+  if (subpipelines.size() == 1) {
+    std::shared_ptr<const NameList> branch_name_list;
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<const ResolvedSubpipeline> resolved_subpipeline,
+        resolve_branch(subpipelines[0], &branch_name_list));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        *current_scan, RewriteSubpipelineToScan(std::move(resolved_subpipeline),
+                                                std::move(*current_scan)));
+    *current_name_list = std::move(branch_name_list);
+    return absl::OkStatus();
+  }
+
+  // For multiple branches, the fork input is shared by all branches via a CTE,
+  // so it is evaluated once.  Each branch reads it through its own
+  // ResolvedWithRefScan.  Since the branches all start from the same fork-input
+  // columns, we remap those columns to fresh per-branch column ids after
+  // resolving, so the branch scans (and the CTE definition) have distinct
+  // column ids, as required for a valid single-statement set operation.
+  const IdString cte_name =
+      MakeUniqueWithAlias(MakeIdString("$fork_union_input"));
+
+  std::vector<std::unique_ptr<const ResolvedScan>> branch_scans;
+  std::vector<std::shared_ptr<const NameList>> branch_name_lists;
+  std::vector<const ASTNode*> branch_locations;
+  branch_scans.reserve(subpipelines.size());
+  branch_name_lists.reserve(subpipelines.size());
+  branch_locations.reserve(subpipelines.size());
+
+  for (const ASTSubpipeline* ast_subpipeline : subpipelines) {
+    std::shared_ptr<const NameList> inside_name_list;
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<const ResolvedSubpipeline> resolved_subpipeline,
+        resolve_branch(ast_subpipeline, &inside_name_list));
+
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<const ResolvedScan> branch_scan,
+        RewriteSubpipelineToScan(
+            std::move(resolved_subpipeline),
+            MakeResolvedWithRefScan(input_column_list, cte_name.ToString())));
+
+    // Remap the shared fork-input columns to fresh per-branch columns. Columns
+    // created inside the branch already have distinct ids and are left as-is.
+    ColumnReplacementMap column_map;
+    for (const ResolvedColumn& column : input_column_list) {
+      ResolvedColumn fresh_column(AllocateColumnId(), cte_name,
+                                  column.name_id(), column.annotated_type());
+      column_map.emplace(column, fresh_column);
+      RecordColumnAccess(fresh_column);
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        branch_scan, RemapSpecifiedColumns(std::move(branch_scan), column_map));
+
+    // Build the branch's output NameList over the remapped columns.
+    auto branch_name_list = std::make_shared<NameList>();
+    for (const NamedColumn& named_column : inside_name_list->columns()) {
+      ResolvedColumn column = named_column.column();
+      if (auto it = column_map.find(column); it != column_map.end()) {
+        column = it->second;
+      }
+      GOOGLESQL_RETURN_IF_ERROR(branch_name_list->AddColumnMaybeValueTable(
+          named_column.name(), column, named_column.is_explicit(),
+          ast_subpipeline, inside_name_list->is_value_table()));
+    }
+    if (inside_name_list->is_value_table()) {
+      GOOGLESQL_RETURN_IF_ERROR(branch_name_list->SetIsValueTable());
+    }
+
+    branch_scans.push_back(std::move(branch_scan));
+    branch_name_lists.push_back(std::move(branch_name_list));
+    branch_locations.push_back(ast_subpipeline);
+  }
+
+  SetOperationResolver set_op_resolver(
+      set_operation, std::move(branch_scans), std::move(branch_name_lists),
+      std::move(branch_locations), this);
+  std::unique_ptr<const ResolvedScan> merged_scan;
+  std::shared_ptr<const NameList> merged_name_list;
+  GOOGLESQL_RETURN_IF_ERROR(set_op_resolver.Resolve(
+      outer_scope, inferred_type_for_pipe, &merged_scan, &merged_name_list));
+
+  // Wrap the merged query in a WITH that computes the fork input once.
+  // The fork input columns must not be pruned, since the WithRefScans in the
+  // branches reference them 1:1.
+  RecordColumnAccess(input_column_list);
+  std::vector<std::unique_ptr<const ResolvedWithEntry>> with_entries;
+  with_entries.push_back(
+      MakeResolvedWithEntry(cte_name.ToString(), std::move(*current_scan)));
+
+  ResolvedColumnList output_column_list = merged_scan->column_list();
+  auto with_scan = MakeResolvedWithScan(
+      output_column_list, std::move(with_entries), std::move(merged_scan),
+      /*recursive=*/false);
+
+  *current_scan = std::move(with_scan);
+  *current_name_list = std::move(merged_name_list);
+  return absl::OkStatus();
+}
+
+NOINLINE_PREVENT_HUGE_STACK_FRAMES
 absl::Status Resolver::ResolvePipeTee(
     const ASTPipeTee* pipe_tee, const NameScope* outer_scope,
     const NameScope* scope, std::unique_ptr<const ResolvedScan>* current_scan,
@@ -3099,6 +3301,16 @@ absl::Status Resolver::ResolvePipeSetOperation(
     std::unique_ptr<const ResolvedScan>* current_scan,
     std::shared_ptr<const NameList>* current_name_list,
     const Type* inferred_type_for_pipe) {
+  // A no-argument set operation is only meaningful immediately after a pipe
+  // FORK, where it merges the fork's parallel output tables.  That case is
+  // handled in ResolvePipeForkSetOperation and never reaches here, so a
+  // no-argument set operation in any other position is an error.
+  if (set_operation->inputs().empty()) {
+    return MakeSqlErrorAt(set_operation)
+           << "A set operation in pipe syntax requires at least one input "
+              "query, unless it immediately follows a pipe FORK (to merge the "
+              "fork's branches)";
+  }
   bool is_all = set_operation->metadata()->all_or_distinct()->value() ==
                 ASTSetOperation::ALL;
   switch (set_operation->metadata()->op_type()->value()) {
@@ -9418,6 +9630,36 @@ Resolver::SetOperationResolver::SetOperationResolver(
   }
 }
 
+Resolver::SetOperationResolver::SetOperationResolver(
+    const ASTPipeSetOperation* pipe_set_operation,
+    std::vector<std::unique_ptr<const ResolvedScan>> branch_scans,
+    std::vector<std::shared_ptr<const NameList>> branch_name_lists,
+    std::vector<const ASTNode*> branch_locations, Resolver* resolver)
+    : SetOperationResolver(InputSetOperation(pipe_set_operation),
+                           /*lhs_name_list=*/nullptr, /*lhs_scan=*/nullptr,
+                           resolver) {
+  ABSL_DCHECK_EQ(branch_scans.size(), branch_name_lists.size());
+  ABSL_DCHECK_EQ(branch_scans.size(), branch_locations.size());
+  is_pipe_fork_merge_ = true;
+
+  std::vector<ResolvedInputResult> inputs;
+  inputs.reserve(branch_scans.size());
+  for (int i = 0; i < branch_scans.size(); ++i) {
+    // Columns in set operations are matched positionally, so don't let the
+    // branch output columns get pruned.
+    resolver_->RecordColumnAccess(branch_name_lists[i]->GetResolvedColumns());
+    inputs.push_back(ResolvedInputResult{
+        .node = MakeResolvedSetOperationItem(
+            std::move(branch_scans[i]),
+            branch_name_lists[i]->GetResolvedColumns()),
+        .name_list = std::move(branch_name_lists[i]),
+        .ast_location = branch_locations[i],
+        .query_idx = i,
+    });
+  }
+  provided_inputs_ = std::move(inputs);
+}
+
 // Static versions of GetByNameString, etc, for when we don't have
 // effective_metadata() yet.  They need to have a different name.
 static std::string GetByNameStringImpl(
@@ -9555,8 +9797,17 @@ Resolver::SetOperationResolver::MatchInputsAndCalculateFinalColumns(
   // types support grouping (except for UNION ALL), the error location is
   // wrong when, for example, it is the first input that contains a
   // non-groupable column.
+  // For the pipe FORK merge there is no `ast_inputs()`, so point at the 2nd
+  // branch.  For other pipe syntax we use `ast_recursive_term()`, and for
+  // standard syntax the 2nd input query.  The fork merge always has >= 2 inputs
+  // here (the single-branch case is handled by the caller without a set
+  // operation), but guard the index defensively rather than relying on that.
   const ASTNode* super_type_error_location =
-      IsPipeSyntax() ? ast_recursive_term() : ast_set_operation()->inputs()[1];
+      is_pipe_fork_merge_
+          ? (resolved_inputs.size() > 1 ? resolved_inputs[1].ast_location
+                                        : ast_node())
+          : (IsPipeSyntax() ? ast_recursive_term()
+                            : ast_set_operation()->inputs()[1]);
 
   GOOGLESQL_ASSIGN_OR_RETURN(ResolvedSetOperationScan::SetOperationType op_type,
                    GetSetOperationType(&effective_metadata()));
@@ -10911,6 +11162,14 @@ absl::Status Resolver::SetOperationResolver::ValidateRecursiveTermColumnTypes(
 std::string Resolver::SetOperationResolver::GetQueryLabel(
     int query_idx, bool capitalize_first_char) const {
   std::string label;
+  if (is_pipe_fork_merge_) {
+    // The inputs are the FORK branches, not a pipe input plus rhs queries.
+    label = absl::StrCat("FORK branch ", query_idx + 1);
+    if (capitalize_first_char) {
+      label[0] = absl::ascii_toupper(label[0]);
+    }
+    return label;
+  }
   switch (input_kind_) {
     case InputKind::kStandard:
       label = absl::StrCat("query ", query_idx + 1);
@@ -11433,6 +11692,16 @@ absl::Status Resolver::SetOperationResolver::ValidateCorresponding() const {
 absl::StatusOr<std::vector<Resolver::SetOperationResolver::ResolvedInputResult>>
 Resolver::SetOperationResolver::GetResolvedInputs(
     const NameScope* scope, const Type* inferred_type_for_query) {
+  // When merging the branches of a pipe FORK, the inputs are the pre-resolved
+  // fork branches; there is no lhs pipe input and no `ast_inputs()`.
+  if (is_pipe_fork_merge_) {
+    GOOGLESQL_RET_CHECK(provided_inputs_.has_value());
+    std::vector<ResolvedInputResult> resolved_inputs =
+        std::move(*provided_inputs_);
+    provided_inputs_.reset();
+    return resolved_inputs;
+  }
+
   std::vector<ResolvedInputResult> resolved_inputs;
 
   if (IsPipeSyntax()) {

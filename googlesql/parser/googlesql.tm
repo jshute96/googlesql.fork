@@ -5143,6 +5143,13 @@ pipe_set_operation_base {ASTPipeOperator*}:
 
 pipe_set_operation {ASTPipeOperator*}:
     pipe_set_operation_base ","?
+  | set_operation_metadata
+    {
+      // A no-argument set operation (e.g. `|> UNION ALL` with no input query).
+      // This is only valid immediately after a `|> FORK`, where it merges the
+      // fork's parallel output tables; the resolver enforces that context.
+      $$ = MakeNode<ASTPipeSetOperation>(@$, $set_operation_metadata);
+    }
 ;
 
 subquery_or_subpipeline {ASTNode*}:

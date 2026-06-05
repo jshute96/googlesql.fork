@@ -2750,6 +2750,21 @@ class Resolver {
                          std::unique_ptr<const ResolvedScan>* lhs_scan,
                          Resolver* resolver);
 
+    // Constructs a resolver for the no-argument set operation that merges the
+    // branches of a pipe FORK.  `pipe_set_operation` is the no-argument
+    // ASTPipeSetOperation (used only for its metadata and error locations).
+    // The fork branches have already been resolved into `branch_scans`
+    // (each a complete scan reading the shared fork input), with matching
+    // `branch_name_lists` and `branch_locations` (the branch AST nodes, used
+    // for error attribution).  All three vectors must be the same size, which
+    // must be >= 2 (the single-branch case is handled by the caller without a
+    // set operation).  Used only via Resolve().
+    SetOperationResolver(
+        const ASTPipeSetOperation* pipe_set_operation,
+        std::vector<std::unique_ptr<const ResolvedScan>> branch_scans,
+        std::vector<std::shared_ptr<const NameList>> branch_name_lists,
+        std::vector<const ASTNode*> branch_locations, Resolver* resolver);
+
     // Resolves the ASTSetOperation passed to the constructor, returning the
     // ResolvedScan and NameList in the given output parameters.
     // <scope> represents the name scope used to resolve each of the set items.
@@ -3228,6 +3243,13 @@ class Resolver {
     // is always nullopt.
     std::optional<ResolvedInputResult> resolved_pipe_input_;
 
+    // True when this resolver merges the branches of a pipe FORK (the no-arg
+    // set operation case).  In this mode there is no lhs pipe input and no
+    // `ast_inputs()`; the inputs are the pre-resolved fork branches held in
+    // `provided_inputs_` until GetResolvedInputs() moves them out.
+    bool is_pipe_fork_merge_ = false;
+    std::optional<std::vector<ResolvedInputResult>> provided_inputs_;
+
     Resolver* const resolver_;
     const IdString op_type_str_;
 
@@ -3627,6 +3649,20 @@ class Resolver {
       const ASTPipeFork* pipe_fork, const NameScope* outer_scope,
       const NameScope* scope, std::unique_ptr<const ResolvedScan>* current_scan,
       std::shared_ptr<const NameList>* current_name_list, bool allow_terminal);
+
+  // Resolves a `|> FORK` immediately followed by a no-argument set operation
+  // (`set_operation`), which merges the fork's table-producing branches back
+  // into a single output table.  Controlled by FEATURE_PIPE_FORK_SET_OPERATION.
+  // Unlike a bare FORK, this is not a terminal operator: it produces a normal
+  // single table (lowered to a ResolvedWithScan over a ResolvedSetOperationScan)
+  // and the pipeline resumes.  Every fork branch must produce a table (the
+  // mixed side-effect-branch case is not yet supported).
+  absl::Status ResolvePipeForkSetOperation(
+      const ASTPipeFork* pipe_fork, const ASTPipeSetOperation* set_operation,
+      const NameScope* outer_scope,
+      std::unique_ptr<const ResolvedScan>* current_scan,
+      std::shared_ptr<const NameList>* current_name_list,
+      const Type* inferred_type_for_pipe);
 
   absl::Status ResolvePipeTee(
       const ASTPipeTee* pipe_tee, const NameScope* outer_scope,

@@ -1509,6 +1509,11 @@ The `UNION` pipe operator supports the same modifiers as the
 `UNION` set operator in standard syntax, such as the
 `BY NAME` modifier (or `CORRESPONDING`) and `LEFT | FULL [OUTER]` mode prefixes.
 
+As a special case, a no-argument `UNION` operator can immediately follow a
+[`FORK`](#fork_pipe_operator) operator to merge the `FORK` subpipeline output
+tables into a single table. For more information, see
+[Merging `FORK` branches](#merging_fork_branches).
+
 **Examples**
 
 ```googlesql
@@ -1875,6 +1880,11 @@ The `INTERSECT` pipe operator supports the same modifiers as the
 `INTERSECT` set operator in standard syntax, such as the
 `BY NAME` modifier (or `CORRESPONDING`)
  and `LEFT | FULL [OUTER]` mode prefixes.
+
+As a special case, a no-argument `INTERSECT` operator can immediately follow a
+[`FORK`](#fork_pipe_operator) operator to merge the `FORK` subpipeline output
+tables into a single table. For more information, see
+[Merging `FORK` branches](#merging_fork_branches).
 
 **Examples**
 
@@ -2886,9 +2896,13 @@ entire statement.
 The output tables from the subpipelines are returned sequentially in the order
 the `FORK` subpipelines are written in the query.
 
-The `FORK` operator can't be followed by other pipe operators. The `FORK`
-operator can't be used in a subquery or anywhere a single output table is
-expected, even if the `FORK` operator has only one subpipeline.
+The `FORK` operator is normally terminal and can't be followed by other pipe
+operators, with one exception: a no-argument `UNION` or `INTERSECT` operator can
+immediately follow `FORK` to merge the subpipeline output tables back into a
+single table. For more information, see
+[Merging `FORK` branches](#merging_fork_branches). The `FORK` operator can't be
+used in a subquery or anywhere a single output table is expected, even if the
+`FORK` operator has only one subpipeline.
 
 Row order in the input table is not preserved in the subpipelines.
 
@@ -3004,6 +3018,75 @@ The second subpipeline produces the following result table:
  | apple  | 100   |
  | banana | 150   |
  +--------+-------*/
+```
+
+#### Merging `FORK` branches 
+<a id="merging_fork_branches"></a>
+
+Instead of producing multiple output tables, a `FORK` operator can be followed by
+a no-argument [`UNION`](#union_pipe_operator) or
+[`INTERSECT`](#intersect_pipe_operator) operator to merge the subpipeline output
+tables back into a single table. The merge uses the same column matching rules as
+the corresponding set operator, including the `BY NAME` (or `CORRESPONDING`)
+modifier and the column propagation modes. After the merge, the result is a
+single table and the pipeline resumes normally, so more pipe operators can
+follow.
+
+The following rules apply when merging `FORK` branches:
+
++  Only the `UNION` and `INTERSECT` operators are supported. The `EXCEPT`
+   operator isn't supported because it isn't symmetric.
++  The set operator takes no input queries; it operates on the `FORK`
+   subpipelines instead.
++  Every subpipeline must produce a table, and the tables must have matching
+   schemas, following the same rules as a `UNION` or `INTERSECT` over those
+   tables.
+
+The following example merges two `FORK` branches with `UNION ALL`:
+
+```googlesql
+WITH
+  Fruit AS (
+    SELECT 'apple' AS item, 100 AS sales
+    UNION ALL
+    SELECT 'banana' AS item, 150 AS sales
+  )
+FROM Fruit
+|> FORK
+    (|> WHERE sales >= 150),
+    (|> WHERE sales < 150)
+|> UNION ALL;
+
+/*--------+-------+
+ | item   | sales |
+ +--------+-------+
+ | banana | 150   |
+ | apple  | 100   |
+ +--------+-------*/
+```
+
+Because the merged result is a single table, the pipeline can continue with more
+operators after the merge:
+
+```googlesql
+WITH
+  Fruit AS (
+    SELECT 'apple' AS item, 100 AS sales
+    UNION ALL
+    SELECT 'banana' AS item, 150 AS sales
+  )
+FROM Fruit
+|> FORK
+    (|> WHERE sales >= 150),
+    (|> WHERE sales < 150)
+|> UNION ALL
+|> AGGREGATE SUM(sales) AS total_sales;
+
+/*-------------+
+ | total_sales |
+ +-------------+
+ | 250         |
+ +-------------*/
 ```
 
 [subpipelines]: https://github.com/google/googlesql/blob/master/docs/pipe-syntax.md#subpipelines

@@ -1,0 +1,413 @@
+# Tests for a no-argument set operation (UNION/INTERSECT) immediately after a
+# pipe FORK, which merges the fork's table-producing branches back into a single
+# table.  Controlled by FEATURE_PIPE_FORK_SET_OPERATION.  Unlike a bare FORK,
+# this lowers to a normal single-table query (a WithScan over a
+# SetOperationScan), so it does not require GENERALIZED_QUERY statement support
+# and the pipeline resumes normally.
+[default language_features=MAXIMUM,+PIPES,+PIPE_FORK,+PIPE_FORK_SET_OPERATION,+BY_NAME]
+[default enabled_ast_rewrites=DEFAULTS]
+FROM KeyValue
+|> FORK ( |> WHERE Key > 1 ), ( |> WHERE Key < 10 )
+|> UNION ALL
+--
+QueryStmt
++-output_column_list=
+| +-$union_all.Key#7 AS Key [INT64]
+| +-$union_all.Value#8 AS Value [STRING]
++-query=
+  +-WithScan
+    +-column_list=$union_all.[Key#7, Value#8]
+    +-with_entry_list=
+    | +-WithEntry
+    |   +-with_query_name="$fork_union_input"
+    |   +-with_subquery=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-query=
+      +-SetOperationScan
+        +-column_list=$union_all.[Key#7, Value#8]
+        +-op_type=UNION_ALL
+        +-input_item_list=
+          +-SetOperationItem
+          | +-scan=
+          | | +-FilterScan
+          | |   +-column_list=$fork_union_input.[Key#3, Value#4]
+          | |   +-input_scan=
+          | |   | +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
+          | |   +-filter_expr=
+          | |     +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
+          | |       +-ColumnRef(type=INT64, column=$fork_union_input.Key#3)
+          | |       +-Literal(type=INT64, value=1)
+          | +-output_column_list=$fork_union_input.[Key#3, Value#4]
+          +-SetOperationItem
+            +-scan=
+            | +-FilterScan
+            |   +-column_list=$fork_union_input.[Key#5, Value#6]
+            |   +-input_scan=
+            |   | +-WithRefScan(column_list=$fork_union_input.[Key#5, Value#6], with_query_name="$fork_union_input")
+            |   +-filter_expr=
+            |     +-FunctionCall(GoogleSQL:$less(INT64, INT64) -> BOOL)
+            |       +-ColumnRef(type=INT64, column=$fork_union_input.Key#5)
+            |       +-Literal(type=INT64, value=10)
+            +-output_column_list=$fork_union_input.[Key#5, Value#6]
+==
+
+# The merged result is a single table, so the pipeline resumes normally.
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> UNION ALL
+|> WHERE Key > 0
+|> SELECT Key
+--
+QueryStmt
++-output_column_list=
+| +-$union_all.Key#7 AS Key [INT64]
++-query=
+  +-ProjectScan
+    +-column_list=[$union_all.Key#7]
+    +-input_scan=
+      +-FilterScan
+        +-column_list=$union_all.[Key#7, Value#8]
+        +-input_scan=
+        | +-WithScan
+        |   +-column_list=$union_all.[Key#7, Value#8]
+        |   +-with_entry_list=
+        |   | +-WithEntry
+        |   |   +-with_query_name="$fork_union_input"
+        |   |   +-with_subquery=
+        |   |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+        |   +-query=
+        |     +-SetOperationScan
+        |       +-column_list=$union_all.[Key#7, Value#8]
+        |       +-op_type=UNION_ALL
+        |       +-input_item_list=
+        |         +-SetOperationItem
+        |         | +-scan=
+        |         | | +-FilterScan
+        |         | |   +-column_list=$fork_union_input.[Key#3, Value#4]
+        |         | |   +-input_scan=
+        |         | |   | +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
+        |         | |   +-filter_expr=
+        |         | |     +-Literal(type=BOOL, value=true)
+        |         | +-output_column_list=$fork_union_input.[Key#3, Value#4]
+        |         +-SetOperationItem
+        |           +-scan=
+        |           | +-FilterScan
+        |           |   +-column_list=$fork_union_input.[Key#5, Value#6]
+        |           |   +-input_scan=
+        |           |   | +-WithRefScan(column_list=$fork_union_input.[Key#5, Value#6], with_query_name="$fork_union_input")
+        |           |   +-filter_expr=
+        |           |     +-Literal(type=BOOL, value=false)
+        |           +-output_column_list=$fork_union_input.[Key#5, Value#6]
+        +-filter_expr=
+          +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
+            +-ColumnRef(type=INT64, column=$union_all.Key#7)
+            +-Literal(type=INT64, value=0)
+==
+
+# INTERSECT works too (it is symmetric).
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> INTERSECT DISTINCT
+--
+QueryStmt
++-output_column_list=
+| +-$intersect_distinct.Key#7 AS Key [INT64]
+| +-$intersect_distinct.Value#8 AS Value [STRING]
++-query=
+  +-WithScan
+    +-column_list=$intersect_distinct.[Key#7, Value#8]
+    +-with_entry_list=
+    | +-WithEntry
+    |   +-with_query_name="$fork_union_input"
+    |   +-with_subquery=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-query=
+      +-SetOperationScan
+        +-column_list=$intersect_distinct.[Key#7, Value#8]
+        +-op_type=INTERSECT_DISTINCT
+        +-input_item_list=
+          +-SetOperationItem
+          | +-scan=
+          | | +-FilterScan
+          | |   +-column_list=$fork_union_input.[Key#3, Value#4]
+          | |   +-input_scan=
+          | |   | +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
+          | |   +-filter_expr=
+          | |     +-Literal(type=BOOL, value=true)
+          | +-output_column_list=$fork_union_input.[Key#3, Value#4]
+          +-SetOperationItem
+            +-scan=
+            | +-FilterScan
+            |   +-column_list=$fork_union_input.[Key#5, Value#6]
+            |   +-input_scan=
+            |   | +-WithRefScan(column_list=$fork_union_input.[Key#5, Value#6], with_query_name="$fork_union_input")
+            |   +-filter_expr=
+            |     +-Literal(type=BOOL, value=false)
+            +-output_column_list=$fork_union_input.[Key#5, Value#6]
+==
+
+# UNION ALL BY NAME matches columns by name across branches.
+FROM KeyValue
+|> FORK ( |> SELECT Key, Value ), ( |> SELECT Value, Key )
+|> UNION ALL BY NAME
+--
+QueryStmt
++-output_column_list=
+| +-$union_all.Key#7 AS Key [INT64]
+| +-$union_all.Value#8 AS Value [STRING]
++-query=
+  +-WithScan
+    +-column_list=$union_all.[Key#7, Value#8]
+    +-with_entry_list=
+    | +-WithEntry
+    |   +-with_query_name="$fork_union_input"
+    |   +-with_subquery=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-query=
+      +-SetOperationScan
+        +-column_list=$union_all.[Key#7, Value#8]
+        +-op_type=UNION_ALL
+        +-input_item_list=
+        | +-SetOperationItem
+        | | +-scan=
+        | | | +-ProjectScan
+        | | |   +-column_list=$fork_union_input.[Key#3, Value#4]
+        | | |   +-input_scan=
+        | | |     +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
+        | | +-output_column_list=$fork_union_input.[Key#3, Value#4]
+        | +-SetOperationItem
+        |   +-scan=
+        |   | +-ProjectScan
+        |   |   +-column_list=$fork_union_input.[Key#5, Value#6]
+        |   |   +-node_source="resolver_set_operation_corresponding"
+        |   |   +-input_scan=
+        |   |     +-ProjectScan
+        |   |       +-column_list=$fork_union_input.[Value#6, Key#5]
+        |   |       +-input_scan=
+        |   |         +-WithRefScan(column_list=$fork_union_input.[Key#5, Value#6], with_query_name="$fork_union_input")
+        |   +-output_column_list=$fork_union_input.[Key#5, Value#6]
+        +-column_match_mode=CORRESPONDING
+==
+
+# A single fork branch is a degenerate merge: just that branch's table.
+FROM KeyValue
+|> FORK ( |> WHERE Key > 5 )
+|> UNION ALL
+--
+QueryStmt
++-output_column_list=
+| +-KeyValue.Key#1 AS Key [INT64]
+| +-KeyValue.Value#2 AS Value [STRING]
++-query=
+  +-FilterScan
+    +-column_list=KeyValue.[Key#1, Value#2]
+    +-input_scan=
+    | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-filter_expr=
+      +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
+        +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+        +-Literal(type=INT64, value=5)
+==
+
+# Empty fork branches (the default `()`) each return the input table.
+FROM KeyValue
+|> FORK (), ()
+|> UNION ALL
+--
+QueryStmt
++-output_column_list=
+| +-$union_all.Key#7 AS Key [INT64]
+| +-$union_all.Value#8 AS Value [STRING]
++-query=
+  +-WithScan
+    +-column_list=$union_all.[Key#7, Value#8]
+    +-with_entry_list=
+    | +-WithEntry
+    |   +-with_query_name="$fork_union_input"
+    |   +-with_subquery=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-query=
+      +-SetOperationScan
+        +-column_list=$union_all.[Key#7, Value#8]
+        +-op_type=UNION_ALL
+        +-input_item_list=
+          +-SetOperationItem
+          | +-scan=
+          | | +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
+          | +-output_column_list=$fork_union_input.[Key#3, Value#4]
+          +-SetOperationItem
+            +-scan=
+            | +-WithRefScan(column_list=$fork_union_input.[Key#5, Value#6], with_query_name="$fork_union_input")
+            +-output_column_list=$fork_union_input.[Key#5, Value#6]
+==
+
+# Type coercion across branches works like a normal set operation.
+FROM KeyValue
+|> FORK ( |> SELECT Key AS x ), ( |> SELECT 1.5 AS x )
+|> UNION ALL
+--
+QueryStmt
++-output_column_list=
+| +-$union_all.x#8 AS x [DOUBLE]
++-query=
+  +-WithScan
+    +-column_list=[$union_all.x#8]
+    +-with_entry_list=
+    | +-WithEntry
+    |   +-with_query_name="$fork_union_input"
+    |   +-with_subquery=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-query=
+      +-SetOperationScan
+        +-column_list=[$union_all.x#8]
+        +-op_type=UNION_ALL
+        +-input_item_list=
+          +-SetOperationItem
+          | +-scan=
+          | | +-ProjectScan
+          | |   +-column_list=[$union_all1_cast.Key#9]
+          | |   +-expr_list=
+          | |   | +-Key#9 :=
+          | |   |   +-Cast(INT64 -> DOUBLE)
+          | |   |     +-ColumnRef(type=INT64, column=$fork_union_input.Key#3)
+          | |   +-input_scan=
+          | |     +-ProjectScan
+          | |       +-column_list=[$fork_union_input.Key#3]
+          | |       +-input_scan=
+          | |         +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
+          | +-output_column_list=[$union_all1_cast.Key#9]
+          +-SetOperationItem
+            +-scan=
+            | +-ProjectScan
+            |   +-column_list=[$pipe_select.x#5]
+            |   +-expr_list=
+            |   | +-x#5 := Literal(type=DOUBLE, value=1.5, float_literal_id=1)
+            |   +-input_scan=
+            |     +-WithRefScan(column_list=$fork_union_input.[Key#6, Value#7], with_query_name="$fork_union_input")
+            +-output_column_list=[$pipe_select.x#5]
+==
+
+# Three branches.
+FROM KeyValue
+|> FORK ( |> WHERE Key = 1 ), ( |> WHERE Key = 2 ), ( |> WHERE Key = 3 )
+|> UNION ALL
+--
+QueryStmt
++-output_column_list=
+| +-$union_all.Key#9 AS Key [INT64]
+| +-$union_all.Value#10 AS Value [STRING]
++-query=
+  +-WithScan
+    +-column_list=$union_all.[Key#9, Value#10]
+    +-with_entry_list=
+    | +-WithEntry
+    |   +-with_query_name="$fork_union_input"
+    |   +-with_subquery=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-query=
+      +-SetOperationScan
+        +-column_list=$union_all.[Key#9, Value#10]
+        +-op_type=UNION_ALL
+        +-input_item_list=
+          +-SetOperationItem
+          | +-scan=
+          | | +-FilterScan
+          | |   +-column_list=$fork_union_input.[Key#3, Value#4]
+          | |   +-input_scan=
+          | |   | +-WithRefScan(column_list=$fork_union_input.[Key#3, Value#4], with_query_name="$fork_union_input")
+          | |   +-filter_expr=
+          | |     +-FunctionCall(GoogleSQL:$equal(INT64, INT64) -> BOOL)
+          | |       +-ColumnRef(type=INT64, column=$fork_union_input.Key#3)
+          | |       +-Literal(type=INT64, value=1)
+          | +-output_column_list=$fork_union_input.[Key#3, Value#4]
+          +-SetOperationItem
+          | +-scan=
+          | | +-FilterScan
+          | |   +-column_list=$fork_union_input.[Key#5, Value#6]
+          | |   +-input_scan=
+          | |   | +-WithRefScan(column_list=$fork_union_input.[Key#5, Value#6], with_query_name="$fork_union_input")
+          | |   +-filter_expr=
+          | |     +-FunctionCall(GoogleSQL:$equal(INT64, INT64) -> BOOL)
+          | |       +-ColumnRef(type=INT64, column=$fork_union_input.Key#5)
+          | |       +-Literal(type=INT64, value=2)
+          | +-output_column_list=$fork_union_input.[Key#5, Value#6]
+          +-SetOperationItem
+            +-scan=
+            | +-FilterScan
+            |   +-column_list=$fork_union_input.[Key#7, Value#8]
+            |   +-input_scan=
+            |   | +-WithRefScan(column_list=$fork_union_input.[Key#7, Value#8], with_query_name="$fork_union_input")
+            |   +-filter_expr=
+            |     +-FunctionCall(GoogleSQL:$equal(INT64, INT64) -> BOOL)
+            |       +-ColumnRef(type=INT64, column=$fork_union_input.Key#7)
+            |       +-Literal(type=INT64, value=3)
+            +-output_column_list=$fork_union_input.[Key#7, Value#8]
+==
+
+# Mismatched column counts across branches is an error.
+FROM KeyValue
+|> FORK ( |> SELECT Key ), ( |> SELECT Key, Value )
+|> UNION ALL
+--
+ERROR: Queries in UNION ALL have mismatched column count; FORK branch 1 has 1 column, FORK branch 2 has 2 columns [at 2:28]
+|> FORK ( |> SELECT Key ), ( |> SELECT Key, Value )
+                           ^
+==
+
+# A set operation following FORK must be no-arg (it merges the branches), so a
+# set operation with an input query gives a targeted error rather than the
+# generic terminal-FORK error.
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> UNION ALL (SELECT 1)
+--
+ERROR: A set operation following pipe FORK merges the FORK's output tables and cannot have an input query [at 3:15]
+|> UNION ALL (SELECT 1)
+              ^
+==
+
+# EXCEPT is not symmetric, so it cannot merge fork branches.
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> EXCEPT ALL
+--
+ERROR: Pipe FORK branches cannot be merged with EXCEPT; only UNION and INTERSECT are supported [at 3:4]
+|> EXCEPT ALL
+   ^
+==
+
+# A branch that does not produce a table (here, a terminal operator) is not
+# supported yet in the merge.
+[language_features=MAXIMUM,+PIPES,+PIPE_FORK,+PIPE_FORK_SET_OPERATION,+PIPE_EXPORT_DATA]
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> EXPORT DATA OPTIONS(format='CSV') )
+|> UNION ALL
+--
+ERROR: EXPORT DATA is only allowed as part of the outermost query in a statement [at 2:30]
+|> FORK ( |> WHERE true ), ( |> EXPORT DATA OPTIONS(format='CSV') )
+                             ^
+==
+
+# Without FEATURE_PIPE_FORK_SET_OPERATION, the merge is not supported.
+[language_features=MAXIMUM,+PIPES,+PIPE_FORK]
+[supported_statement_kinds=QUERY,GENERALIZED_QUERY]
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> UNION ALL
+--
+ERROR: Merging pipe FORK branches with a set operation is not supported [at 3:1]
+|> UNION ALL
+^
+==
+
+# With the feature off, the not-supported error takes precedence over the
+# input-query error.
+[language_features=MAXIMUM,+PIPES,+PIPE_FORK]
+[supported_statement_kinds=QUERY,GENERALIZED_QUERY]
+FROM KeyValue
+|> FORK ( |> WHERE true ), ( |> WHERE false )
+|> UNION ALL (SELECT 1)
+--
+ERROR: Merging pipe FORK branches with a set operation is not supported [at 3:1]
+|> UNION ALL (SELECT 1)
+^
