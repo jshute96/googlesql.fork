@@ -260,13 +260,6 @@ class QueryExpression {
   }
   bool HasQueryHints() const { return !query_hints_.empty(); }
 
-  // Returns true if the only populated clause is the FROM clause (and it is
-  // populated). This is used to detect a "running pipe query": a complete
-  // pipe-syntax query string parked in the FROM clause by the pipe-append
-  // SQLBuilder path, onto which another `|>` operator can be appended directly
-  // without re-aliasing.
-  bool HasOnlyFromClause() const;
-
   bool HasGroupByColumn(int column_id) const {
     return googlesql_base::ContainsKey(group_by_list_, column_id);
   }

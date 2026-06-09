@@ -883,18 +883,6 @@ bool QueryExpression::TrySetLockModeClause(absl::string_view lock_mode) {
   return true;
 }
 
-bool QueryExpression::HasOnlyFromClause() const {
-  return !from_.empty() && with_list_.empty() && select_list_.empty() &&
-         corresponding_set_op_output_column_list_.empty() &&
-         select_as_modifier_.empty() && query_hints_.empty() &&
-         where_.empty() && set_op_scan_list_.empty() &&
-         group_by_list_.empty() && !group_by_all_ &&
-         !group_by_only_aggregate_columns_ && order_by_list_.empty() &&
-         limit_.empty() && offset_.empty() && anonymization_options_.empty() &&
-         pivot_.empty() && unpivot_.empty() && match_recognize_.empty() &&
-         lock_mode_.empty();
-}
-
 bool QueryExpression::CanFormSQLQuery() const { return !CanSetSelectClause(); }
 
 bool QueryExpression::CanSetWithClause() const { return !HasWithClause(); }

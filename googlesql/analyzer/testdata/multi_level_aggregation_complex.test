@@ -1420,11 +1420,7 @@ FROM
        |> AS projectscan_14
        |> ORDER BY projectscan_14.a_13, projectscan_14.a_11
        |> SELECT
-            projectscan_14.a_9 AS a_9,
-            projectscan_14.a_10 AS a_10
-       |> AS orderbyscan_15
-       |> SELECT
-            STRUCT< v1 ARRAY< DOUBLE >, v2 DOUBLE > (orderbyscan_15.a_9, orderbyscan_15.a_10) AS a_16
+            STRUCT< v1 ARRAY< DOUBLE >, v2 DOUBLE > (projectscan_14.a_9, projectscan_14.a_10) AS a_15
      ) AS a_6;
 ==
 

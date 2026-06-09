@@ -1443,28 +1443,29 @@ class SQLBuilder : public ResolvedASTVisitor {
   // `GetInputPipeSQL` returns the running pipe-syntax SQL string for
   // `input_scan`'s already-processed `input_qe`, ready to have
   // " |> <operator>" appended:
-  //   - For a ResolvedSubpipelineInputScan, returns "" so the first real
-  //     operator of a subpipeline starts the pipe with no leading FROM.
-  //   - If `input_qe` is already a running pipe query (HasOnlyFromClause), its
-  //     pipe string is returned directly, so no re-aliasing wrapper is added
-  //     and the previous operators' bare-alias column bindings stay valid.
-  //   - Otherwise (a structured QueryExpression, e.g. from a leaf scan),
-  //     MaybeWrapStandardQueryAsPipeQuery is used to lift it into a pipe query
-  //     once (binding its output columns), and its pipe string is returned.
+  //   - If `input_qe` renders as a complete query (it carries a SELECT or set
+  //     operation), MaybeWrapStandardQueryAsPipeQuery lifts it into a pipe query
+  //     once, binding its output columns under a fresh alias. This covers a leaf
+  //     scan, an aggregate/project on the standard-accumulate path, and the
+  //     `SELECT * FROM UNNEST(...)` stand-in for a ResolvedSubpipelineInputScan.
+  //   - Otherwise `input_qe` is already a pipe head (a running pipe query parked
+  //     in the FROM clause, or a bare `FROM <table>`); its pipe string is
+  //     returned directly so no re-aliasing wrapper is added and the previous
+  //     operators' column bindings stay valid.
   // `input_qe` is consumed for its text; it may be mutated by the wrap.
   absl::StatusOr<std::string> GetInputPipeSQL(const ResolvedScan* input_scan,
                                               QueryExpression* input_qe);
 
   // Builds a "running pipe query" QueryExpression whose FROM clause carries the
-  // complete pipe-syntax string `pipe_sql`. The result satisfies
-  // HasOnlyFromClause(), so a later operator can be appended without wrapping.
+  // complete pipe-syntax string `pipe_sql`. The result does not carry a SELECT,
+  // so a later operator can be appended (via GetInputPipeSQL) without wrapping.
   absl::StatusOr<std::unique_ptr<QueryExpression>> MakePipeQueryExpression(
       absl::string_view pipe_sql);
 
   // Combines a running pipe SQL string `pipe_sql` (from GetInputPipeSQL) with a
   // single pipe operator `op_sql` (e.g. "WHERE x > 5"), inserting the leading
-  // " |> " unless `pipe_sql` is empty (subpipeline head), and returns the
-  // resulting running pipe QueryExpression.
+  // " |> " unless `pipe_sql` is empty, and returns the resulting running pipe
+  // QueryExpression.
   absl::StatusOr<std::unique_ptr<QueryExpression>> AppendPipeOperator(
       absl::string_view pipe_sql, absl::string_view op_sql);
 

@@ -1430,9 +1430,12 @@ FROM
                   SELECT
                     MAX(KeyValue.Key) AS a_7
                   FROM
-                    KeyValue
-                  WHERE
-                    (KeyValue.Key) < a_3
+                    (
+                      FROM
+                        KeyValue
+                      |> WHERE
+                           (KeyValue.Key) < a_3
+                    )
                   GROUP BY KeyValue.Value
                   |> AS aggregatescan_8
                   |> SELECT
@@ -1612,9 +1615,12 @@ FROM
                                 SELECT
                                   MAX(KeyValue.Key) AS a_12
                                 FROM
-                                  KeyValue
-                                WHERE
-                                  (KeyValue.Key) < a_6
+                                  (
+                                    FROM
+                                      KeyValue
+                                    |> WHERE
+                                         (KeyValue.Key) < a_6
+                                  )
                                 GROUP BY KeyValue.Value
                                 |> AS aggregatescan_13
                                 |> SELECT

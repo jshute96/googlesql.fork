@@ -3680,6 +3680,19 @@ absl::Status SQLBuilder::VisitResolvedFilterScan(
   // alias is introduced between operators.
   if (IsPipeSyntaxTargetMode() &&
       !IsScanUnsupportedInPipeSyntax(node->input_scan())) {
+    // For a filter directly over a simple (non-value) table scan, expose the
+    // table's columns by their natural names and drop the table scan's select
+    // list, so the running pipe query is a clean `FROM <table>` and the WHERE
+    // references the columns directly without a leaf-boundary alias wrapper.
+    if (node->input_scan()->node_kind() == googlesql::RESOLVED_TABLE_SCAN) {
+      const auto* table_scan = node->input_scan()->GetAs<ResolvedTableScan>();
+      if (!table_scan->table()->IsValueTable()) {
+        GOOGLESQL_RETURN_IF_ERROR(SetPathForColumnsInScan(
+            table_scan, googlesql_base::FindWithDefault(table_alias_map(),
+                                                table_scan->table())));
+        query_expression->ResetSelectClause();
+      }
+    }
     // Build the input pipe SQL first; this also binds the input scan's columns
     // (via a one-time wrap of a structured input) before the filter expression
     // is deparsed.
@@ -4423,31 +4436,6 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
                    ProcessNode(node->input_scan()));
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
-
-  // In Pipe syntax mode, emit a single `|> LIMIT [OFFSET]` operator.
-  if (IsPipeSyntaxTargetMode()) {
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        std::string pipe_sql,
-        GetInputPipeSQL(node->input_scan(), query_expression.get()));
-    std::string limit_sql;
-    if (node->limit() != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
-                       ProcessNode(node->limit()));
-      limit_sql = result->GetSQL();
-    } else {
-      limit_sql = "ALL";
-    }
-    std::string op = absl::StrCat("LIMIT ", limit_sql);
-    if (node->offset() != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
-                       ProcessNode(node->offset()));
-      absl::StrAppend(&op, " OFFSET ", result->GetSQL());
-    }
-    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> out_qe,
-                     AppendPipeOperator(pipe_sql, op));
-    PushSQLForQueryExpression(node, out_qe.release());
-    return absl::OkStatus();
-  }
 
   if (!query_expression->CanSetLimitClause()) {
     GOOGLESQL_RETURN_IF_ERROR(
@@ -11582,22 +11570,22 @@ SQLBuilder::MaybeWrapPipeQueryAsStandardQuery(
 absl::StatusOr<std::string> SQLBuilder::GetInputPipeSQL(
     const ResolvedScan* input_scan, QueryExpression* input_qe) {
   GOOGLESQL_RET_CHECK(IsPipeSyntaxTargetMode());
-  // The subpipeline input scan is a placeholder; the subpipeline starts with
-  // its first real operator, so there is no leading FROM.
-  if (input_scan->Is<ResolvedSubpipelineInputScan>()) {
-    return std::string("");
+  // If the input renders as a complete query (it carries a SELECT or a set
+  // operation), it is not yet a pipe head: lift it into a pipe query once,
+  // binding its output columns under a fresh alias so the appended operator can
+  // reference them. This covers a leaf scan, an aggregate/project still built by
+  // the standard-accumulate path, and the `SELECT * FROM UNNEST(...)` query that
+  // stands in for a ResolvedSubpipelineInputScan.
+  //
+  // Otherwise the input is already a pipe head -- a running pipe query parked in
+  // the FROM clause, or a bare `FROM <table>` (optionally with FOR UPDATE) whose
+  // columns the caller already bound -- so it is rendered directly with no
+  // re-aliasing wrapper. GetSQLQuery(kPipe) supplies the leading FROM keyword
+  // for a bare table and emits an already-pipe string verbatim.
+  if (input_qe->CanFormSQLQuery()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
   }
-  // A running pipe query already carries a complete pipe string in its FROM
-  // clause, and its columns are already bound for reference by the next
-  // operator. Return it directly to avoid adding a re-aliasing wrapper.
-  if (input_qe->HasOnlyFromClause()) {
-    return std::string(input_qe->FromClause());
-  }
-  // A structured QueryExpression (e.g. a leaf scan, or a scan still built by
-  // the standard-accumulate path). Lift it into a pipe query once, binding its
-  // output columns so the appended operator can reference them.
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
   return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
 }
 
