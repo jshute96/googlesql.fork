@@ -677,6 +677,13 @@ std::string QueryExpression::GetPipeSQLQuery() const {
   // clause because the aggregate columns are already in the GROUP BY clause.
   if (!group_by_clause_added) {
     AppendSeparator(TryAppendSelectClause(sql), sql, kPipe);
+  } else if (HasPipeAggregateTrailingSelect()) {
+    // The pipe AGGREGATE emitted an output column for every grouping key,
+    // including grouping keys that are not in the aggregate's output column
+    // list. Project back to exactly the aggregate's output columns.
+    absl::StrAppend(&sql, "SELECT ",
+                    JoinListWithAliases(pipe_aggregate_trailing_select_, ", "));
+    AppendSeparator(true, sql, kPipe);
   }
 
   bool limit_clause_added = TryAppendLimitClause(sql);
@@ -1086,6 +1093,7 @@ void QueryExpression::ClearAllClauses() {
   with_depth_modifier_.clear();
   set_op_scan_list_.clear();
   corresponding_set_op_output_column_list_.clear();
+  pipe_aggregate_trailing_select_.clear();
   group_by_all_ = false;
   group_by_only_aggregate_columns_ = false;
   group_by_list_.clear();

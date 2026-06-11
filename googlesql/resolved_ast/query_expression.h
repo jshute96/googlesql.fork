@@ -330,6 +330,15 @@ class QueryExpression {
 
   void ResetSelectClause() { select_list_.clear(); }
 
+  // See `pipe_aggregate_trailing_select_`. Sets the trailing `|> SELECT`
+  // projection emitted after a pipe AGGREGATE operator.
+  void SetPipeAggregateTrailingSelect(SQLAliasPairList select_list) {
+    pipe_aggregate_trailing_select_ = std::move(select_list);
+  }
+  bool HasPipeAggregateTrailingSelect() const {
+    return !pipe_aggregate_trailing_select_.empty();
+  }
+
  protected:
   // Returns the WITH clause SQL.
   std::string GetWithClauseSQL() const;
@@ -421,6 +430,15 @@ class QueryExpression {
   // set operations, the columns that can be "selected" are not the columns in
   // the select statement of the first query.
   SQLAliasPairList corresponding_set_op_output_column_list_;
+
+  // In Pipe syntax mode, a trailing `|> SELECT` projection emitted after the
+  // AGGREGATE operator. Pipe `|> AGGREGATE ... GROUP BY` always emits an output
+  // column for every grouping key, so when an aggregate groups by columns that
+  // are not in its own output column list, those grouping columns are added to
+  // the select list (to form a valid pipe AGGREGATE) and this projection drops
+  // them again, leaving exactly the aggregate's output columns. Empty when not
+  // needed (the common case where all grouping keys are already output).
+  SQLAliasPairList pipe_aggregate_trailing_select_;
 
   std::string select_as_modifier_;  // "AS TypeName", "AS STRUCT", or "AS VALUE"
   std::string query_hints_;

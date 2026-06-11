@@ -5439,8 +5439,44 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
         rollup_column_id_list));
   }
   if (!scans_to_collapse_.contains(node)) {
+    // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY` emits an output column
+    // for every grouping key. When the aggregate groups by columns that the
+    // resolver pruned from its output column list, add those columns to the
+    // select list so the grouping keys get aliases (required by pipe syntax),
+    // then record a trailing `|> SELECT` that drops them again to restore the
+    // aggregate's real output columns. In the common case (all grouping keys
+    // are already output) nothing is added and the output is unchanged.
+    ResolvedColumnList select_column_list = node->column_list();
+    bool added_pruned_group_by_columns = false;
+    if (IsPipeSyntaxTargetMode() && !group_by_list.empty() &&
+        !node->column_list().empty()) {
+      absl::flat_hash_set<int> output_column_ids;
+      for (const ResolvedColumn& col : node->column_list()) {
+        output_column_ids.insert(col.column_id());
+      }
+      for (const auto& computed_col : node->group_by_list()) {
+        const ResolvedColumn& group_by_column = computed_col->column();
+        if (output_column_ids.insert(group_by_column.column_id()).second) {
+          select_column_list.push_back(group_by_column);
+          added_pruned_group_by_columns = true;
+        }
+      }
+    }
     GOOGLESQL_RETURN_IF_ERROR(
-        AddSelectListIfNeeded(node->column_list(), query_expression));
+        AddSelectListIfNeeded(select_column_list, query_expression));
+    if (added_pruned_group_by_columns) {
+      // The real output columns are the leading entries of the select list
+      // (the pruned grouping keys were appended after them). After the pipe
+      // AGGREGATE each output column is named by its alias, so project those
+      // aliases through.
+      const SQLAliasPairList& select_list = query_expression->SelectList();
+      SQLAliasPairList trailing_select;
+      trailing_select.reserve(node->column_list().size());
+      for (int i = 0; i < node->column_list().size(); ++i) {
+        trailing_select.emplace_back(select_list[i].second, /*alias=*/"");
+      }
+      query_expression->SetPipeAggregateTrailingSelect(std::move(trailing_select));
+    }
     // For queries that have only aggregate columns but no group-by columns, eg.
     // `select count(*) from table`, the following condition become true, and we
     // capture that information in the query_expression so that it can be used
