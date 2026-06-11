@@ -133,9 +133,8 @@ FROM
    GROUP BY a_6
 |> SELECT
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_5 AS a_5;
+     a_5 AS a_5;
 ==
 
 # Multi-level aggregates with COUNT(*)
@@ -238,11 +237,10 @@ FROM
      a_5,
      a_6,
      a_7
-|> AS aggregatescan_9
 |> SELECT
-     aggregatescan_9.a_5 AS a_5,
-     aggregatescan_9.a_6 AS a_6,
-     aggregatescan_9.a_7 AS a_7;
+     a_5 AS a_5,
+     a_6 AS a_6,
+     a_7 AS a_7;
 ==
 
 # Repeated equivalent grouping expressions across multi-level aggregates and the
@@ -342,10 +340,9 @@ FROM
 |> SELECT
      a_5,
      a_6
-|> AS aggregatescan_8
 |> SELECT
-     aggregatescan_8.a_5 AS a_5,
-     aggregatescan_8.a_6 AS a_6;
+     a_5 AS a_5,
+     a_6 AS a_6;
 ==
 
 # Test grouping constness for path expression suffixes.
@@ -443,9 +440,8 @@ FROM
    GROUP BY a_5
 |> SELECT
      a_4
-|> AS aggregatescan_6
 |> SELECT
-     aggregatescan_6.a_4 AS a_4;
+     a_4 AS a_4;
 ==
 
 # Test grouping constness for path expression suffixes.
@@ -581,10 +577,9 @@ FROM
 |> SELECT
      a_3,
      a_4
-|> AS aggregatescan_6
 |> SELECT
-     aggregatescan_6.a_3 AS a_3,
-     aggregatescan_6.a_4 AS a_4;
+     a_3 AS a_3,
+     a_4 AS a_4;
 ==
 
 # ORDER BY clause can reference post-grouping scalar columns.
@@ -1334,11 +1329,10 @@ FROM
 |> SELECT
      a_6,
      a_7
-|> AS aggregatescan_9
 |> WHERE
-     ((aggregatescan_9.a_6) > 0) AND ((aggregatescan_9.a_7) > 10.0)
+     (a_6 > 0) AND (a_7 > 10.0)
 |> SELECT
-     aggregatescan_9.a_6 AS multi_level_agg;
+     a_6 AS multi_level_agg;
 ==
 
 # Multi-level aggregates in the QUALIFY clause.
@@ -1629,10 +1623,9 @@ FROM
      a_6,
      a_7,
      a_8
-|> AS aggregatescan_10
-|> ORDER BY aggregatescan_10.a_7, aggregatescan_10.a_8
+|> ORDER BY a_7, a_8
 |> SELECT
-     aggregatescan_10.a_6 AS a_6;
+     a_6 AS a_6;
 ==
 
 # DISTINCT and ORDER by on a GROUP BY modifier.
@@ -1796,9 +1789,8 @@ FROM
    GROUP BY a_4, a_5
 |> SELECT
      a_3
-|> AS aggregatescan_6
 |> SELECT
-     aggregatescan_6.a_3 AS a_3;
+     a_3 AS a_3;
 ==
 
 # Multi-level aggregation over PROTO fields
@@ -2119,9 +2111,8 @@ FROM
    GROUP BY a_6, a_7
 |> SELECT
      a_5
-|> AS aggregatescan_8
 |> SELECT
-     aggregatescan_8.a_5 AS a_5;
+     a_5 AS a_5;
 --
 ALTERNATION GROUPS:
     ROLLUP(int32, int64)
@@ -2207,9 +2198,8 @@ FROM
    GROUP BY a_5, a_6
 |> SELECT
      a_4
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_4 AS a_4;
+     a_4 AS a_4;
 --
 ALTERNATION GROUP: ROLLUP(int32, int64)
 --
@@ -2285,9 +2275,8 @@ FROM
    GROUP BY ROLLUP(a_5, a_6)
 |> SELECT
      a_4
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_4 AS a_4;
+     a_4 AS a_4;
 --
 ALTERNATION GROUP: CUBE(int32, int64)
 --
@@ -2363,9 +2352,8 @@ FROM
    GROUP BY CUBE(a_5, a_6)
 |> SELECT
      a_4
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_4 AS a_4;
+     a_4 AS a_4;
 --
 ALTERNATION GROUP: GROUPING SETS(int32, int64)
 --
@@ -2439,9 +2427,8 @@ FROM
    GROUP BY GROUPING SETS(a_5, a_6)
 |> SELECT
      a_4
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_4 AS a_4;
+     a_4 AS a_4;
 ==
 
 # Ensure 'grouping-constness' works correctly with CUBE, ROLLUP and GROUPING
@@ -2550,10 +2537,9 @@ FROM
 |> SELECT
      a_7,
      a_8
-|> AS aggregatescan_11
 |> SELECT
-     aggregatescan_11.a_7 AS a_7,
-     aggregatescan_11.a_8 AS a_8;
+     a_7 AS a_7,
+     a_8 AS a_8;
 --
 ALTERNATION GROUP: CUBE(string, bool)
 --
@@ -2653,10 +2639,9 @@ FROM
 |> SELECT
      a_7,
      a_8
-|> AS aggregatescan_11
 |> SELECT
-     aggregatescan_11.a_7 AS a_7,
-     aggregatescan_11.a_8 AS a_8;
+     a_7 AS a_7,
+     a_8 AS a_8;
 --
 ALTERNATION GROUP: GROUPING SETS(string, bool)
 --
@@ -2754,10 +2739,9 @@ FROM
 |> SELECT
      a_7,
      a_8
-|> AS aggregatescan_11
 |> SELECT
-     aggregatescan_11.a_7 AS a_7,
-     aggregatescan_11.a_8 AS a_8;
+     a_7 AS a_7,
+     a_8 AS a_8;
 ==
 
 # Test value table with multilevel aggregation.
@@ -2911,14 +2895,13 @@ WITH
        GROUP BY a_6
     |> SELECT
          a_5
-    |> AS aggregatescan_7
     |> SELECT
-         aggregatescan_7.a_5 AS a_5
+         a_5 AS a_5
   )
 FROM
-  T AS withrefscan_8
+  T AS withrefscan_7
 |> SELECT
-     withrefscan_8.a_5 AS a_5;
+     withrefscan_7.a_5 AS a_5;
 ==
 
 # Test various aggregate function modifiers with multi-level aggregation.
@@ -2991,9 +2974,8 @@ FROM
    GROUP BY a_5
 |> SELECT
      a_4
-|> AS aggregatescan_6
 |> SELECT
-     aggregatescan_6.a_4 AS a_4;
+     a_4 AS a_4;
 ==
 
 # Regression test for b/379931737

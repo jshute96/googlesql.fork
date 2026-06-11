@@ -1438,10 +1438,9 @@ FROM
                      GROUP BY a_8
                   |> SELECT
                        a_7
-                  |> AS aggregatescan_9
                   |> SELECT
-                       aggregatescan_9.a_7 AS a_7
-                )) AS a_10)) AS a_2;
+                       a_7 AS a_7
+                )) AS a_9)) AS a_2;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1624,14 +1623,13 @@ FROM
                                    GROUP BY a_13
                                 |> SELECT
                                      a_12
-                                |> AS aggregatescan_14
                                 |> SELECT
-                                     aggregatescan_14.a_12 AS a_12
-                              )) AS a_15) AS a_8
-                |> AS projectscan_16
-                |> ORDER BY projectscan_16.a_7
+                                     a_12 AS a_12
+                              )) AS a_14) AS a_8
+                |> AS projectscan_15
+                |> ORDER BY projectscan_15.a_7
                 |> SELECT
-                     projectscan_16.a_8 AS a_8
+                     projectscan_15.a_8 AS a_8
               )) AS a_5
      ) AS a_2;
 ==

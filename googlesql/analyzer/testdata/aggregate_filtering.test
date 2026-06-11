@@ -529,15 +529,14 @@ FROM
    GROUP BY a_5, a_4
 |> SELECT
      a_4
-|> AS aggregatescan_6
 |> SELECT
-     aggregatescan_6.a_4 AS a_4,
+     a_4 AS a_4,
      COUNT(*
        WHERE
-         aggregatescan_6.a_4) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_7
-|> AS analyticscan_8
+         a_4) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_6
+|> AS analyticscan_7
 |> SELECT
-     analyticscan_8.a_7 AS a_7;
+     analyticscan_7.a_6 AS a_6;
 --
 ALTERNATION GROUP: *,
 --
@@ -1002,10 +1001,9 @@ FROM
 |> SELECT
      a_3,
      a_4
-|> AS aggregatescan_6
 |> SELECT
-     aggregatescan_6.a_3 AS a_3,
-     aggregatescan_6.a_4 AS a_4;
+     a_3 AS a_3,
+     a_4 AS a_4;
 ==
 
 # WHERE filtering supported in aggregate functions in ORDER BY clause.
@@ -1090,10 +1088,9 @@ FROM
 |> SELECT
      a_6,
      a_7
-|> AS aggregatescan_9
-|> ORDER BY aggregatescan_9.a_7
+|> ORDER BY a_7
 |> SELECT
-     aggregatescan_9.a_6 AS a_6;
+     a_6 AS a_6;
 ==
 
 
@@ -1182,11 +1179,10 @@ FROM
 |> SELECT
      a_6,
      a_7
-|> AS aggregatescan_9
 |> WHERE
-     (aggregatescan_9.a_7) > 100.0
+     a_7 > 100.0
 |> SELECT
-     aggregatescan_9.a_6 AS a_6;
+     a_6 AS a_6;
 ==
 
 # WHERE filtering works in GROUP BY queries with QUALIFY clause.
@@ -1501,9 +1497,8 @@ FROM
    GROUP BY a_6
 |> SELECT
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_5 AS a_5;
+     a_5 AS a_5;
 ==
 
 # HAVING filter works with multiple nested aggregates.
@@ -1622,9 +1617,8 @@ FROM
    GROUP BY a_7
 |> SELECT
      a_6
-|> AS aggregatescan_8
 |> SELECT
-     aggregatescan_8.a_6 AS a_6;
+     a_6 AS a_6;
 ==
 
 # HAVING filtering supported in aggregate functions in ORDER BY clause.
@@ -1723,10 +1717,9 @@ FROM
 |> SELECT
      a_6,
      a_7
-|> AS aggregatescan_9
-|> ORDER BY aggregatescan_9.a_7
+|> ORDER BY a_7
 |> SELECT
-     aggregatescan_9.a_6 AS a_6;
+     a_6 AS a_6;
 ==
 
 # HAVING filtering works in GROUP BY queries with query level HAVING clause.
@@ -1843,11 +1836,10 @@ FROM
 |> SELECT
      a_6,
      a_7
-|> AS aggregatescan_9
 |> WHERE
-     (aggregatescan_9.a_7) > 100.0
+     a_7 > 100.0
 |> SELECT
-     aggregatescan_9.a_6 AS a_6;
+     a_6 AS a_6;
 ==
 
 # HAVING filtering HAVING expressions.
@@ -1953,8 +1945,7 @@ FROM
 |> SELECT
      a_6,
      a_7
-|> AS aggregatescan_9
 |> WHERE
-     (aggregatescan_9.a_7) > 100.0
+     a_7 > 100.0
 |> SELECT
-     aggregatescan_9.a_6 AS a_6;
+     a_6 AS a_6;

@@ -602,10 +602,9 @@ FROM
 |> SELECT
      a_5,
      a_6
-|> AS aggregatescan_8
 |> SELECT
-     1 IN (aggregatescan_8.a_5) AS a_9,
-     1 IN UNNEST(ARRAY< INT64 >[aggregatescan_8.a_6]) AS a_10;
+     1 IN (a_5) AS a_8,
+     1 IN UNNEST(ARRAY< INT64 >[a_6]) AS a_9;
 ==
 
 SELECT
@@ -694,10 +693,9 @@ FROM
 |> SELECT
      a_4,
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     "corba" IN (aggregatescan_7.a_4) AS a_8,
-     "corba" IN UNNEST(ARRAY< STRING >[aggregatescan_7.a_5]) AS a_9;
+     "corba" IN (a_4) AS a_7,
+     "corba" IN UNNEST(ARRAY< STRING >[a_5]) AS a_8;
 ==
 
 # Correlated columns with multi-level aggregates.
@@ -867,13 +865,12 @@ FROM
        |> SELECT
             a_13,
             a_14
-       |> AS aggregatescan_17
        |> SELECT
-            aggregatescan_17.a_13 AS a_13,
-            aggregatescan_17.a_14 AS a_14
-       |> AS projectscan_18
+            a_13 AS a_13,
+            a_14 AS a_14
+       |> AS projectscan_17
        |> SELECT
-            STRUCT< v1 DOUBLE, v2 DOUBLE > (projectscan_18.a_13, projectscan_18.a_14) AS a_19
+            STRUCT< v1 DOUBLE, v2 DOUBLE > (projectscan_17.a_13, projectscan_17.a_14) AS a_18
      ) AS a_8;
 ==
 
@@ -984,8 +981,8 @@ FROM
      SimpleTypes.string AS a_3
 |> AS simpletypes_4
 |> EXTEND
-     simpletypes_4.a_2 AS a_15,
-     simpletypes_4.a_1 AS a_16
+     simpletypes_4.a_2 AS a_14,
+     simpletypes_4.a_1 AS a_15
 |> AGGREGATE
      SUM((
          FROM
@@ -1005,17 +1002,15 @@ FROM
             GROUP BY a_10, a_11, a_12
          |> SELECT
               a_9
-         |> AS aggregatescan_13
          |> SELECT
-              aggregatescan_13.a_9 AS a_9
+              a_9 AS a_9
        )
-       GROUP BY simpletypes_4.a_2, simpletypes_4.a_1, simpletypes_4.a_3) AS a_14
-   GROUP BY a_15, a_16
+       GROUP BY simpletypes_4.a_2, simpletypes_4.a_1, simpletypes_4.a_3) AS a_13
+   GROUP BY a_14, a_15
 |> SELECT
-     a_14
-|> AS aggregatescan_17
+     a_13
 |> SELECT
-     aggregatescan_17.a_14 AS a_14;
+     a_13 AS a_13;
 ==
 
 # Correlated path expressions with multi-level aggregates, and correlated
@@ -1427,16 +1422,15 @@ FROM
             a_9,
             a_10,
             a_11
-       |> AS aggregatescan_14
        |> SELECT
-            aggregatescan_14.a_9 AS a_9,
-            aggregatescan_14.a_10 AS a_10,
-            aggregatescan_14.a_11 AS a_11,
-            aggregatescan_5.a_3.d.b AS a_15
-       |> AS projectscan_16
-       |> ORDER BY projectscan_16.a_15, projectscan_16.a_11
+            a_9 AS a_9,
+            a_10 AS a_10,
+            a_11 AS a_11,
+            aggregatescan_5.a_3.d.b AS a_14
+       |> AS projectscan_15
+       |> ORDER BY projectscan_15.a_14, projectscan_15.a_11
        |> SELECT
-            STRUCT< v1 ARRAY< DOUBLE >, v2 DOUBLE > (projectscan_16.a_9, projectscan_16.a_10) AS a_17
+            STRUCT< v1 ARRAY< DOUBLE >, v2 DOUBLE > (projectscan_15.a_9, projectscan_15.a_10) AS a_16
      ) AS a_6;
 ==
 
@@ -1535,9 +1529,8 @@ FROM
    GROUP BY a_6
 |> SELECT
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_5 AS a_5;
+     a_5 AS a_5;
 ==
 
 # Complex multi-level aggregates
@@ -1650,10 +1643,9 @@ FROM
 |> SELECT
      a_6,
      a_7
-|> AS aggregatescan_9
 |> SELECT
-     aggregatescan_9.a_6 AS a_6,
-     aggregatescan_9.a_7 AS a_7;
+     a_6 AS a_6,
+     a_7 AS a_7;
 ==
 
 # Complex multi-level aggregates, with multi-level aggregates inside the
@@ -1864,10 +1856,9 @@ FROM
 |> SELECT
      a_7,
      a_8
-|> AS aggregatescan_10
 |> SELECT
-     aggregatescan_10.a_7 AS a_7,
-     aggregatescan_10.a_8 AS a_8;
+     a_7 AS a_7,
+     a_8 AS a_8;
 ==
 
 # Multi-level aggregates inside the PARTITION BY and ORDER BY clause of analytic
@@ -2567,9 +2558,8 @@ FROM
    GROUP BY a_6
 |> SELECT
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_5 AS a_5;
+     a_5 AS a_5;
 ==
 
 SELECT
@@ -2652,6 +2642,5 @@ FROM
    GROUP BY a_6
 |> SELECT
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_5 AS a_5;
+     a_5 AS a_5;

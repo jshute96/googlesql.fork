@@ -5442,14 +5442,19 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
     // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY` emits an output column
     // for every grouping key. When the aggregate groups by columns that the
     // resolver pruned from its output column list, add those columns to the
-    // select list so the grouping keys get aliases (required by pipe syntax),
-    // then record a trailing `|> SELECT` that drops them again to restore the
-    // aggregate's real output columns. In the common case (all grouping keys
-    // are already output) nothing is added and the output is unchanged.
+    // select list so the grouping keys get aliases (required by pipe syntax).
+    // The pipe AGGREGATE then emits them as extra trailing output columns; the
+    // aggregate visitor appends a `|> SELECT` that projects them away again (see
+    // AppendPipeAggregateOutputProjectionIfNeeded). In the common case (all
+    // grouping keys are already output) nothing is added.
+    //
+    // Scans that are unsupported in pipe syntax (anonymized / aggregation
+    // threshold) are rendered as a standard-syntax subquery by their consumer,
+    // so they must not be augmented (the extra grouping keys would leak into the
+    // standard SELECT) -- skip them here.
     ResolvedColumnList select_column_list = node->column_list();
-    bool added_pruned_group_by_columns = false;
     if (IsPipeSyntaxTargetMode() && !group_by_list.empty() &&
-        !node->column_list().empty()) {
+        !node->column_list().empty() && !IsScanUnsupportedInPipeSyntax(node)) {
       absl::flat_hash_set<int> output_column_ids;
       for (const ResolvedColumn& col : node->column_list()) {
         output_column_ids.insert(col.column_id());
@@ -5458,25 +5463,11 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
         const ResolvedColumn& group_by_column = computed_col->column();
         if (output_column_ids.insert(group_by_column.column_id()).second) {
           select_column_list.push_back(group_by_column);
-          added_pruned_group_by_columns = true;
         }
       }
     }
     GOOGLESQL_RETURN_IF_ERROR(
         AddSelectListIfNeeded(select_column_list, query_expression));
-    if (added_pruned_group_by_columns) {
-      // The real output columns are the leading entries of the select list
-      // (the pruned grouping keys were appended after them). After the pipe
-      // AGGREGATE each output column is named by its alias, so project those
-      // aliases through.
-      const SQLAliasPairList& select_list = query_expression->SelectList();
-      SQLAliasPairList trailing_select;
-      trailing_select.reserve(node->column_list().size());
-      for (int i = 0; i < node->column_list().size(); ++i) {
-        trailing_select.emplace_back(select_list[i].second, /*alias=*/"");
-      }
-      query_expression->SetPipeAggregateTrailingSelect(std::move(trailing_select));
-    }
     // For queries that have only aggregate columns but no group-by columns, eg.
     // `select count(*) from table`, the following condition become true, and we
     // capture that information in the query_expression so that it can be used
@@ -5486,6 +5477,42 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
     }
   }
   return absl::OkStatus();
+}
+
+absl::StatusOr<std::unique_ptr<QueryExpression>>
+SQLBuilder::AppendPipeAggregateOutputProjectionIfNeeded(
+    const ResolvedColumnList& output_column_list,
+    std::unique_ptr<QueryExpression> query_expression) {
+  if (!IsPipeSyntaxTargetMode()) {
+    return query_expression;
+  }
+  // ProcessAggregateScanBase appends grouping keys that are not in the
+  // aggregate's output (pruned by the resolver) after the real output columns
+  // in the select list, so that a valid pipe AGGREGATE can be formed. When it
+  // did, the pipe AGGREGATE emits those keys as extra trailing output columns;
+  // append a `|> SELECT` operator that projects back to exactly the aggregate's
+  // output columns (the leading select-list entries, referenced by alias). In
+  // the common case the select list matches the output columns and nothing is
+  // appended.
+  //
+  // An aggregate with an empty output column list (select_list is then a single
+  // "NULL" placeholder) never augments its grouping keys, so it is left alone.
+  if (output_column_list.empty()) {
+    return query_expression;
+  }
+  const QueryExpression::SQLAliasPairList& select_list =
+      query_expression->SelectList();
+  if (select_list.size() <= output_column_list.size()) {
+    return query_expression;
+  }
+  std::vector<std::string> output_column_aliases;
+  output_column_aliases.reserve(output_column_list.size());
+  for (int i = 0; i < output_column_list.size(); ++i) {
+    output_column_aliases.push_back(select_list[i].second);
+  }
+  return AppendPipeOperator(
+      query_expression->GetSQLQuery(QueryExpression::TargetSyntaxMode::kPipe),
+      absl::StrCat("SELECT ", absl::StrJoin(output_column_aliases, ", ")));
 }
 
 absl::Status SQLBuilder::VisitResolvedAggregateScan(
@@ -5501,6 +5528,10 @@ absl::Status SQLBuilder::VisitResolvedAggregateScan(
   GOOGLESQL_RETURN_IF_ERROR(
       ProcessAggregateScanBase(node, /*is_differencial_privacy_scan=*/false,
                                grouping_column_id_map, query_expression.get()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      query_expression,
+      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
+                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }
@@ -5526,6 +5557,10 @@ absl::Status SQLBuilder::VisitResolvedAnonymizedAggregateScan(
   GOOGLESQL_RET_CHECK(query_expression->TrySetWithAnonymizationClause(
       anonymization_options_sql));
 
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      query_expression,
+      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
+                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
 
   // The k_threshold is not mapped back to sql, so we can safely ignore it.
@@ -5555,6 +5590,10 @@ absl::Status SQLBuilder::VisitResolvedDifferentialPrivacyAggregateScan(
   GOOGLESQL_RETURN_IF_ERROR(AppendOptions(node->option_list(), &options_sql));
   GOOGLESQL_RET_CHECK(query_expression->TrySetWithAnonymizationClause(options_sql));
 
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      query_expression,
+      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
+                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
 
   // The group_selection_threshold_expr is not mapped back to sql, so we can
@@ -5589,6 +5628,10 @@ absl::Status SQLBuilder::VisitResolvedAggregationThresholdAggregateScan(
   GOOGLESQL_RETURN_IF_ERROR(AppendOptions(node->option_list(), &options_sql));
   GOOGLESQL_RET_CHECK(query_expression->TrySetWithAnonymizationClause(options_sql));
 
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      query_expression,
+      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
+                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }

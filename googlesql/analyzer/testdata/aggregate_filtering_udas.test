@@ -647,10 +647,9 @@ FROM
 |> SELECT
      a_4,
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_4 AS a_4,
-     aggregatescan_7.a_5 AS a_5;
+     a_4 AS a_4,
+     a_5 AS a_5;
 
 [REWRITTEN AST]
 QueryStmt
@@ -775,10 +774,9 @@ FROM
 |> SELECT
      a_9,
      a_10
-|> AS aggregatescan_12
 |> SELECT
-     aggregatescan_12.a_9 AS a_13,
-     aggregatescan_12.a_10 AS a_14;
+     a_9 AS a_12,
+     a_10 AS a_13;
 ==
 
 # Test inlining a TVF with a filter.

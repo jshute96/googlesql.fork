@@ -850,9 +850,8 @@ FROM
 |> SELECT
      a_4,
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     WITH(a_10 AS aggregatescan_7.a_4, a_9 AS aggregatescan_7.a_5, CAST(a_9 AS DOUBLE) / CAST(a_10 AS DOUBLE)) AS a_8;
+     WITH(a_9 AS a_4, a_8 AS a_5, CAST(a_8 AS DOUBLE) / CAST(a_9 AS DOUBLE)) AS a_7;
 
 [REWRITTEN AST]
 QueryStmt
@@ -956,19 +955,18 @@ FROM
 |> SELECT
      a_4,
      a_5
-|> AS aggregatescan_7
 |> SELECT
      (
        SELECT
-         aggregatescan_7.a_4 AS a_9
-       |> AS projectscan_10
+         a_4 AS a_8
+       |> AS projectscan_9
        |> SELECT
-            projectscan_10.a_9 AS a_9,
-            aggregatescan_7.a_5 AS a_11
-       |> AS projectscan_12
+            projectscan_9.a_8 AS a_8,
+            a_5 AS a_10
+       |> AS projectscan_11
        |> SELECT
-            CAST(projectscan_12.a_11 AS DOUBLE) / CAST(projectscan_12.a_9 AS DOUBLE) AS a_13
-     ) AS a_8;
+            CAST(projectscan_11.a_10 AS DOUBLE) / CAST(projectscan_11.a_8 AS DOUBLE) AS a_12
+     ) AS a_7;
 ==
 
 SELECT WITH(sumk AS SUM(KeyValue.key),
@@ -1242,9 +1240,8 @@ FROM
 |> SELECT
      a_4,
      a_5
-|> AS aggregatescan_7
 |> SELECT
-     WITH(a_9 AS aggregatescan_7.a_4, CAST(aggregatescan_7.a_5 AS DOUBLE) / CAST(a_9 AS DOUBLE)) AS a_8;
+     WITH(a_8 AS a_4, CAST(a_5 AS DOUBLE) / CAST(a_8 AS DOUBLE)) AS a_7;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1337,15 +1334,14 @@ FROM
 |> SELECT
      a_4,
      a_5
-|> AS aggregatescan_7
 |> SELECT
      (
        SELECT
-         aggregatescan_7.a_4 AS a_9
-       |> AS projectscan_10
+         a_4 AS a_8
+       |> AS projectscan_9
        |> SELECT
-            CAST(aggregatescan_7.a_5 AS DOUBLE) / CAST(projectscan_10.a_9 AS DOUBLE) AS a_11
-     ) AS a_8;
+            CAST(a_5 AS DOUBLE) / CAST(projectscan_9.a_8 AS DOUBLE) AS a_10
+     ) AS a_7;
 ==
 
 SELECT WITH(sumk AS SUM(KeyValue.key),
