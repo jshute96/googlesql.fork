@@ -3201,6 +3201,49 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
     query_expression = std::move(result->query_expression);
   }
 
+  // Subpipeline projection: the input is a bare pipe operator chain (it starts
+  // from an empty ResolvedSubpipelineInputScan), so emit a `|> SELECT` operator
+  // listing the output columns and append it onto the chain. A subpipeline is
+  // always rendered in pipe syntax regardless of the global target syntax mode.
+  // The general FROM-rooted ProjectScan handling below uses the standard
+  // accumulate path.
+  if (query_expression->IsPipeOperatorChain()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+
+    std::map<int64_t /* column_id */, const ResolvedExpr*> col_to_expr_map;
+    for (const auto& expr : node->expr_list()) {
+      googlesql_base::InsertIfNotPresent(&col_to_expr_map, expr->column().column_id(),
+                              expr->expr());
+    }
+    SQLAliasPairList select_list;
+    GOOGLESQL_RETURN_IF_ERROR(GetSelectList(node->column_list(), col_to_expr_map, node,
+                                  query_expression.get(), &select_list));
+    std::string select_hints;
+    GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &select_hints));
+
+    std::vector<std::string> items;
+    items.reserve(select_list.size());
+    for (const auto& [column_sql, alias] : select_list) {
+      items.push_back(alias.empty() ? column_sql
+                                     : absl::StrCat(column_sql, " AS ", alias));
+    }
+    std::string op = absl::StrCat(
+        "SELECT ", select_hints.empty() ? "" : absl::StrCat(select_hints, " "),
+        absl::StrJoin(items, ", "));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op, /*is_pipe_operator_chain=*/true));
+
+    // The output columns now flow under their bare select aliases.
+    for (const ResolvedColumn& col : node->column_list()) {
+      SetPathForColumn(col, GetColumnAlias(col));
+    }
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   // When in Pipe syntax mode, if the input scan is not supported, wrap
   // the query expression in Standard syntax mode.
   if (IsPipeSyntaxTargetMode() &&
@@ -3677,8 +3720,10 @@ absl::Status SQLBuilder::VisitResolvedFilterScan(
   // In Pipe syntax mode, emit a single `|> WHERE` operator appended onto the
   // running pipe SQL of the input scan. FilterScan does not change the column
   // namespace, so the input's column bindings remain valid and no wrapping
-  // alias is introduced between operators.
-  if (IsPipeSyntaxTargetMode() &&
+  // alias is introduced between operators. We also take this path when the
+  // input is an operator chain (a subpipeline body), which is always rendered
+  // in pipe syntax regardless of the global target syntax mode.
+  if ((IsPipeSyntaxTargetMode() || query_expression->IsPipeOperatorChain()) &&
       !IsScanUnsupportedInPipeSyntax(node->input_scan())) {
     // For a filter directly over a simple (non-value) table scan, expose the
     // table's columns by their natural names and drop the table scan's select
@@ -3699,12 +3744,14 @@ absl::Status SQLBuilder::VisitResolvedFilterScan(
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::string pipe_sql,
         GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    const bool is_operator_chain = query_expression->IsPipeOperatorChain();
     GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                      ProcessNode(node->filter_expr()));
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::unique_ptr<QueryExpression> out_qe,
         AppendPipeOperator(pipe_sql,
-                           absl::StrCat("WHERE ", result->GetSQL())));
+                           absl::StrCat("WHERE ", result->GetSQL()),
+                           is_operator_chain));
     PushSQLForQueryExpression(node, out_qe.release());
     return absl::OkStatus();
   }
@@ -5265,8 +5312,10 @@ absl::Status SQLBuilder::VisitResolvedOrderByScan(
 
   // In Pipe syntax mode, emit a single `|> ORDER BY` operator. All input
   // columns continue to flow, so order-by items can reference them directly
-  // without the wrap-and-reselect needed in Standard syntax.
-  if (IsPipeSyntaxTargetMode()) {
+  // without the wrap-and-reselect needed in Standard syntax. We also take this
+  // path when the input is an operator chain (a subpipeline body), which is
+  // always rendered in pipe syntax regardless of the global target syntax mode.
+  if (IsPipeSyntaxTargetMode() || query_expression->IsPipeOperatorChain()) {
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::string pipe_sql,
         GetInputPipeSQL(node->input_scan(), query_expression.get()));
@@ -5280,8 +5329,10 @@ absl::Status SQLBuilder::VisitResolvedOrderByScan(
         "ORDER ",
         order_by_hint_list.empty() ? "" : absl::StrCat(order_by_hint_list, " "),
         "BY ", absl::StrJoin(order_by_list, ", "));
-    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> out_qe,
-                     AppendPipeOperator(pipe_sql, op));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op,
+                           query_expression->IsPipeOperatorChain()));
     PushSQLForQueryExpression(node, out_qe.release());
     return absl::OkStatus();
   }
@@ -5996,10 +6047,32 @@ absl::Status SQLBuilder::VisitResolvedQueryStmt(const ResolvedQueryStmt* node) {
 
 absl::Status SQLBuilder::VisitResolvedGeneralizedQueryStmt(
     const ResolvedGeneralizedQueryStmt* node) {
-  // TODO Implement SQLBuilder for these.  We can't
-  // currently generate them without using subqueries around pipe operators
-  // like FORK that don't work in subqueries.
-  GOOGLESQL_RET_CHECK_FAIL() << "SQLBuilder for generalized statements not supported yet";
+  // A generalized query uses pipe operators like FORK that cannot appear inside
+  // a subquery, so the whole statement must be rendered in pipe syntax. This
+  // requires the SQLBuilder to be in Pipe target syntax mode.
+  GOOGLESQL_RET_CHECK(IsPipeSyntaxTargetMode())
+      << "Generalized query statements can only be rendered in Pipe syntax "
+         "target mode";
+
+  // `output_schema` is present if the outer query returns a table; if so, mark
+  // its fields accessed. It doesn't add syntax of its own here.
+  if (node->output_schema() != nullptr) {
+    for (const auto& output_column :
+         node->output_schema()->output_column_list()) {
+      output_column->MarkFieldsAccessed();
+    }
+    node->output_schema()->is_value_table();
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                   ProcessNode(node->query()));
+  std::unique_ptr<QueryExpression> query_expr =
+      std::move(result->query_expression);
+  GOOGLESQL_RET_CHECK(query_expr != nullptr);
+
+  PushQueryFragment(node,
+                    query_expr->GetSQLQuery(TargetSyntaxMode::kPipe));
+  return absl::OkStatus();
 }
 
 absl::Status SQLBuilder::VisitResolvedMultiStmt(const ResolvedMultiStmt* node) {
@@ -11648,6 +11721,12 @@ SQLBuilder::MaybeWrapPipeQueryAsStandardQuery(
 
 absl::StatusOr<std::string> SQLBuilder::GetInputPipeSQL(
     const ResolvedScan* input_scan, QueryExpression* input_qe) {
+  // A subpipeline body is a bare operator chain (no FROM root, possibly empty).
+  // Return it as-is so the next operator appends directly onto it. This is
+  // valid in any target syntax mode, since subpipelines are always pipe.
+  if (input_qe->IsPipeOperatorChain()) {
+    return std::string(input_qe->FromClause());
+  }
   GOOGLESQL_RET_CHECK(IsPipeSyntaxTargetMode());
   // If the input renders as a complete query (it carries a SELECT or a set
   // operation), it is not yet a pipe head: lift it into a pipe query once,
@@ -11677,12 +11756,18 @@ SQLBuilder::MakePipeQueryExpression(absl::string_view pipe_sql) {
 }
 
 absl::StatusOr<std::unique_ptr<QueryExpression>> SQLBuilder::AppendPipeOperator(
-    absl::string_view pipe_sql, absl::string_view op_sql) {
+    absl::string_view pipe_sql, absl::string_view op_sql,
+    bool is_pipe_operator_chain) {
   std::string out_sql =
       pipe_sql.empty()
           ? std::string(op_sql)
           : absl::StrCat(pipe_sql, QueryExpression::kPipe, op_sql);
-  return MakePipeQueryExpression(out_sql);
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> query_expression,
+                   MakePipeQueryExpression(out_sql));
+  if (is_pipe_operator_chain) {
+    query_expression->MarkAsPipeOperatorChain();
+  }
+  return query_expression;
 }
 
 absl::Status SQLBuilder::VisitResolvedDescribeScan(
@@ -11774,14 +11859,16 @@ absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
 
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
+  // Render the input to pipe SQL before processing the subpipeline.
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(node->input_scan(), query_expr.get(),
+                              &is_operator_chain));
 
-  // The subpipeline under ABSL_LOG doesn't affect the main execution pipeline so we
+  // The subpipeline under LOG doesn't affect the main execution pipeline so we
   // don't want any of its added aliases to affect later operators.
   // Save the state so we can undo any changes it makes.
-  // Depending how this gets used for different operators, this may belong
-  // as part of VisitResolvedSubpipeline rather than getting copied,
   // Save state on the heap because it might be large.
   auto saved_state = std::make_unique<CopyableState>(state_);
 
@@ -11790,7 +11877,7 @@ absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
                    ProcessNode(node->subpipeline()));
 
   // Avoid errors about unreferenced fields.  The output columns don't show up
-  // as part of the syntax for ABSL_LOG.
+  // as part of the syntax for LOG.
   GOOGLESQL_RET_CHECK(node->output_schema() != nullptr);
   for (const auto& output_column :
        node->output_schema()->output_column_list()) {
@@ -11799,20 +11886,52 @@ absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
   node->output_schema()->is_value_table();
 
   // Construct the SQL for the pipe operator as follows:
-  //   <input_scan> |> ABSL_LOG <hint> <subpipeline>
-  std::string log_sql =
-      absl::StrCat(query_expr->GetSQLQuery(TargetSyntaxMode::kPipe),
-                   QueryExpression::kPipe, "LOG ");
-  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &log_sql));
-  absl::StrAppend(&log_sql, subpipeline_fragment->GetSQL());
+  //   <input_scan> |> LOG <hint> <subpipeline>
+  std::string op = "LOG ";
+  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &op));
+  absl::StrAppend(&op, subpipeline_fragment->GetSQL());
 
-  // Restore the state from before the ABSL_LOG subpipeline was analyzed.
+  // Restore the state from before the LOG subpipeline was analyzed.
   state_ = std::move(*saved_state);
 
-  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> output_query_expr,
-                   MaybeWrapPipeQueryAsStandardQuery(*node, log_sql));
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
+}
 
-  PushSQLForQueryExpression(node, output_query_expr.release());
+absl::StatusOr<std::string> SQLBuilder::RenderPipeOperatorInput(
+    const ResolvedScan* input_scan, QueryExpression* input_qe,
+    bool* is_operator_chain) {
+  *is_operator_chain = input_qe->IsPipeOperatorChain();
+  if (*is_operator_chain) {
+    // The input is a subpipeline operator chain; append directly onto it.
+    return std::string(input_qe->FromClause());
+  }
+  GOOGLESQL_RETURN_IF_ERROR(
+      MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
+  return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
+}
+
+absl::Status SQLBuilder::FinishPipeOperatorScan(const ResolvedScan* node,
+                                                absl::string_view pipe_sql,
+                                                bool is_operator_chain,
+                                                absl::string_view op_sql) {
+  std::string combined =
+      pipe_sql.empty()
+          ? std::string(op_sql)
+          : absl::StrCat(pipe_sql, QueryExpression::kPipe, op_sql);
+
+  if (is_operator_chain) {
+    // This operator is itself inside a subpipeline, so keep producing an
+    // operator chain for the enclosing subpipeline to wrap.
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> out_qe,
+                     MakePipeQueryExpression(combined));
+    out_qe->MarkAsPipeOperatorChain();
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> out_qe,
+                   MaybeWrapPipeQueryAsStandardQuery(*node, combined));
+  PushSQLForQueryExpression(node, out_qe.release());
   return absl::OkStatus();
 }
 
@@ -11824,29 +11943,35 @@ absl::Status SQLBuilder::VisitResolvedPipeIfScan(
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
 
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
+  // Render the input to pipe SQL *before* processing the selected subpipeline.
+  // The IF's output columns are the columns flowing out of the selected
+  // subpipeline, so we want the subpipeline's rebinding of those columns to be
+  // the final word; we therefore must not save/restore state around it.
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(node->input_scan(), query_expr.get(),
+                              &is_operator_chain));
 
-  std::string if_sql = absl::StrCat(
-      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe), QueryExpression::kPipe);
-
+  // Build the IF operator body: IF <cond> THEN <sub> [ELSEIF ...] [ELSE <sub>].
+  std::string op;
   for (int i = 0; i < node->if_case_list().size(); ++i) {
     const ResolvedPipeIfCase* if_case = node->if_case_list(i);
     bool is_selected_case = (i == node->selected_case());
     if (i == 0) {
-      absl::StrAppend(&if_sql, "IF ");
+      absl::StrAppend(&op, "IF ");
     } else if (if_case->IsElse()) {
       GOOGLESQL_RET_CHECK_EQ(i, node->if_case_list().size() - 1);
-      absl::StrAppend(&if_sql, "ELSE ");
+      absl::StrAppend(&op, "ELSE ");
     } else {
-      absl::StrAppend(&if_sql, "ELSEIF ");
+      absl::StrAppend(&op, "ELSEIF ");
     }
 
     if (!if_case->IsElse()) {
       GOOGLESQL_RET_CHECK(if_case->condition() != nullptr);
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> condition,
                        ProcessNode(if_case->condition()));
-      absl::StrAppend(&if_sql, condition->GetSQL(), " THEN ");
+      absl::StrAppend(&op, condition->GetSQL(), " THEN ");
     }
 
     // For the selected case, build the subpipeline from its resolved AST.
@@ -11855,34 +11980,85 @@ absl::Status SQLBuilder::VisitResolvedPipeIfScan(
       GOOGLESQL_RET_CHECK(if_case->subpipeline() != nullptr);
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> fragment,
                        ProcessNode(if_case->subpipeline()));
-      absl::StrAppend(&if_sql, fragment->GetSQL(), "\n");
+      absl::StrAppend(&op, fragment->GetSQL(), "\n");
     } else {
       GOOGLESQL_RET_CHECK(!if_case->subpipeline_sql().empty());
-      absl::StrAppend(&if_sql, if_case->subpipeline_sql(), "\n");
+      absl::StrAppend(&op, if_case->subpipeline_sql(), "\n");
     }
   }
 
-  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> output_query_expr,
-                   MaybeWrapPipeQueryAsStandardQuery(*node, if_sql));
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
+}
 
-  PushSQLForQueryExpression(node, output_query_expr.release());
-  return absl::OkStatus();
+absl::StatusOr<std::string> SQLBuilder::GetPipeSubpipelineListSQL(
+    absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+        subpipeline_list) {
+  std::vector<std::string> parts;
+  parts.reserve(subpipeline_list.size());
+  for (const auto& item : subpipeline_list) {
+    GOOGLESQL_RET_CHECK(item->subpipeline() != nullptr);
+    // Each subpipeline is an independent branch over the same input. Save the
+    // state so any aliases/column paths it adds don't affect later branches or
+    // the continuing pipeline. Save state on the heap because it might be large.
+    auto saved_state = std::make_unique<CopyableState>(state_);
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> fragment,
+                     ProcessNode(item->subpipeline()));
+    parts.push_back(fragment->GetSQL());
+
+    // The output schema (if any) doesn't add syntax, but avoid errors about
+    // unreferenced fields.
+    if (item->output_schema() != nullptr) {
+      for (const auto& output_column :
+           item->output_schema()->output_column_list()) {
+        output_column->MarkFieldsAccessed();
+      }
+      item->output_schema()->is_value_table();
+    }
+
+    state_ = std::move(*saved_state);
+  }
+  return absl::StrJoin(parts, ", ");
+}
+
+absl::Status SQLBuilder::VisitResolvedPipeForkOrTeeScan(
+    const ResolvedScan* node, const ResolvedScan* input_scan,
+    absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+        subpipeline_list,
+    absl::string_view keyword) {
+  // Generate SQL for the input scan.
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input,
+                   ProcessNode(input_scan));
+  std::unique_ptr<QueryExpression> query_expr =
+      std::move(input->query_expression);
+
+  // Render the input to pipe SQL before processing the subpipelines.
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(input_scan, query_expr.get(),
+                              &is_operator_chain));
+
+  // Construct the SQL for the pipe operator as follows:
+  //   <input_scan> |> FORK <hint> (<subpipeline>), (<subpipeline>), ...
+  std::string op = absl::StrCat(keyword, " ");
+  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &op));
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string subpipelines_sql,
+                   GetPipeSubpipelineListSQL(subpipeline_list));
+  absl::StrAppend(&op, subpipelines_sql);
+
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
 }
 
 absl::Status SQLBuilder::VisitResolvedPipeForkScan(
     const ResolvedPipeForkScan* node) {
-  // TODO Implement SQLBuilder for FORK.  We can't
-  // currently generate it without using subqueries, and FORK doesn't work
-  // in subqueries.
-  GOOGLESQL_RET_CHECK_FAIL() << "SQLBuilder for FORK not supported yet";
+  return VisitResolvedPipeForkOrTeeScan(node, node->input_scan(),
+                                        node->subpipeline_list(), "FORK");
 }
 
 absl::Status SQLBuilder::VisitResolvedPipeTeeScan(
     const ResolvedPipeTeeScan* node) {
-  // TODO Implement SQLBuilder for TEE.  We can't
-  // currently generate it without using subqueries, and TEE doesn't work
-  // in subqueries.
-  GOOGLESQL_RET_CHECK_FAIL() << "SQLBuilder for TEE not supported yet";
+  return VisitResolvedPipeForkOrTeeScan(node, node->input_scan(),
+                                        node->subpipeline_list(), "TEE");
 }
 
 absl::Status SQLBuilder::VisitResolvedPipeExportDataScan(
@@ -11905,62 +12081,31 @@ absl::Status SQLBuilder::VisitResolvedPipeInsertScan(
 
 absl::Status SQLBuilder::VisitResolvedSubpipeline(
     const ResolvedSubpipeline* node) {
-  // This is a hack to generate subpipeline SQL before we have SQLBuilder pipe
-  // syntax support.  We want it to start with a pipe operator, maybe using an
-  // empty string for the ResolvedSubpipelineInputScan, and then adding pipe
-  // operators onto it.
-  //
-  // Instead, using the standard-syntax builder, we'll get an inside-out query
-  // that has the ResolvedSubpipelineInputScan in the middle.  To make that work
-  // as a subpipeline, we'll generate a complex subquery something like this.
-  // See the code below for the full pattern.
-  //
-  //   |> AGRREGATE ARRAY_AGG(STRUCT(<column list>)) AS __SubpipelineInput__
-  //   |> JOIN UNNEST(ARRAY(
-  //        # This subquery is the one generated by the SQLBuilder.
-  //        SELECT ...
-  //        FROM (
-  //          # This subquery is the ResolvedSubpipelineInputScan.
-  //          SELECT * FROM UNNEST(__SubpipelineInput__)
-  //        )
-  //
-  // Explanation:
-  // It first bundles the subpipeline input into one row as an array of structs.
-  // Then it does a lateral join (using the array hack) to execute a subquery
-  // (generated by SQLBuilder for the subpipeline) over that one row of input.
-  // The innermost subquery comes from the ResolvedSubpipelineInputScan, and
-  // it will UNNEST the array value to produce the subpipeline input rows.
-  //
-  // When we have real pipe syntax support in the SQLBuilder, we can avoid this.
-  // TODO Replace with pipe SQLBuilder support.
-
-  // Generate SQL for the scan.  This will generate a query that starts by
-  // reading a ResolvedSubpipelineInputScan placeholder table.
+  // A subpipeline is always rendered in pipe syntax. It starts from an empty
+  // ResolvedSubpipelineInputScan (see VisitResolvedSubpipelineInputScan) and
+  // its scans append pipe operators onto that empty operator chain, producing a
+  // QueryExpression whose `from_` holds the bare operator sequence (e.g.
+  // "WHERE x |> SELECT y"). We wrap that in parentheses with a leading pipe to
+  // form the subpipeline syntax consumed by FORK/TEE/IF/LOG:
+  //   ( |> WHERE x |> SELECT y )
+  // A subpipeline is always pipe syntax, even when the enclosing query is being
+  // rendered in standard syntax (the enclosing FORK/TEE/IF/LOG operator wraps
+  // the result into a standard subquery as needed).
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input,
                    ProcessNode(node->scan()));
-
-  // Convert the query to a subquery. This also adds the needed parentheses.
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
   GOOGLESQL_RET_CHECK(query_expr != nullptr);
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->scan(), query_expr.get()));
-  std::string subquery_sql = query_expr->GetSQLQuery(TargetSyntaxMode::kPipe);
+  GOOGLESQL_RET_CHECK(query_expr->IsPipeOperatorChain())
+      << "Subpipeline body did not resolve to a pipe operator chain";
 
-  // Generate the subpipeline SQL.
-  // The `SELECT *` pieces seem to work but may have some edge case issues.
-  // If this was permanent, it should probably list columns explicitly.
-  std::string sql = absl::StrCat(
-      R"(( |> SELECT AS STRUCT *
-  |> AS __StructValue__
-  |> AGGREGATE ARRAY_AGG(__StructValue__) AS __SubpipelineInput__
-  |> JOIN UNNEST(ARRAY(
-          )",
-      subquery_sql, QueryExpression::kPipe, R"(
-     SELECT AS STRUCT *))
-  |> SELECT *
-  |> AS )",
-      GetScanAlias(node->scan()), ")\n");
+  absl::string_view operators = query_expr->FromClause();
+  std::string sql;
+  if (operators.empty()) {
+    sql = "()";
+  } else {
+    absl::StrAppend(&sql, "(\n  |> ", operators, "\n)");
+  }
 
   // Return the subpipeline as a fragment, since it isn't a query.
   PushQueryFragment(node, sql);
@@ -11969,22 +12114,16 @@ absl::Status SQLBuilder::VisitResolvedSubpipeline(
 
 absl::Status SQLBuilder::VisitResolvedSubpipelineInputScan(
     const ResolvedSubpipelineInputScan* node) {
-  // This node is a placeholder scan at the start of a subpipeline.  It
-  // shouldn't actually show up in the SQL, since the subpipeline starts
-  // directly with pipe operators, so we'd prefer to just return an empty
-  // string here and then let the following scans add pipe operators onto it.
-  //
-  // We can't do that yet, since the SQLBuilder will generate a standard syntax
-  // query rather than pipe operators.  So we need to generate a query that
-  // works as the innermost scan for that query.  The pattern is described
-  // above in VisitResolvedSubpipeline.
-
+  // This node is a placeholder scan at the start of a subpipeline. It does not
+  // show up in the SQL: a subpipeline starts directly with pipe operators, so
+  // we return an empty operator-chain QueryExpression and let the following
+  // scans append pipe operators onto it (see GetInputPipeSQL and
+  // VisitResolvedSubpipeline). A subpipeline is always pipe syntax, so the
+  // operator-chain QueryExpression uses Pipe target mode regardless of the
+  // global target syntax mode.
   auto query_expression =
-      std::make_unique<QueryExpression>(this->options_.target_syntax_mode);
-  GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause("UNNEST(__SubpipelineInput__)"));
-  GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(
-      {std::make_pair("*", "" /* no select_alias */)}, "" /* no hints */));
-
+      std::make_unique<QueryExpression>(TargetSyntaxMode::kPipe);
+  query_expression->MarkAsPipeOperatorChain();
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }

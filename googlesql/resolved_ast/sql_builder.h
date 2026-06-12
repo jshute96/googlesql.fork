@@ -1476,9 +1476,48 @@ class SQLBuilder : public ResolvedASTVisitor {
   // Combines a running pipe SQL string `pipe_sql` (from GetInputPipeSQL) with a
   // single pipe operator `op_sql` (e.g. "WHERE x > 5"), inserting the leading
   // " |> " unless `pipe_sql` is empty, and returns the resulting running pipe
-  // QueryExpression.
+  // QueryExpression. When `is_pipe_operator_chain` is true the result is marked
+  // as an operator chain (a subpipeline body with no FROM root).
   absl::StatusOr<std::unique_ptr<QueryExpression>> AppendPipeOperator(
-      absl::string_view pipe_sql, absl::string_view op_sql);
+      absl::string_view pipe_sql, absl::string_view op_sql,
+      bool is_pipe_operator_chain = false);
+
+  // Renders the input scan of a subpipeline-bearing pipe operator (IF, LOG,
+  // FORK, TEE, ...) to its running pipe SQL. This must be called *before* the
+  // operator's subpipeline(s) are processed, so that any rebinding of the output
+  // columns done while building the subpipeline is the final word. Sets
+  // `*is_operator_chain` to true if the input is itself an operator chain (this
+  // operator is nested inside another subpipeline).
+  absl::StatusOr<std::string> RenderPipeOperatorInput(
+      const ResolvedScan* input_scan, QueryExpression* input_qe,
+      bool* is_operator_chain);
+
+  // Pushes the result of appending a single pipe operator `op_sql` (e.g.
+  // "IF ... THEN ...", "LOG ...") onto `pipe_sql` (from
+  // RenderPipeOperatorInput). If `is_operator_chain` is true (this operator is
+  // itself inside a subpipeline), the result is another operator chain;
+  // otherwise the result is wrapped back into a standard query when the target
+  // syntax is standard.
+  absl::Status FinishPipeOperatorScan(const ResolvedScan* node,
+                                      absl::string_view pipe_sql,
+                                      bool is_operator_chain,
+                                      absl::string_view op_sql);
+
+  // Builds the comma-separated subpipeline list shared by the pipe FORK and TEE
+  // operators (e.g. "( |> SELECT key ), ( |> WHERE true )"). Each subpipeline is
+  // an independent branch over the same input, so the SQLBuilder state (column
+  // paths, aliases, ...) is saved and restored around each one.
+  absl::StatusOr<std::string> GetPipeSubpipelineListSQL(
+      absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+          subpipeline_list);
+
+  // Shared implementation for the pipe FORK and TEE operators. `keyword` is
+  // either "FORK" or "TEE".
+  absl::Status VisitResolvedPipeForkOrTeeScan(
+      const ResolvedScan* node, const ResolvedScan* input_scan,
+      absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+          subpipeline_list,
+      absl::string_view keyword);
 
   // Mode to indicate how to general SQL for a TVF.
   enum class TVFBuildMode {
