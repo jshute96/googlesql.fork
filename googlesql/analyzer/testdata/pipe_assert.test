@@ -777,19 +777,11 @@ FROM
 |> AS barrierscan_3
 |> WHERE
      `IF`((barrierscan_3.a_1) = 10, true, ERROR(CONCAT("Assert failed: ", "key=10")))
-|> SELECT
-     barrierscan_3.a_1 AS a_1,
-     barrierscan_3.a_2 AS a_2
-|> AS barrierscan_4
 |> WHERE
-     `IF`((barrierscan_4.a_1) = 11, true, ERROR(CONCAT("Assert failed: ", IFNULL(barrierscan_4.a_2, "NULL"))))
-|> SELECT
-     barrierscan_4.a_1 AS a_1,
-     barrierscan_4.a_2 AS a_2
-|> AS barrierscan_5
+     `IF`((barrierscan_3.a_1) = 11, true, ERROR(CONCAT("Assert failed: ", IFNULL(barrierscan_3.a_2, "NULL"))))
 |> WHERE
-     `IF`((barrierscan_5.a_1) = 11, true, ERROR(CONCAT("Assert failed: ", CONCAT(IFNULL(CAST(barrierscan_5.a_1 AS STRING),
-               "NULL"), " ", IFNULL(barrierscan_5.a_2, "NULL")))))
+     `IF`((barrierscan_3.a_1) = 11, true, ERROR(CONCAT("Assert failed: ", CONCAT(IFNULL(CAST(barrierscan_3.a_1 AS STRING),
+               "NULL"), " ", IFNULL(barrierscan_3.a_2, "NULL")))))
 |> SELECT
-     barrierscan_5.a_1 AS Key,
-     barrierscan_5.a_2 AS Value;
+     barrierscan_3.a_1 AS Key,
+     barrierscan_3.a_2 AS Value;

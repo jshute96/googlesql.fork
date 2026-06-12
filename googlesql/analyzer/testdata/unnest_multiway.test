@@ -546,12 +546,12 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(WITH(a_1 AS ARRAY< INT64 >[1, 2], a_15 AS `IF`((a_1) IS NULL, 0, ARRAY_LENGTH(a_1)), a_5 AS ARRAY<
-  INT64 >[2], a_16 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_17 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL,
-    ERROR("UNNEST does not allow NULL mode argument"), CAST("PAD" AS ARRAY_ZIP_MODE)), a_18 AS `IF`((a_17 =
-    CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_15, a_16)) != (GREATEST(a_15, a_16))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
-    CAST(NULL AS INT64)), a_11 AS `IF`(a_17 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_15, a_16), GREATEST(a_15,
-      a_16)), ARRAY(
+  UNNEST(WITH(a_1 AS ARRAY< INT64 >[1, 2], a_13 AS `IF`((a_1) IS NULL, 0, ARRAY_LENGTH(a_1)), a_5 AS ARRAY<
+  INT64 >[2], a_14 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_15 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL,
+    ERROR("UNNEST does not allow NULL mode argument"), CAST("PAD" AS ARRAY_ZIP_MODE)), a_16 AS `IF`((a_15 =
+    CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_13, a_14)) != (GREATEST(a_13, a_14))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
+    CAST(NULL AS INT64)), a_11 AS `IF`(a_15 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_13, a_14), GREATEST(a_13,
+      a_14)), ARRAY(
     FROM
       UNNEST(a_1 AS a_2) WITH OFFSET AS a_3
     |> SELECT
@@ -577,27 +577,13 @@ FROM
     |> AS projectscan_10
     |> WHERE
          (projectscan_10.a_9) < a_11
+    |> ORDER BY projectscan_10.a_9
     |> SELECT
-         projectscan_10.a_2 AS a_2,
-         projectscan_10.a_3 AS a_3,
-         projectscan_10.a_6 AS a_6,
-         projectscan_10.a_7 AS a_7,
-         projectscan_10.a_9 AS a_9
-    |> AS filterscan_12
-    |> ORDER BY filterscan_12.a_9
-    |> SELECT
-         filterscan_12.a_2 AS a_2,
-         filterscan_12.a_3 AS a_3,
-         filterscan_12.a_6 AS a_6,
-         filterscan_12.a_7 AS a_7,
-         filterscan_12.a_9 AS a_9
-    |> AS orderbyscan_13
-    |> SELECT
-         STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (orderbyscan_13.a_2, orderbyscan_13.a_6, orderbyscan_13.a_9) AS a_14
-  )) AS a_19)
+         STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (projectscan_10.a_2, projectscan_10.a_6, projectscan_10.a_9) AS a_12
+  )) AS a_17)
 |> SELECT
-     a_19.arr0 AS a_20,
-     a_19.arr1 AS a_21;
+     a_17.arr0 AS a_18,
+     a_17.arr1 AS a_19;
 --
 ALTERNATION GROUP: 0.05
 --
@@ -855,12 +841,12 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(WITH(a_1 AS ARRAY< INT64 >[1, 2], a_15 AS `IF`((a_1) IS NULL, 0, ARRAY_LENGTH(a_1)), a_5 AS ARRAY<
-  INT64 >[2], a_16 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_17 AS `IF`(CAST("STRICT" AS ARRAY_ZIP_MODE) IS NULL,
-    ERROR("UNNEST does not allow NULL mode argument"), CAST("STRICT" AS ARRAY_ZIP_MODE)), a_18 AS `IF`((a_17 =
-    CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_15, a_16)) != (GREATEST(a_15, a_16))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
-    CAST(NULL AS INT64)), a_11 AS `IF`(a_17 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_15, a_16), GREATEST(a_15,
-      a_16)), ARRAY(
+  UNNEST(WITH(a_1 AS ARRAY< INT64 >[1, 2], a_13 AS `IF`((a_1) IS NULL, 0, ARRAY_LENGTH(a_1)), a_5 AS ARRAY<
+  INT64 >[2], a_14 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_15 AS `IF`(CAST("STRICT" AS ARRAY_ZIP_MODE) IS NULL,
+    ERROR("UNNEST does not allow NULL mode argument"), CAST("STRICT" AS ARRAY_ZIP_MODE)), a_16 AS `IF`((a_15 =
+    CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_13, a_14)) != (GREATEST(a_13, a_14))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
+    CAST(NULL AS INT64)), a_11 AS `IF`(a_15 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_13, a_14), GREATEST(a_13,
+      a_14)), ARRAY(
     FROM
       UNNEST(a_1 AS a_2) WITH OFFSET AS a_3
     |> SELECT
@@ -886,27 +872,13 @@ FROM
     |> AS projectscan_10
     |> WHERE
          (projectscan_10.a_9) < a_11
+    |> ORDER BY projectscan_10.a_9
     |> SELECT
-         projectscan_10.a_2 AS a_2,
-         projectscan_10.a_3 AS a_3,
-         projectscan_10.a_6 AS a_6,
-         projectscan_10.a_7 AS a_7,
-         projectscan_10.a_9 AS a_9
-    |> AS filterscan_12
-    |> ORDER BY filterscan_12.a_9
-    |> SELECT
-         filterscan_12.a_2 AS a_2,
-         filterscan_12.a_3 AS a_3,
-         filterscan_12.a_6 AS a_6,
-         filterscan_12.a_7 AS a_7,
-         filterscan_12.a_9 AS a_9
-    |> AS orderbyscan_13
-    |> SELECT
-         STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (orderbyscan_13.a_2, orderbyscan_13.a_6, orderbyscan_13.a_9) AS a_14
-  )) AS a_19)
+         STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (projectscan_10.a_2, projectscan_10.a_6, projectscan_10.a_9) AS a_12
+  )) AS a_17)
 |> SELECT
-     a_19.arr0 AS a_20,
-     a_19.arr1 AS a_21;
+     a_17.arr0 AS a_18,
+     a_17.arr1 AS a_19;
 ==
 
 # `mode` argument that is a non-literal only works if it has ARRAY_ZIP_MODE as
@@ -1725,12 +1697,12 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(WITH(a_1 AS ARRAY< INT64 >[1, 2], a_15 AS `IF`((a_1) IS NULL, 0, ARRAY_LENGTH(a_1)), a_5 AS ARRAY<
-  INT64 >[1, 2], a_16 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_17 AS `IF`(CAST("STRICT" AS ARRAY_ZIP_MODE) IS NULL,
-    ERROR("UNNEST does not allow NULL mode argument"), CAST("STRICT" AS ARRAY_ZIP_MODE)), a_18 AS `IF`((a_17 =
-    CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_15, a_16)) != (GREATEST(a_15, a_16))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
-    CAST(NULL AS INT64)), a_11 AS `IF`(a_17 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_15, a_16), GREATEST(a_15,
-      a_16)), ARRAY(
+  UNNEST(WITH(a_1 AS ARRAY< INT64 >[1, 2], a_13 AS `IF`((a_1) IS NULL, 0, ARRAY_LENGTH(a_1)), a_5 AS ARRAY<
+  INT64 >[1, 2], a_14 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_15 AS `IF`(CAST("STRICT" AS ARRAY_ZIP_MODE) IS NULL,
+    ERROR("UNNEST does not allow NULL mode argument"), CAST("STRICT" AS ARRAY_ZIP_MODE)), a_16 AS `IF`((a_15 =
+    CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_13, a_14)) != (GREATEST(a_13, a_14))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
+    CAST(NULL AS INT64)), a_11 AS `IF`(a_15 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_13, a_14), GREATEST(a_13,
+      a_14)), ARRAY(
     FROM
       UNNEST(a_1 AS a_2) WITH OFFSET AS a_3
     |> SELECT
@@ -1756,28 +1728,14 @@ FROM
     |> AS projectscan_10
     |> WHERE
          (projectscan_10.a_9) < a_11
+    |> ORDER BY projectscan_10.a_9
     |> SELECT
-         projectscan_10.a_2 AS a_2,
-         projectscan_10.a_3 AS a_3,
-         projectscan_10.a_6 AS a_6,
-         projectscan_10.a_7 AS a_7,
-         projectscan_10.a_9 AS a_9
-    |> AS filterscan_12
-    |> ORDER BY filterscan_12.a_9
-    |> SELECT
-         filterscan_12.a_2 AS a_2,
-         filterscan_12.a_3 AS a_3,
-         filterscan_12.a_6 AS a_6,
-         filterscan_12.a_7 AS a_7,
-         filterscan_12.a_9 AS a_9
-    |> AS orderbyscan_13
-    |> SELECT
-         STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (orderbyscan_13.a_2, orderbyscan_13.a_6, orderbyscan_13.a_9) AS a_14
-  )) AS a_19)
+         STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (projectscan_10.a_2, projectscan_10.a_6, projectscan_10.a_9) AS a_12
+  )) AS a_17)
 |> SELECT
-     a_19.arr0 AS a_20,
-     a_19.arr1 AS a_21,
-     a_19.offset AS off;
+     a_17.arr0 AS a_18,
+     a_17.arr1 AS a_19,
+     a_17.offset AS off;
 ==
 
 # ============== UNNEST with table alias or argument alias =========
@@ -4097,12 +4055,12 @@ FROM
      TestTable.KitchenSink AS a_3
 |> AS testtable_4
 |> JOIN
-   UNNEST(WITH(a_5 AS testtable_4.a_3.repeated_int32_val, a_19 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_9 AS testtable_4.a_3.repeated_string_val, a_20 AS `IF`((a_9) IS NULL,
-     0, ARRAY_LENGTH(a_9)), a_21 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
-     CAST("PAD" AS ARRAY_ZIP_MODE)), a_22 AS `IF`((a_21 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_19,
-       a_20)) != (GREATEST(a_19, a_20))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
-     CAST(NULL AS INT64)), a_15 AS `IF`(a_21 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_19, a_20), GREATEST(a_19,
-       a_20)), ARRAY(
+   UNNEST(WITH(a_5 AS testtable_4.a_3.repeated_int32_val, a_17 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_9 AS testtable_4.a_3.repeated_string_val, a_18 AS `IF`((a_9) IS NULL,
+     0, ARRAY_LENGTH(a_9)), a_19 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
+     CAST("PAD" AS ARRAY_ZIP_MODE)), a_20 AS `IF`((a_19 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_17,
+       a_18)) != (GREATEST(a_17, a_18))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
+     CAST(NULL AS INT64)), a_15 AS `IF`(a_19 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_17, a_18), GREATEST(a_17,
+       a_18)), ARRAY(
      FROM
        UNNEST(a_5 AS a_6) WITH OFFSET AS a_7
      |> SELECT
@@ -4128,30 +4086,16 @@ FROM
      |> AS projectscan_14
      |> WHERE
           (projectscan_14.a_13) < a_15
+     |> ORDER BY projectscan_14.a_13
      |> SELECT
-          projectscan_14.a_6 AS a_6,
-          projectscan_14.a_7 AS a_7,
-          projectscan_14.a_10 AS a_10,
-          projectscan_14.a_11 AS a_11,
-          projectscan_14.a_13 AS a_13
-     |> AS filterscan_16
-     |> ORDER BY filterscan_16.a_13
-     |> SELECT
-          filterscan_16.a_6 AS a_6,
-          filterscan_16.a_7 AS a_7,
-          filterscan_16.a_10 AS a_10,
-          filterscan_16.a_11 AS a_11,
-          filterscan_16.a_13 AS a_13
-     |> AS orderbyscan_17
-     |> SELECT
-          STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (orderbyscan_17.a_6, orderbyscan_17.a_10, orderbyscan_17.a_13) AS a_18
-   )) AS a_23)
+          STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (projectscan_14.a_6, projectscan_14.a_10, projectscan_14.a_13) AS a_16
+   )) AS a_21)
 |> SELECT
      testtable_4.a_1 AS key,
      testtable_4.a_2 AS TestEnum,
      testtable_4.a_3 AS KitchenSink,
-     a_23.arr0 AS repeated_int32_val,
-     a_23.arr1 AS repeated_string_val;
+     a_21.arr0 AS repeated_int32_val,
+     a_21.arr1 AS repeated_string_val;
 ==
 
 [show_sqlbuilder_output]
@@ -4491,12 +4435,12 @@ FROM
      TestTable.KitchenSink AS a_3
 |> AS testtable_4
 |> JOIN
-   UNNEST(WITH(a_5 AS testtable_4.a_3.repeated_int32_val, a_19 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_9 AS testtable_4.a_3.repeated_int32_val, a_20 AS `IF`((a_9) IS NULL,
-     0, ARRAY_LENGTH(a_9)), a_21 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
-     CAST("PAD" AS ARRAY_ZIP_MODE)), a_22 AS `IF`((a_21 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_19,
-       a_20)) != (GREATEST(a_19, a_20))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
-     CAST(NULL AS INT64)), a_15 AS `IF`(a_21 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_19, a_20), GREATEST(a_19,
-       a_20)), ARRAY(
+   UNNEST(WITH(a_5 AS testtable_4.a_3.repeated_int32_val, a_17 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_9 AS testtable_4.a_3.repeated_int32_val, a_18 AS `IF`((a_9) IS NULL,
+     0, ARRAY_LENGTH(a_9)), a_19 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
+     CAST("PAD" AS ARRAY_ZIP_MODE)), a_20 AS `IF`((a_19 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_17,
+       a_18)) != (GREATEST(a_17, a_18))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
+     CAST(NULL AS INT64)), a_15 AS `IF`(a_19 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_17, a_18), GREATEST(a_17,
+       a_18)), ARRAY(
      FROM
        UNNEST(a_5 AS a_6) WITH OFFSET AS a_7
      |> SELECT
@@ -4522,30 +4466,16 @@ FROM
      |> AS projectscan_14
      |> WHERE
           (projectscan_14.a_13) < a_15
+     |> ORDER BY projectscan_14.a_13
      |> SELECT
-          projectscan_14.a_6 AS a_6,
-          projectscan_14.a_7 AS a_7,
-          projectscan_14.a_10 AS a_10,
-          projectscan_14.a_11 AS a_11,
-          projectscan_14.a_13 AS a_13
-     |> AS filterscan_16
-     |> ORDER BY filterscan_16.a_13
-     |> SELECT
-          filterscan_16.a_6 AS a_6,
-          filterscan_16.a_7 AS a_7,
-          filterscan_16.a_10 AS a_10,
-          filterscan_16.a_11 AS a_11,
-          filterscan_16.a_13 AS a_13
-     |> AS orderbyscan_17
-     |> SELECT
-          STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (orderbyscan_17.a_6, orderbyscan_17.a_10, orderbyscan_17.a_13) AS a_18
-   )) AS a_23)
+          STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (projectscan_14.a_6, projectscan_14.a_10, projectscan_14.a_13) AS a_16
+   )) AS a_21)
 |> SELECT
      testtable_4.a_1 AS key,
      testtable_4.a_2 AS TestEnum,
      testtable_4.a_3 AS KitchenSink,
-     a_23.arr0 AS repeated_int32_val,
-     a_23.arr1 AS array2;
+     a_21.arr0 AS repeated_int32_val,
+     a_21.arr1 AS array2;
 ==
 
 [show_sqlbuilder_output]
@@ -4877,12 +4807,12 @@ FROM
      TestTable.KitchenSink AS a_3
 |> AS testtable_4
 |> JOIN
-   UNNEST(WITH(a_5 AS testtable_4.a_3.repeated_int32_val, a_19 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_9 AS testtable_4.a_3.repeated_string_val, a_20 AS `IF`((a_9) IS NULL,
-     0, ARRAY_LENGTH(a_9)), a_21 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
-     CAST("PAD" AS ARRAY_ZIP_MODE)), a_22 AS `IF`((a_21 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_19,
-       a_20)) != (GREATEST(a_19, a_20))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
-     CAST(NULL AS INT64)), a_15 AS `IF`(a_21 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_19, a_20), GREATEST(a_19,
-       a_20)), ARRAY(
+   UNNEST(WITH(a_5 AS testtable_4.a_3.repeated_int32_val, a_17 AS `IF`((a_5) IS NULL, 0, ARRAY_LENGTH(a_5)), a_9 AS testtable_4.a_3.repeated_string_val, a_18 AS `IF`((a_9) IS NULL,
+     0, ARRAY_LENGTH(a_9)), a_19 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
+     CAST("PAD" AS ARRAY_ZIP_MODE)), a_20 AS `IF`((a_19 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_17,
+       a_18)) != (GREATEST(a_17, a_18))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
+     CAST(NULL AS INT64)), a_15 AS `IF`(a_19 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_17, a_18), GREATEST(a_17,
+       a_18)), ARRAY(
      FROM
        UNNEST(a_5 AS a_6) WITH OFFSET AS a_7
      |> SELECT
@@ -4908,30 +4838,16 @@ FROM
      |> AS projectscan_14
      |> WHERE
           (projectscan_14.a_13) < a_15
+     |> ORDER BY projectscan_14.a_13
      |> SELECT
-          projectscan_14.a_6 AS a_6,
-          projectscan_14.a_7 AS a_7,
-          projectscan_14.a_10 AS a_10,
-          projectscan_14.a_11 AS a_11,
-          projectscan_14.a_13 AS a_13
-     |> AS filterscan_16
-     |> ORDER BY filterscan_16.a_13
-     |> SELECT
-          filterscan_16.a_6 AS a_6,
-          filterscan_16.a_7 AS a_7,
-          filterscan_16.a_10 AS a_10,
-          filterscan_16.a_11 AS a_11,
-          filterscan_16.a_13 AS a_13
-     |> AS orderbyscan_17
-     |> SELECT
-          STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (orderbyscan_17.a_6, orderbyscan_17.a_10, orderbyscan_17.a_13) AS a_18
-   )) AS a_23)
+          STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (projectscan_14.a_6, projectscan_14.a_10, projectscan_14.a_13) AS a_16
+   )) AS a_21)
 |> SELECT
      testtable_4.a_1 AS key,
      testtable_4.a_2 AS TestEnum,
      testtable_4.a_3 AS KitchenSink,
-     a_23.arr0 AS array1,
-     a_23.arr1 AS array2;
+     a_21.arr0 AS array1,
+     a_21.arr1 AS array2;
 ==
 
 # 2 arguments: path expressions reference columns from different lhs tables.
@@ -5556,12 +5472,12 @@ FROM
 |> SELECT
      (
        FROM
-         UNNEST(WITH(a_6 AS testtable_2.a_1.repeated_int32_val, a_20 AS `IF`((a_6) IS NULL, 0, ARRAY_LENGTH(a_6)), a_10 AS complextypes_4.a_3, a_21 AS `IF`((a_10) IS NULL,
-           0, ARRAY_LENGTH(a_10)), a_22 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
-           CAST("PAD" AS ARRAY_ZIP_MODE)), a_23 AS `IF`((a_22 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_20,
-             a_21)) != (GREATEST(a_20, a_21))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
-           CAST(NULL AS INT64)), a_16 AS `IF`(a_22 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_20, a_21), GREATEST(a_20,
-             a_21)), ARRAY(
+         UNNEST(WITH(a_6 AS testtable_2.a_1.repeated_int32_val, a_18 AS `IF`((a_6) IS NULL, 0, ARRAY_LENGTH(a_6)), a_10 AS complextypes_4.a_3, a_19 AS `IF`((a_10) IS NULL,
+           0, ARRAY_LENGTH(a_10)), a_20 AS `IF`(CAST("PAD" AS ARRAY_ZIP_MODE) IS NULL, ERROR("UNNEST does not allow NULL mode argument"),
+           CAST("PAD" AS ARRAY_ZIP_MODE)), a_21 AS `IF`((a_20 = CAST("STRICT" AS ARRAY_ZIP_MODE)) AND ((LEAST(a_18,
+             a_19)) != (GREATEST(a_18, a_19))), ERROR("Unnested arrays under STRICT mode must have equal lengths"),
+           CAST(NULL AS INT64)), a_16 AS `IF`(a_20 = CAST("TRUNCATE" AS ARRAY_ZIP_MODE), LEAST(a_18, a_19), GREATEST(a_18,
+             a_19)), ARRAY(
            FROM
              UNNEST(a_6 AS a_7) WITH OFFSET AS a_8
            |> SELECT
@@ -5587,30 +5503,16 @@ FROM
            |> AS projectscan_15
            |> WHERE
                 (projectscan_15.a_14) < a_16
+           |> ORDER BY projectscan_15.a_14
            |> SELECT
-                projectscan_15.a_7 AS a_7,
-                projectscan_15.a_8 AS a_8,
-                projectscan_15.a_11 AS a_11,
-                projectscan_15.a_12 AS a_12,
-                projectscan_15.a_14 AS a_14
-           |> AS filterscan_17
-           |> ORDER BY filterscan_17.a_14
-           |> SELECT
-                filterscan_17.a_7 AS a_7,
-                filterscan_17.a_8 AS a_8,
-                filterscan_17.a_11 AS a_11,
-                filterscan_17.a_12 AS a_12,
-                filterscan_17.a_14 AS a_14
-           |> AS orderbyscan_18
-           |> SELECT
-                STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (orderbyscan_18.a_7, orderbyscan_18.a_11, orderbyscan_18.a_14) AS a_19
-         )) AS a_24)
+                STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (projectscan_15.a_7, projectscan_15.a_11, projectscan_15.a_14) AS a_17
+         )) AS a_22)
        |> SELECT
-            a_24.arr0 AS a_25,
-            a_24.arr1 AS a_26
-       |> AS projectscan_27
+            a_22.arr0 AS a_23,
+            a_22.arr1 AS a_24
+       |> AS projectscan_25
        |> SELECT
-            STRUCT< array1 INT32, array2 INT32 > (projectscan_27.a_25, projectscan_27.a_26) AS a_28
+            STRUCT< array1 INT32, array2 INT32 > (projectscan_25.a_23, projectscan_25.a_24) AS a_26
      ) AS col1;
 ==
 

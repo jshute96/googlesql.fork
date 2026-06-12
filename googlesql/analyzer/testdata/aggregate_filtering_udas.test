@@ -632,23 +632,24 @@ GROUP BY simpletypes_3.a_2;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  UdaWithWhereFilterModifier(simpletypes_3.a_1, (simpletypes_3.a_1) - 1) AS a_4,
-  UdaWithHavingFilterModifier(simpletypes_3.a_1, (simpletypes_3.a_1) - 1) AS a_5
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int64 AS a_1,
-         SimpleTypes.bool AS a_2
-    |> AS simpletypes_3
-  )
-GROUP BY simpletypes_3.a_2
-|> AS aggregatescan_6
+  SimpleTypes
 |> SELECT
-     aggregatescan_6.a_4 AS a_4,
-     aggregatescan_6.a_5 AS a_5;
+     SimpleTypes.int64 AS a_1,
+     SimpleTypes.bool AS a_2
+|> AS simpletypes_3
+|> EXTEND
+     simpletypes_3.a_2 AS a_6
+|> AGGREGATE
+     UdaWithWhereFilterModifier(simpletypes_3.a_1, (simpletypes_3.a_1) - 1) AS a_4,
+     UdaWithHavingFilterModifier(simpletypes_3.a_1, (simpletypes_3.a_1) - 1) AS a_5
+   GROUP BY a_6
+|> SELECT
+     a_4,
+     a_5
+|> SELECT
+     a_4 AS a_4,
+     a_5 AS a_5;
 
 [REWRITTEN AST]
 QueryStmt
@@ -746,35 +747,36 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(projectscan_8.a_4
-    WHERE
-      (projectscan_8.a_4) > (projectscan_8.a_5)) AS a_9,
-  SUM(MAX(projectscan_8.a_6)
-    GROUP BY projectscan_8.a_7
-    HAVING(MIN(projectscan_8.a_6)) > 10) AS a_10
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int64 AS a_1,
-         SimpleTypes.bool AS a_2
-    |> AS simpletypes_3
-    |> SELECT
-         simpletypes_3.a_1 AS a_1,
-         simpletypes_3.a_2 AS a_2,
-         simpletypes_3.a_1 AS a_4,
-         (simpletypes_3.a_1) - 1 AS a_5,
-         simpletypes_3.a_1 AS a_6,
-         (simpletypes_3.a_1) - 1 AS a_7
-    |> AS projectscan_8
-  )
-GROUP BY projectscan_8.a_2
-|> AS aggregatescan_11
+  SimpleTypes
 |> SELECT
-     aggregatescan_11.a_9 AS a_12,
-     aggregatescan_11.a_10 AS a_13;
+     SimpleTypes.int64 AS a_1,
+     SimpleTypes.bool AS a_2
+|> AS simpletypes_3
+|> SELECT
+     simpletypes_3.a_1 AS a_1,
+     simpletypes_3.a_2 AS a_2,
+     simpletypes_3.a_1 AS a_4,
+     (simpletypes_3.a_1) - 1 AS a_5,
+     simpletypes_3.a_1 AS a_6,
+     (simpletypes_3.a_1) - 1 AS a_7
+|> AS projectscan_8
+|> EXTEND
+     projectscan_8.a_2 AS a_11
+|> AGGREGATE
+     SUM(projectscan_8.a_4
+       WHERE
+         (projectscan_8.a_4) > (projectscan_8.a_5)) AS a_9,
+     SUM(MAX(projectscan_8.a_6)
+       GROUP BY projectscan_8.a_7
+       HAVING(MIN(projectscan_8.a_6)) > 10) AS a_10
+   GROUP BY a_11
+|> SELECT
+     a_9,
+     a_10
+|> SELECT
+     a_9 AS a_12,
+     a_10 AS a_13;
 ==
 
 # Test inlining a TVF with a filter.

@@ -835,22 +835,23 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  COUNT(keyvalue_3.a_1) AS a_4,
-  SUM(keyvalue_3.a_1) AS a_5
 FROM
-  (
-    FROM
-      KeyValue
-    |> SELECT
-         KeyValue.Key AS a_1,
-         KeyValue.Value AS a_2
-    |> AS keyvalue_3
-  )
-GROUP BY keyvalue_3.a_2
-|> AS aggregatescan_6
+  KeyValue
 |> SELECT
-     WITH(a_9 AS aggregatescan_6.a_4, a_8 AS aggregatescan_6.a_5, CAST(a_8 AS DOUBLE) / CAST(a_9 AS DOUBLE)) AS a_7;
+     KeyValue.Key AS a_1,
+     KeyValue.Value AS a_2
+|> AS keyvalue_3
+|> EXTEND
+     keyvalue_3.a_2 AS a_6
+|> AGGREGATE
+     COUNT(keyvalue_3.a_1) AS a_4,
+     SUM(keyvalue_3.a_1) AS a_5
+   GROUP BY a_6
+|> SELECT
+     a_4,
+     a_5
+|> SELECT
+     WITH(a_9 AS a_4, a_8 AS a_5, CAST(a_8 AS DOUBLE) / CAST(a_9 AS DOUBLE)) AS a_7;
 
 [REWRITTEN AST]
 QueryStmt
@@ -939,28 +940,29 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  COUNT(keyvalue_3.a_1) AS a_4,
-  SUM(keyvalue_3.a_1) AS a_5
 FROM
-  (
-    FROM
-      KeyValue
-    |> SELECT
-         KeyValue.Key AS a_1,
-         KeyValue.Value AS a_2
-    |> AS keyvalue_3
-  )
-GROUP BY keyvalue_3.a_2
-|> AS aggregatescan_6
+  KeyValue
+|> SELECT
+     KeyValue.Key AS a_1,
+     KeyValue.Value AS a_2
+|> AS keyvalue_3
+|> EXTEND
+     keyvalue_3.a_2 AS a_6
+|> AGGREGATE
+     COUNT(keyvalue_3.a_1) AS a_4,
+     SUM(keyvalue_3.a_1) AS a_5
+   GROUP BY a_6
+|> SELECT
+     a_4,
+     a_5
 |> SELECT
      (
        SELECT
-         aggregatescan_6.a_4 AS a_8
+         a_4 AS a_8
        |> AS projectscan_9
        |> SELECT
             projectscan_9.a_8 AS a_8,
-            aggregatescan_6.a_5 AS a_10
+            a_5 AS a_10
        |> AS projectscan_11
        |> SELECT
             CAST(projectscan_11.a_10 AS DOUBLE) / CAST(projectscan_11.a_8 AS DOUBLE) AS a_12
@@ -1223,22 +1225,23 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  COUNT(keyvalue_3.a_1) AS a_4,
-  SUM(keyvalue_3.a_1) AS a_5
 FROM
-  (
-    FROM
-      KeyValue
-    |> SELECT
-         KeyValue.Key AS a_1,
-         KeyValue.Value AS a_2
-    |> AS keyvalue_3
-  )
-GROUP BY keyvalue_3.a_2
-|> AS aggregatescan_6
+  KeyValue
 |> SELECT
-     WITH(a_8 AS aggregatescan_6.a_4, CAST(aggregatescan_6.a_5 AS DOUBLE) / CAST(a_8 AS DOUBLE)) AS a_7;
+     KeyValue.Key AS a_1,
+     KeyValue.Value AS a_2
+|> AS keyvalue_3
+|> EXTEND
+     keyvalue_3.a_2 AS a_6
+|> AGGREGATE
+     COUNT(keyvalue_3.a_1) AS a_4,
+     SUM(keyvalue_3.a_1) AS a_5
+   GROUP BY a_6
+|> SELECT
+     a_4,
+     a_5
+|> SELECT
+     WITH(a_8 AS a_4, CAST(a_5 AS DOUBLE) / CAST(a_8 AS DOUBLE)) AS a_7;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1316,27 +1319,28 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  COUNT(keyvalue_3.a_1) AS a_4,
-  SUM(keyvalue_3.a_1) AS a_5
 FROM
-  (
-    FROM
-      KeyValue
-    |> SELECT
-         KeyValue.Key AS a_1,
-         KeyValue.Value AS a_2
-    |> AS keyvalue_3
-  )
-GROUP BY keyvalue_3.a_2
-|> AS aggregatescan_6
+  KeyValue
+|> SELECT
+     KeyValue.Key AS a_1,
+     KeyValue.Value AS a_2
+|> AS keyvalue_3
+|> EXTEND
+     keyvalue_3.a_2 AS a_6
+|> AGGREGATE
+     COUNT(keyvalue_3.a_1) AS a_4,
+     SUM(keyvalue_3.a_1) AS a_5
+   GROUP BY a_6
+|> SELECT
+     a_4,
+     a_5
 |> SELECT
      (
        SELECT
-         aggregatescan_6.a_4 AS a_8
+         a_4 AS a_8
        |> AS projectscan_9
        |> SELECT
-            CAST(aggregatescan_6.a_5 AS DOUBLE) / CAST(projectscan_9.a_8 AS DOUBLE) AS a_10
+            CAST(a_5 AS DOUBLE) / CAST(projectscan_9.a_8 AS DOUBLE) AS a_10
      ) AS a_7;
 ==
 
