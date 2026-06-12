@@ -4484,6 +4484,33 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
 
+  // Subpipeline: the input is a bare pipe operator chain, so emit a single
+  // `|> LIMIT <count> [OFFSET <skip>]` operator and append it onto the chain.
+  if (query_expression->IsPipeOperatorChain()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    std::string limit_sql;
+    if (node->limit() != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(node->limit()));
+      limit_sql = result->GetSQL();
+    } else {
+      limit_sql = "ALL";
+    }
+    std::string op = absl::StrCat("LIMIT ", limit_sql);
+    if (node->offset() != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(node->offset()));
+      absl::StrAppend(&op, " OFFSET ", result->GetSQL());
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op, /*is_pipe_operator_chain=*/true));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   if (!query_expression->CanSetLimitClause()) {
     GOOGLESQL_RETURN_IF_ERROR(
         WrapQueryExpression(node->input_scan(), query_expression.get()));
