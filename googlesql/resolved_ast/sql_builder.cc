@@ -11751,10 +11751,12 @@ SQLBuilder::MaybeWrapPipeQueryAsStandardQuery(
 absl::StatusOr<std::string> SQLBuilder::GetInputPipeSQL(
     const ResolvedScan* input_scan, QueryExpression* input_qe) {
   // A subpipeline body is a bare operator chain (no FROM root, possibly empty).
-  // Return it as-is so the next operator appends directly onto it. This is
-  // valid in any target syntax mode, since subpipelines are always pipe.
+  // Render it (any set clauses, e.g. from an aggregate, collapse into the
+  // operator-chain text via GetFromClausePipeSQL) so the next operator appends
+  // directly onto it. This is valid in any target syntax mode, since
+  // subpipelines are always pipe.
   if (input_qe->IsPipeOperatorChain()) {
-    return std::string(input_qe->FromClause());
+    return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
   }
   GOOGLESQL_RET_CHECK(IsPipeSyntaxTargetMode());
   // If the input renders as a complete query (it carries a SELECT or a set
@@ -12130,7 +12132,11 @@ absl::Status SQLBuilder::VisitResolvedSubpipeline(
   GOOGLESQL_RET_CHECK(query_expr->IsPipeOperatorChain())
       << "Subpipeline body did not resolve to a pipe operator chain";
 
-  absl::string_view operators = query_expr->FromClause();
+  // Render the operator chain. Any clauses set on the QE by the last operator
+  // (e.g. an aggregate's `|> AGGREGATE`) collapse into the operator-chain text
+  // via GetFromClausePipeSQL, which renders the chain's `from_` verbatim.
+  std::string operators =
+      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe);
   std::string sql;
   if (operators.empty()) {
     sql = "()";
