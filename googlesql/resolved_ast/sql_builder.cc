@@ -5311,6 +5311,33 @@ absl::Status SQLBuilder::VisitResolvedSetOperationScan(
   }
 
   const auto& pair = GetOpTypePair(node->op_type());
+
+  // Subpipeline: if the first operand is an operator chain (the subpipeline
+  // input flowing into a `|> UNION/INTERSECT/EXCEPT`), emit the set operation as
+  // a pipe operator appended onto that chain: `|> <TYPE> <MODIFIER> (q2), ...`.
+  // Only the simple BY_POSITION form is handled this way; CORRESPONDING falls
+  // through to the standard balanced rendering.
+  if (node->column_match_mode() == ResolvedSetOperationScan::BY_POSITION &&
+      !set_op_scan_list.empty() &&
+      set_op_scan_list[0]->IsPipeOperatorChain()) {
+    std::string chain_pipe =
+        set_op_scan_list[0]->GetSQLQuery(TargetSyntaxMode::kPipe);
+    std::string op = absl::StrCat(pair.first, " ", pair.second);
+    if (!query_hints.empty()) {
+      absl::StrAppend(&op, " ", query_hints);
+    }
+    for (int i = 1; i < set_op_scan_list.size(); ++i) {
+      absl::StrAppend(
+          &op, i == 1 ? " " : ", ", "(",
+          set_op_scan_list[i]->GetSQLQuery(TargetSyntaxMode::kPipe), ")");
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(chain_pipe, op, /*is_pipe_operator_chain=*/true));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   GOOGLESQL_RET_CHECK(query_expression->TrySetSetOpScanList(
       &set_op_scan_list, pair.first, pair.second,
       GetSetOperationColumnMatchMode(node->column_match_mode()),
