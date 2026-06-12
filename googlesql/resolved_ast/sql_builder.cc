@@ -4484,35 +4484,10 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
 
-  // In Pipe syntax mode, emit a single `|> LIMIT <count> [OFFSET <skip>]`
-  // operator appended onto the running pipe SQL of the input scan, instead of
-  // building a structured LIMIT clause.
-  if (IsPipeSyntaxTargetMode()) {
-    const bool is_operator_chain = query_expression->IsPipeOperatorChain();
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        std::string pipe_sql,
-        GetInputPipeSQL(node->input_scan(), query_expression.get()));
-    std::string limit_sql;
-    if (node->limit() != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
-                       ProcessNode(node->limit()));
-      limit_sql = result->GetSQL();
-    } else {
-      limit_sql = "ALL";
-    }
-    std::string op = absl::StrCat("LIMIT ", limit_sql);
-    if (node->offset() != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
-                       ProcessNode(node->offset()));
-      absl::StrAppend(&op, " OFFSET ", result->GetSQL());
-    }
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        std::unique_ptr<QueryExpression> out_qe,
-        AppendPipeOperator(pipe_sql, op, is_operator_chain));
-    PushSQLForQueryExpression(node, out_qe.release());
-    return absl::OkStatus();
-  }
-
+  // The accumulate path below sets a LIMIT/OFFSET clause on the QueryExpression
+  // and lets GetPipeSQLQuery render `|> LIMIT ... OFFSET ...` in Pipe syntax
+  // mode. CanSetLimitClause does not require a FROM clause, so this also works
+  // over a subpipeline's operator-chain input.
   if (!query_expression->CanSetLimitClause()) {
     GOOGLESQL_RETURN_IF_ERROR(
         WrapQueryExpression(node->input_scan(), query_expression.get()));
@@ -4535,8 +4510,12 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
                      ProcessNode(node->offset()));
     GOOGLESQL_RET_CHECK(query_expression->TrySetOffsetClause(result->GetSQL()));
   }
-  GOOGLESQL_RETURN_IF_ERROR(
-      AddSelectListIfNeeded(node->column_list(), query_expression.get()));
+  // A subpipeline's operator chain has an implicit input and needs no SELECT
+  // clause; adding one would emit a spurious `|> SELECT`.
+  if (!query_expression->IsPipeOperatorChain()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        AddSelectListIfNeeded(node->column_list(), query_expression.get()));
+  }
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }
@@ -5876,6 +5855,23 @@ absl::Status SQLBuilder::VisitResolvedSampleScan(
                    ProcessNode(node->input_scan()));
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
+
+  // Subpipeline: append a single `|> TABLESAMPLE ...` operator onto the input's
+  // operator chain. GetSqlForSample builds the full sample clause (including
+  // PARTITION BY / WITH WEIGHT / REPEATABLE).
+  if (query_expression->IsPipeOperatorChain()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    GOOGLESQL_ASSIGN_OR_RETURN(std::string sample,
+                     GetSqlForSample(node, /*is_gql=*/false));
+    std::string op(absl::StripLeadingAsciiWhitespace(sample));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op, /*is_pipe_operator_chain=*/true));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
 
   std::string from_clause;
   switch (node->input_scan()->node_kind()) {
@@ -11858,29 +11854,24 @@ absl::Status SQLBuilder::VisitResolvedAssertScan(
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
 
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(node->input_scan(), query_expr.get(),
+                              &is_operator_chain));
 
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> condition,
                    ProcessNode(node->condition()));
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> message,
                    ProcessNode(node->message()));
-
-  GOOGLESQL_RET_CHECK(input != nullptr);
   GOOGLESQL_RET_CHECK(condition != nullptr);
   GOOGLESQL_RET_CHECK(message != nullptr);
 
   // Construct the SQL for the pipe operator as follows:
   // <input_scan> |> ASSERT <condition>, <message>
-  std::string assert_sql = absl::StrCat(
-      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe), QueryExpression::kPipe,
-      "ASSERT ", condition->GetSQL(), ", ", message->GetSQL());
-
-  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> assert_query_expr,
-                   MaybeWrapPipeQueryAsStandardQuery(*node, assert_sql));
-
-  PushSQLForQueryExpression(node, assert_query_expr.release());
-  return absl::OkStatus();
+  std::string op =
+      absl::StrCat("ASSERT ", condition->GetSQL(), ", ", message->GetSQL());
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
 }
 
 absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
