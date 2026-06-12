@@ -3720,10 +3720,10 @@ absl::Status SQLBuilder::VisitResolvedFilterScan(
   // In Pipe syntax mode, emit a single `|> WHERE` operator appended onto the
   // running pipe SQL of the input scan. FilterScan does not change the column
   // namespace, so the input's column bindings remain valid and no wrapping
-  // alias is introduced between operators. We also take this path when the
-  // input is an operator chain (a subpipeline body), which is always rendered
-  // in pipe syntax regardless of the global target syntax mode.
-  if ((IsPipeSyntaxTargetMode() || query_expression->IsPipeOperatorChain()) &&
+  // alias is introduced between operators. Inside a subpipeline body the target
+  // mode is forced to Pipe (see ScopedTargetSyntaxMode), so this branch covers
+  // the subpipeline case as well.
+  if (IsPipeSyntaxTargetMode() &&
       !IsScanUnsupportedInPipeSyntax(node->input_scan())) {
     // For a filter directly over a simple (non-value) table scan, expose the
     // table's columns by their natural names and drop the table scan's select
@@ -5339,10 +5339,10 @@ absl::Status SQLBuilder::VisitResolvedOrderByScan(
 
   // In Pipe syntax mode, emit a single `|> ORDER BY` operator. All input
   // columns continue to flow, so order-by items can reference them directly
-  // without the wrap-and-reselect needed in Standard syntax. We also take this
-  // path when the input is an operator chain (a subpipeline body), which is
-  // always rendered in pipe syntax regardless of the global target syntax mode.
-  if (IsPipeSyntaxTargetMode() || query_expression->IsPipeOperatorChain()) {
+  // without the wrap-and-reselect needed in Standard syntax. Inside a
+  // subpipeline body the target mode is forced to Pipe (see
+  // ScopedTargetSyntaxMode), so this branch covers the subpipeline case too.
+  if (IsPipeSyntaxTargetMode()) {
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::string pipe_sql,
         GetInputPipeSQL(node->input_scan(), query_expression.get()));
@@ -12117,7 +12117,9 @@ absl::Status SQLBuilder::VisitResolvedSubpipeline(
   //   ( |> WHERE x |> SELECT y )
   // A subpipeline is always pipe syntax, even when the enclosing query is being
   // rendered in standard syntax (the enclosing FORK/TEE/IF/LOG operator wraps
-  // the result into a standard subquery as needed).
+  // the result into a standard subquery as needed). Force Pipe target mode for
+  // the duration of building the subpipeline body.
+  ScopedTargetSyntaxMode scoped_mode(this, TargetSyntaxMode::kPipe);
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input,
                    ProcessNode(node->scan()));
   std::unique_ptr<QueryExpression> query_expr =

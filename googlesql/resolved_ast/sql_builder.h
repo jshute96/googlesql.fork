@@ -1362,12 +1362,45 @@ class SQLBuilder : public ResolvedASTVisitor {
  private:
   CopyableState state_;
 
+  // The target syntax mode currently in effect. Normally this is
+  // `options_.target_syntax_mode`, but it can be temporarily overridden -- e.g.
+  // a subpipeline body is always generated in Pipe syntax, even when the
+  // enclosing query is being generated in Standard syntax. See
+  // ScopedTargetSyntaxMode.
+  std::optional<TargetSyntaxMode> target_syntax_mode_override_;
+
+  TargetSyntaxMode CurrentTargetSyntaxMode() const {
+    return target_syntax_mode_override_.value_or(options_.target_syntax_mode);
+  }
+
+  // RAII helper that overrides the current target syntax mode for the duration
+  // of a scope (used when generating a subpipeline body, which must be Pipe
+  // syntax regardless of the enclosing query's mode), restoring the previous
+  // value on destruction.
+  class ScopedTargetSyntaxMode {
+   public:
+    ScopedTargetSyntaxMode(SQLBuilder* builder, TargetSyntaxMode mode)
+        : builder_(builder),
+          previous_(builder->target_syntax_mode_override_) {
+      builder_->target_syntax_mode_override_ = mode;
+    }
+    ~ScopedTargetSyntaxMode() {
+      builder_->target_syntax_mode_override_ = previous_;
+    }
+    ScopedTargetSyntaxMode(const ScopedTargetSyntaxMode&) = delete;
+    ScopedTargetSyntaxMode& operator=(const ScopedTargetSyntaxMode&) = delete;
+
+   private:
+    SQLBuilder* builder_;
+    std::optional<TargetSyntaxMode> previous_;
+  };
+
   bool IsPipeSyntaxTargetMode() {
-    return options_.target_syntax_mode == TargetSyntaxMode::kPipe;
+    return CurrentTargetSyntaxMode() == TargetSyntaxMode::kPipe;
   }
 
   bool IsStandardSyntaxTargetMode() {
-    return options_.target_syntax_mode == TargetSyntaxMode::kStandard;
+    return CurrentTargetSyntaxMode() == TargetSyntaxMode::kStandard;
   }
 
   // Helper function to perform operation on value table's column for
