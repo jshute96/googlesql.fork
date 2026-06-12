@@ -4484,9 +4484,11 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
 
-  // Subpipeline: the input is a bare pipe operator chain, so emit a single
-  // `|> LIMIT <count> [OFFSET <skip>]` operator and append it onto the chain.
-  if (query_expression->IsPipeOperatorChain()) {
+  // In Pipe syntax mode, emit a single `|> LIMIT <count> [OFFSET <skip>]`
+  // operator appended onto the running pipe SQL of the input scan, instead of
+  // building a structured LIMIT clause.
+  if (IsPipeSyntaxTargetMode()) {
+    const bool is_operator_chain = query_expression->IsPipeOperatorChain();
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::string pipe_sql,
         GetInputPipeSQL(node->input_scan(), query_expression.get()));
@@ -4506,7 +4508,7 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
     }
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::unique_ptr<QueryExpression> out_qe,
-        AppendPipeOperator(pipe_sql, op, /*is_pipe_operator_chain=*/true));
+        AppendPipeOperator(pipe_sql, op, is_operator_chain));
     PushSQLForQueryExpression(node, out_qe.release());
     return absl::OkStatus();
   }
