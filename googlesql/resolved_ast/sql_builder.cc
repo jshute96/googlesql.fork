@@ -4448,23 +4448,43 @@ absl::Status SQLBuilder::VisitResolvedArrayScan(const ResolvedArrayScan* node) {
     }
     absl::StrAppend(&from, " AS ", GetColumnAlias(node->element_column()));
   } else {
+    // Process the input scan once. If it is a subpipeline operator chain, the
+    // array join is appended as a `|> [LEFT ]JOIN UNNEST(...)` operator onto the
+    // chain; otherwise the input is wrapped exactly as GetJoinOperand does.
+    bool input_is_operator_chain = false;
+    std::string input_pipe;  // chain pipe text (chain case)
+    std::string join_prefix;  // "<input> <sep>" (non-chain case)
     if (node->input_scan() != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(const std::string join_operand,
-                       GetJoinOperand(node->input_scan()));
-      absl::StrAppend(&from, join_operand,
-                      IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ",
-                      node->is_outer() ? "LEFT " : "", "JOIN ");
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input_fragment,
+                       ProcessNode(node->input_scan()));
+      std::unique_ptr<QueryExpression> input_qe =
+          std::move(input_fragment->query_expression);
+      input_is_operator_chain = input_qe->IsPipeOperatorChain();
+      if (input_is_operator_chain) {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            input_pipe, GetInputPipeSQL(node->input_scan(), input_qe.get()));
+      } else {
+        GOOGLESQL_RETURN_IF_ERROR(
+            WrapQueryExpression(node->input_scan(), input_qe.get()));
+        absl::StrAppend(&join_prefix, input_qe->FromClause(),
+                        IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ");
+      }
     }
 
+    // Build the array-join operator text (everything after the input).
+    std::string array_op;
+    if (node->input_scan() != nullptr) {
+      absl::StrAppend(&array_op, node->is_outer() ? "LEFT " : "", "JOIN ");
+    }
     bool is_multiway_enabled = options_.language_options.LanguageFeatureEnabled(
         FEATURE_MULTIWAY_UNNEST);
-    absl::StrAppend(&from, "UNNEST(");
+    absl::StrAppend(&array_op, "UNNEST(");
     for (int i = 0; i < node->array_expr_list_size(); ++i) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> array_expr,
                        ProcessNode(node->array_expr_list(i)));
-      absl::StrAppend(&from, i > 0 ? ", " : "", array_expr->GetSQL());
+      absl::StrAppend(&array_op, i > 0 ? ", " : "", array_expr->GetSQL());
       if (is_multiway_enabled) {
-        absl::StrAppend(&from, " AS ",
+        absl::StrAppend(&array_op, " AS ",
                         GetColumnAlias(node->element_column_list(i)));
       }
     }
@@ -4472,28 +4492,38 @@ absl::Status SQLBuilder::VisitResolvedArrayScan(const ResolvedArrayScan* node) {
     if (node->array_zip_mode() != nullptr) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> mode,
                        ProcessNode(node->array_zip_mode()));
-      absl::StrAppend(&from, ", mode =>", mode->GetSQL());
+      absl::StrAppend(&array_op, ", mode =>", mode->GetSQL());
     }
-    absl::StrAppend(&from, ") ");
+    absl::StrAppend(&array_op, ") ");
 
     // When multiway UNNEST language feature is disabled and we see a singleton
     // UNNEST, we omit "AS" and write `UNNEST(<expr>) <alias>` directly for
     // backward compatibility reason.
     if (!is_multiway_enabled) {
       GOOGLESQL_RET_CHECK(node->element_column_list_size() == 1);
-      absl::StrAppend(&from, GetColumnAlias(node->element_column_list(0)));
+      absl::StrAppend(&array_op, GetColumnAlias(node->element_column_list(0)));
     }
 
     if (node->array_offset_column() != nullptr) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                        ProcessNode(node->array_offset_column()));
-      absl::StrAppend(&from, " WITH OFFSET ", result->GetSQL());
+      absl::StrAppend(&array_op, " WITH OFFSET ", result->GetSQL());
     }
     if (node->join_expr() != nullptr) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                        ProcessNode(node->join_expr()));
-      absl::StrAppend(&from, " ON ", result->GetSQL());
+      absl::StrAppend(&array_op, " ON ", result->GetSQL());
     }
+
+    if (input_is_operator_chain) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::unique_ptr<QueryExpression> out_qe,
+          AppendPipeOperator(input_pipe, array_op,
+                             /*is_pipe_operator_chain=*/true));
+      PushSQLForQueryExpression(node, out_qe.release());
+      return absl::OkStatus();
+    }
+    absl::StrAppend(&from, join_prefix, array_op);
   }
 
   GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
