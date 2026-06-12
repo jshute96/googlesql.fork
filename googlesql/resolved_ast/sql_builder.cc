@@ -4273,8 +4273,24 @@ absl::Status SQLBuilder::VisitResolvedJoinScan(const ResolvedJoinScan* node) {
 
   auto query_expression =
       std::make_unique<QueryExpression>(this->options_.target_syntax_mode);
-  GOOGLESQL_ASSIGN_OR_RETURN(std::string left_join_operand,
-                   GetJoinOperand(node->left_scan()));
+
+  // Process the left scan once. If it resolves to a subpipeline operator chain,
+  // the join is emitted as a `|> JOIN` operator appended onto that chain;
+  // otherwise the left operand is wrapped exactly as GetJoinOperand does.
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> left_fragment,
+                   ProcessNode(node->left_scan()));
+  std::unique_ptr<QueryExpression> left_qe =
+      std::move(left_fragment->query_expression);
+  const bool left_is_operator_chain = left_qe->IsPipeOperatorChain();
+  std::string left_join_operand;
+  if (left_is_operator_chain) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        left_join_operand, GetInputPipeSQL(node->left_scan(), left_qe.get()));
+  } else {
+    GOOGLESQL_RETURN_IF_ERROR(
+        WrapQueryExpression(node->left_scan(), left_qe.get()));
+    left_join_operand = std::string(left_qe->FromClause());
+  }
   std::string right_join_operand;
   if (build_using) {
     GOOGLESQL_ASSIGN_OR_RETURN(
@@ -4338,17 +4354,25 @@ absl::Status SQLBuilder::VisitResolvedJoinScan(const ResolvedJoinScan* node) {
     col_ref->MarkFieldsAccessed();
   }
 
-  std::string from;
-  absl::StrAppend(
-      &from, left_join_operand,
-      IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ",
+  std::string join_op = absl::StrCat(
       GetJoinTypeString(node->join_type(), node->join_expr() != nullptr), hints,
-      " ");
-  if (node->is_lateral()) {
-    absl::StrAppend(&from, "LATERAL ");
-  }
-  absl::StrAppend(&from, right_join_operand, join_expr_sql);
+      " ", node->is_lateral() ? "LATERAL " : "", right_join_operand,
+      join_expr_sql);
 
+  if (left_is_operator_chain) {
+    // Subpipeline: append `|> JOIN (right) ON/USING ...` onto the operator
+    // chain that flows in as the left operand.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(left_join_operand, join_op,
+                           /*is_pipe_operator_chain=*/true));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
+  std::string from = absl::StrCat(
+      left_join_operand,
+      IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ", join_op);
   GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
