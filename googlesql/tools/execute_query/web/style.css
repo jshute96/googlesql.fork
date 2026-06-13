@@ -462,48 +462,50 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
   line-height: 1.4;
 }
 .formatted-sql.boxed .ast,
-.formatted-sql.boxed .subq-bg {
+.formatted-sql.boxed .subq-bg,
+.formatted-sql.boxed .seg-bg {
   display: inline;
 }
 
-/* Any tinted region: fill the full line height (no gaps) across wrapped lines. */
+/* Region tints. Each region is one solid background covering its whole extent:
+   a standard query (.q-whole), each segment of a pipe query (.seg-a/.seg-b,
+   which includes the "|>" marker), and each subquery (.subq-a/.subq-b,
+   alternating by nesting depth). Colours are OPAQUE so that where two regions'
+   line fragments meet there is no additive darkening (no seam), and vertical
+   padding + box-decoration-break: clone make a multi-line region one continuous
+   block with no gaps between lines. A nested region simply paints over its
+   parent within its own extent. */
+.formatted-sql.boxed .q-whole,
 .formatted-sql.boxed .subq-a,
 .formatted-sql.boxed .subq-b,
-.formatted-sql.boxed .pipe-a,
-.formatted-sql.boxed .pipe-b,
-.formatted-sql.boxed .clause-bg {
+.formatted-sql.boxed [class*="seg-"] {
   padding: 0.2em 0;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
 
-/* Alternating tints (shared by both box modes): the formatter wraps each
-   subquery in `subq-bg subq-a`/`subq-b` (alternating by nesting depth) and tags
-   successive pipe operators `pipe-a`/`pipe-b`. One tint is left transparent so
-   the alternation reads as "lighter / darker". */
-.formatted-sql.boxed .subq-a {
-  background: rgba(70, 130, 180, 0.10);
+/* Box colours by nesting depth: a standard query / depth-0 region is grey;
+   subqueries alternate two blues by depth. Pipe segments are a lighter/darker
+   pair of the same family ("-a" = the box colour, "-b" = a darker shade), so a
+   pipe chain reads as alternating bands within its query's box. */
+.formatted-sql.boxed .q-whole,
+.formatted-sql.boxed .seg-grey-a {
+  background: #eef1f5;
 }
-.formatted-sql.boxed .subq-b {
-  background: rgba(70, 130, 180, 0.20);
+.formatted-sql.boxed .seg-grey-b {
+  background: #dfe6ee;
 }
-.formatted-sql.boxed .pipe-a {
-  background: transparent;
+.formatted-sql.boxed .subq-a,
+.formatted-sql.boxed .seg-blue1-a {
+  background: #e3edf9;
 }
-.formatted-sql.boxed .pipe-b {
-  background: rgba(0, 0, 0, 0.05);
+.formatted-sql.boxed .seg-blue1-b {
+  background: #d2e2f3;
 }
-
-/* full-box additionally tints the major query clauses so the whole structure
-   reads, still as solid backgrounds rather than boxes. */
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast-Select,
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast-FromClause,
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast-WhereClause,
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast-GroupBy,
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast-Having,
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast-OrderBy {
-  background: rgba(0, 0, 0, 0.04);
-  padding: 0.2em 0;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
+.formatted-sql.boxed .subq-b,
+.formatted-sql.boxed .seg-blue2-a {
+  background: #cadcf0;
+}
+.formatted-sql.boxed .seg-blue2-b {
+  background: #b7d0ea;
 }

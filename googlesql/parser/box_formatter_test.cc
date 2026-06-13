@@ -218,10 +218,24 @@ TEST(BoxFormatterTest, SubqueryHasAlternatingBackgroundClass) {
               HasSubstr("subq-bg subq-b"));
 }
 
-TEST(BoxFormatterTest, PipeOperatorsHaveAlternatingBackgroundClass) {
+TEST(BoxFormatterTest, PipeSegmentsHaveAlternatingBackgroundClass) {
+  // FROM segment + each pipe operator alternate within the depth-0 (grey) box.
   std::string html = BoxHtml("FROM t |> WHERE x > 1 |> SELECT y");
-  EXPECT_THAT(html, HasSubstr("pipe-a"));
-  EXPECT_THAT(html, HasSubstr("pipe-b"));
+  EXPECT_THAT(html, HasSubstr("seg-grey-a"));
+  EXPECT_THAT(html, HasSubstr("seg-grey-b"));
+}
+
+TEST(BoxFormatterTest, StandardQueryHasSingleWholeBackground) {
+  std::string html = BoxHtml("SELECT a FROM t WHERE x > 1");
+  EXPECT_THAT(html, HasSubstr("seg-bg q-whole"));
+  // No pipe-segment tints in a standard query.
+  EXPECT_THAT(html, Not(HasSubstr("seg-grey-")));
+}
+
+TEST(BoxFormatterTest, CommentBetweenPipesHasNoBlankLines) {
+  // A trailing line comment attaches to its line; no blank lines are inserted.
+  std::string out = Box("FROM t |> WHERE x > 1 -- note\n|> SELECT y");
+  EXPECT_THAT(out, Eq("FROM t\n|> WHERE x > 1 -- note\n|> SELECT y"));
 }
 
 }  // namespace

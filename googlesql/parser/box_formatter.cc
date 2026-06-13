@@ -474,6 +474,40 @@ class Builder {
     return parts.empty() ? Nil() : Concat(std::move(parts));
   }
 
+  // Renders only the comments in a gap, each as " <div sql-comment>...</div>",
+  // with no surrounding code or line breaks. Used between stacked items (e.g.
+  // query clauses / pipe operators) where the container already provides the
+  // line break, so a trailing comment attaches to the current line instead of
+  // introducing blank lines.
+  DocPtr InlineComments(const Piece& p) {
+    absl::string_view g = GapText(p);
+    std::vector<DocPtr> parts;
+    size_t i = 0;
+    while (i < g.size()) {
+      size_t dashes = g.find("--", i);
+      size_t hash = g.find('#', i);
+      size_t block = g.find("/*", i);
+      size_t line = std::min(dashes, hash);
+      size_t next = std::min(line, block);
+      if (next == absl::string_view::npos) break;
+      const bool is_line = (next == line);
+      size_t cend;
+      if (is_line) {
+        cend = g.find('\n', next);
+        if (cend == absl::string_view::npos) cend = g.size();
+      } else {
+        cend = g.find("*/", next);
+        cend = (cend == absl::string_view::npos) ? g.size() : cend + 2;
+      }
+      parts.push_back(Esc(" "));
+      parts.push_back(Tag("<div class=\"sql-comment\">"));
+      parts.push_back(Esc(g.substr(next, cend - next)));
+      parts.push_back(Tag("</div>"));
+      i = cend;
+    }
+    return parts.empty() ? Nil() : Concat(std::move(parts));
+  }
+
   // If the gap begins with a keyword -- a run of letters and internal single
   // spaces (e.g. "WHERE", "GROUP BY") that is separated from any following
   // content by whitespace, a comment, or the end of the gap -- returns true and
@@ -890,28 +924,52 @@ class Builder {
   // At the top level (flatten_query == false) the stacking is unconditional;
   // inside a subquery it is governed by the enclosing paren group.
   DocPtr BuildVertical(const std::vector<Piece>& ps, Ctx ctx) {
+    // A pipe query (FROM ... |> ... |> ...) colours each segment (the leading
+    // FROM query and each pipe operator) as one solid alternating-tinted unit,
+    // including its "|>" marker. A standard query has no pipe segments and is
+    // coloured as a single block (see the wrapper below).
+    bool has_pipe = false;
+    for (const Piece& p : ps) {
+      if (p.child != nullptr &&
+          StartsWith(p.child->GetNodeKindString(), "Pipe")) {
+        has_pipe = true;
+        break;
+      }
+    }
+    // Segment tints are shades of the enclosing query/subquery's box colour, so
+    // they alternate "lighter/darker" within that box. The box colour family is
+    // chosen by subquery depth (matching the subquery wrapper colours).
+    const char* family = ctx.subquery_depth == 0  ? "grey"
+                         : ctx.subquery_depth % 2  ? "blue1"
+                                                   : "blue2";
     std::vector<DocPtr> parts;
     bool first = true;
-    int pipe_index = 0;
+    int seg = 0;
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
         if (!first) parts.push_back(ClauseSep(ctx));
-        // Alternate a background tint across a chain of pipe operators.
-        absl::string_view extra;
-        if (StartsWith(p.child->GetNodeKindString(), "Pipe")) {
-          extra = (pipe_index++ % 2 == 0) ? "pipe-a" : "pipe-b";
+        std::string extra;
+        if (has_pipe) {
+          extra = absl::StrCat("seg-", family, "-", (seg++ % 2 == 0) ? "a" : "b");
         }
         parts.push_back(Build(p.child, ctx, /*trailer=*/nullptr, extra));
         first = false;
       } else if (GapHasComment(p)) {
-        parts.push_back(GapWithComments(p));
+        parts.push_back(InlineComments(p));
       }
     }
     // No Group here: at the top level the clause separators (HardLine) always
     // break; inside a subquery the enclosing parenthesis group governs whether
     // the whole query is inline or broken (so a subquery is either fully on one
     // line or fully indented -- never half-broken).
-    return Concat(std::move(parts));
+    DocPtr body = Concat(std::move(parts));
+    // A standard (non-pipe) top-level query is one solid colour. Nested queries
+    // are coloured by their enclosing subquery wrapper instead, so they are not
+    // double-wrapped here.
+    if (!has_pipe && !ctx.flatten_query && ctx.subquery_depth == 0) {
+      body = Concat({Tag("<div class=\"seg-bg q-whole\">"), body, Tag("</div>")});
+    }
+    return body;
   }
 
   // A function call: callee + a parenthesized argument list. If the arguments
