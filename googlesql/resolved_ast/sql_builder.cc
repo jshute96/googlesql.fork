@@ -151,9 +151,44 @@ std::string SQLBuilder::GetColumnAlias(const ResolvedColumn& column) {
     return googlesql_base::FindOrDie(computed_column_alias(), column.column_id());
   }
 
-  const std::string alias = GenerateUniqueAliasName();
+  // In Pipe target mode, prefer a readable alias derived from the column's name
+  // (e.g. `int32`, `k`) instead of an opaque `a_<id>`, falling back to the
+  // generated name only for anonymous/internal columns (names that are empty or
+  // start with '$', such as `$col1`). Uniqueness is preserved by suffixing.
+  std::string alias;
+  const absl::string_view name = column.name();
+  if (IsPipeSyntaxTargetMode() && !name.empty() &&
+      !absl::StartsWith(name, "$")) {
+    alias = MakeUniqueColumnAlias(name);
+  } else {
+    alias = GenerateUniqueAliasName();
+  }
   googlesql_base::InsertOrDie(&mutable_computed_column_alias(), column.column_id(), alias);
   return alias;
+}
+
+bool SQLBuilder::ColumnAliasIsTaken(absl::string_view alias) const {
+  // SQL identifiers are case-insensitive, so aliases must be unique ignoring
+  // case (e.g. a table column `Value` and a group-by key `value` collide).
+  for (const auto& [column_id, column_alias] : computed_column_alias()) {
+    if (absl::EqualsIgnoreCase(column_alias, alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string SQLBuilder::MakeUniqueColumnAlias(absl::string_view name) {
+  std::string candidate = ToIdentifierLiteral(name);
+  if (!ColumnAliasIsTaken(candidate)) {
+    return candidate;
+  }
+  for (int suffix = 2;; ++suffix) {
+    candidate = ToIdentifierLiteral(absl::StrCat(name, "_", suffix));
+    if (!ColumnAliasIsTaken(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 std::string SQLBuilder::UpdateColumnAlias(const ResolvedColumn& column) {
@@ -4135,6 +4170,14 @@ absl::StatusOr<bool> SQLBuilder::TryUseLeafTableScanColumns(
   GOOGLESQL_RETURN_IF_ERROR(SetPathForColumnsInScan(
       table_scan,
       googlesql_base::FindWithDefault(table_alias_map(), table_scan->table())));
+  // Reserve a (natural-name) alias for each table column so that columns later
+  // derived from them -- e.g. a group-by key `k := <table_column>` -- are made
+  // globally unique against them and don't produce ambiguous bare references.
+  // When the table scan is collapsed into a consumer (e.g. an aggregate) its
+  // columns are otherwise referenced only by path and never get an alias.
+  for (const ResolvedColumn& column : table_scan->column_list()) {
+    GetColumnAlias(column);
+  }
   input_qe->ResetSelectClause();
   return true;
 }

@@ -1041,6 +1041,14 @@ class SQLBuilder : public ResolvedASTVisitor {
   // Returns the alias to be used to select the column.
   std::string GetColumnAlias(const ResolvedColumn& column);
 
+  // In Pipe target mode, derives a readable column alias from a meaningful base
+  // name (the ResolvedColumn's name), made globally unique among already-assigned
+  // column aliases by appending a numeric suffix (`name`, `name_2`, ...).
+  std::string MakeUniqueColumnAlias(absl::string_view name);
+
+  // Returns true if `alias` has already been assigned to some column.
+  bool ColumnAliasIsTaken(absl::string_view alias) const;
+
   // Create a new alias to be used for the column, replacing any existing alias.
   std::string UpdateColumnAlias(const ResolvedColumn& column);
 
