@@ -31,7 +31,9 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_replace.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "googlesql/base/ret_check.h"
 
@@ -43,6 +45,44 @@ std::string EscapeHtml(absl::string_view text) {
                                     {"<", "&lt;"},
                                     {">", "&gt;"},
                                     {"\"", "&quot;"}});
+}
+
+// Removes blank lines that contain only whitespace and HTML tags (artifacts of
+// a comment forcing a line break that the surrounding layout also breaks),
+// moving their tags onto the following line so div nesting stays balanced.
+// Blank lines with no tags (e.g. inside a multi-line string literal or block
+// comment) are preserved.
+std::string CoalesceBlankLines(absl::string_view html) {
+  std::vector<absl::string_view> lines = absl::StrSplit(html, '\n');
+  std::vector<std::string> out;
+  std::string carry;  // tags carried forward from removed blank lines
+  for (size_t li = 0; li < lines.size(); ++li) {
+    bool has_visible = false;
+    bool has_tag = false;
+    std::string tags;
+    bool in_tag = false;
+    for (char c : lines[li]) {
+      if (c == '<') {
+        in_tag = true;
+        has_tag = true;
+        tags += c;
+      } else if (in_tag) {
+        tags += c;
+        if (c == '>') in_tag = false;
+      } else if (!absl::ascii_isspace(static_cast<unsigned char>(c))) {
+        has_visible = true;
+      }
+    }
+    const bool is_last = (li + 1 == lines.size());
+    if (!has_visible && has_tag && !is_last) {
+      carry += tags;  // drop the blank line, keep its tags
+    } else {
+      out.push_back(absl::StrCat(carry, lines[li]));
+      carry.clear();
+    }
+  }
+  if (!carry.empty() && !out.empty()) out.back() += carry;
+  return absl::StrJoin(out, "\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +99,16 @@ std::string EscapeHtml(absl::string_view text) {
 struct Doc;
 using DocPtr = std::shared_ptr<const Doc>;
 
-enum class Kind { kNil, kText, kConcat, kLine, kNest, kGroup };
+enum class Kind {
+  kNil,
+  kText,
+  kConcat,
+  kLine,
+  kNest,
+  kGroup,
+  kColorPush,  // open a background-colour region (html = CSS class)
+  kColorPop,   // close the innermost colour region
+};
 
 struct Doc {
   Kind kind;
@@ -122,6 +171,25 @@ DocPtr Concat(std::vector<DocPtr> parts) {
   d->children = std::move(parts);
   return d;
 }
+// Opens a background-colour region with CSS class "rgncolor <cls>". The
+// renderer tracks open regions and re-emits them after each line's
+// indentation, so a colour never covers the leading whitespace of a wrapped
+// line (the colour hugs the content, not the indent).
+DocPtr ColorPush(absl::string_view cls) {
+  auto d = std::make_shared<Doc>();
+  d->kind = Kind::kColorPush;
+  d->html = absl::StrCat("rgncolor ", cls);
+  return d;
+}
+DocPtr ColorPop() {
+  auto d = std::make_shared<Doc>();
+  d->kind = Kind::kColorPop;
+  return d;
+}
+// Wraps `inner` in a colour region.
+DocPtr Region(absl::string_view cls, DocPtr inner) {
+  return Concat({ColorPush(cls), std::move(inner), ColorPop()});
+}
 
 constexpr int kInf = 1 << 29;
 
@@ -181,14 +249,20 @@ class Renderer {
         out_ += d->html;
         col_ += d->width;
         return;
+      case Kind::kColorPush:
+        out_ += absl::StrCat("<div class=\"", d->html, "\">");
+        color_stack_.push_back(d->html);
+        return;
+      case Kind::kColorPop:
+        out_ += "</div>";
+        if (!color_stack_.empty()) color_stack_.pop_back();
+        return;
       case Kind::kLine:
         if (flat && !d->hard) {
           out_ += d->flat_html;
           col_ += d->flat_width;
         } else {
-          out_ += '\n';
-          out_.append(indent, ' ');
-          col_ = indent;
+          Newline(indent);
         }
         return;
       case Kind::kNest:
@@ -207,9 +281,22 @@ class Renderer {
     }
   }
 
+  // Emits a line break, closing the open colour regions before the newline and
+  // re-opening them after the indentation, so indentation is never coloured.
+  void Newline(int indent) {
+    for (size_t i = color_stack_.size(); i-- > 0;) out_ += "</div>";
+    out_ += '\n';
+    out_.append(indent, ' ');
+    for (const std::string& cls : color_stack_) {
+      out_ += absl::StrCat("<div class=\"", cls, "\">");
+    }
+    col_ = indent;
+  }
+
   int width_;
   std::string out_;
   int col_ = 0;
+  std::vector<std::string> color_stack_;
 };
 
 // ---------------------------------------------------------------------------
@@ -316,14 +403,11 @@ class Builder {
     int subquery_depth = 0;  // nesting depth of enclosing subqueries
   };
 
-  DocPtr Build(const ASTNode* node, Ctx ctx, DocPtr trailer = nullptr,
-               absl::string_view extra_class = "") {
+  DocPtr Build(const ASTNode* node, Ctx ctx, DocPtr trailer = nullptr) {
     const std::string kind = node->GetNodeKindString();
     DocPtr inner = BuildInner(node, kind, ctx);
-    std::string cls = absl::StrCat("ast ast-", kind);
-    if (!extra_class.empty()) absl::StrAppend(&cls, " ", extra_class);
     std::vector<DocPtr> parts;
-    parts.push_back(Tag(absl::StrCat("<div class=\"", cls, "\">")));
+    parts.push_back(Tag(absl::StrCat("<div class=\"ast ast-", kind, "\">")));
     parts.push_back(inner);
     if (trailer != nullptr) parts.push_back(trailer);
     parts.push_back(Tag("</div>"));
@@ -448,11 +532,11 @@ class Builder {
       size_t next = std::min(line, block);
       if (next == absl::string_view::npos) {
         std::string code = CollapseWs(g.substr(i));
-        if (!code.empty()) parts.push_back(Esc(code));
+        if (!code.empty() && code != " ") parts.push_back(Esc(code));
         break;
       }
       std::string code = CollapseWs(g.substr(i, next - i));
-      if (!code.empty()) parts.push_back(Esc(code));
+      if (!code.empty() && code != " ") parts.push_back(Esc(code));
       bool is_line = (next == line);
       size_t cend;
       if (is_line) {
@@ -727,23 +811,22 @@ class Builder {
 
   // "(" + query + ")" as a single group: inline if it fits, else the query
   // indents on its own lines between the parentheses.
+  // The colour class for a subquery at the given depth: blue and green
+  // alternate by nesting depth so each level contrasts with its parent.
+  const char* SubqueryColor(int depth) const {
+    return (depth % 2 == 1) ? "subq-blue" : "subq-green";
+  }
+
   DocPtr BuildParenQuery(const ASTNode* query, Ctx ctx) {
     Ctx inner = ctx;
     inner.flatten_query = true;
     inner.subquery_depth = ctx.subquery_depth + 1;
-    DocPtr paren = Group(Concat(
-        {Esc("("), Nest(kDefaultIndent, Concat({Line(""), Build(query, inner)})),
-         Line(""), Esc(")")}));
-    return WithSubqueryBackground(paren, inner.subquery_depth);
-  }
-
-  // Wraps a subquery's rendering in a background-tint div whose colour
-  // alternates with nesting depth, so nested subqueries stand out from their
-  // parents.
-  DocPtr WithSubqueryBackground(DocPtr doc, int depth) {
-    const char* cls = (depth % 2 == 1) ? "subq-bg subq-a" : "subq-bg subq-b";
-    return Concat({Tag(absl::StrCat("<div class=\"", cls, "\">")), doc,
-                   Tag("</div>")});
+    // Only the query body is coloured; the parentheses and the leading
+    // indentation stay the parent's colour.
+    DocPtr body = Region(SubqueryColor(inner.subquery_depth),
+                         Build(query, inner));
+    return Group(Concat({Esc("("), Nest(kDefaultIndent, Concat({Line(""), body})),
+                         Line(""), Esc(")")}));
   }
 
   // keyword + content, where content stays on the keyword line if it fits,
@@ -889,7 +972,10 @@ class Builder {
     }
     if (body_idx == ps.size()) return BuildFlow(ps, ctx, /*wrap=*/false);
 
-    DocPtr body = Build(ps[body_idx].child, inner_ctx);
+    // Only the query body is coloured; the parentheses / alias / indentation
+    // stay the parent's colour.
+    DocPtr body = Region(SubqueryColor(inner_ctx.subquery_depth),
+                         Build(ps[body_idx].child, inner_ctx));
     // Consume the closing-paren gap right after the body, if present.
     size_t after = body_idx + 1;
     if (after < ps.size() && ps[after].child == nullptr &&
@@ -898,11 +984,9 @@ class Builder {
     }
     // Inline "(...)" if it fits; otherwise the contents indent on their own
     // lines between the parentheses.
-    DocPtr paren = WithSubqueryBackground(
-        Group(Concat({Esc("("),
-                      Nest(kDefaultIndent, Concat({Line(""), body})), Line(""),
-                      Esc(")")})),
-        inner_ctx.subquery_depth);
+    DocPtr paren = Group(Concat({Esc("("),
+                                 Nest(kDefaultIndent, Concat({Line(""), body})),
+                                 Line(""), Esc(")")}));
     // Trailing pieces (alias, etc.) rendered inline after the parentheses.
     std::vector<DocPtr> parts = {paren};
     for (size_t i = after; i < ps.size(); ++i) {
@@ -936,23 +1020,25 @@ class Builder {
         break;
       }
     }
-    // Segment tints are shades of the enclosing query/subquery's box colour, so
-    // they alternate "lighter/darker" within that box. The box colour family is
-    // chosen by subquery depth (matching the subquery wrapper colours).
+    // Segment tints are a lighter/darker pair of the enclosing query's colour
+    // family, chosen by subquery depth (depth 0 = grey, then blue/green
+    // alternating to match the subquery wrapper colours).
     const char* family = ctx.subquery_depth == 0  ? "grey"
-                         : ctx.subquery_depth % 2  ? "blue1"
-                                                   : "blue2";
+                         : ctx.subquery_depth % 2  ? "blue"
+                                                   : "green";
     std::vector<DocPtr> parts;
     bool first = true;
     int seg = 0;
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
         if (!first) parts.push_back(ClauseSep(ctx));
-        std::string extra;
         if (has_pipe) {
-          extra = absl::StrCat("seg-", family, "-", (seg++ % 2 == 0) ? "a" : "b");
+          std::string cls =
+              absl::StrCat("seg-", family, "-", (seg++ % 2 == 0) ? "a" : "b");
+          parts.push_back(Region(cls, Build(p.child, ctx)));
+        } else {
+          parts.push_back(Build(p.child, ctx));
         }
-        parts.push_back(Build(p.child, ctx, /*trailer=*/nullptr, extra));
         first = false;
       } else if (GapHasComment(p)) {
         parts.push_back(InlineComments(p));
@@ -964,10 +1050,9 @@ class Builder {
     // line or fully indented -- never half-broken).
     DocPtr body = Concat(std::move(parts));
     // A standard (non-pipe) top-level query is one solid colour. Nested queries
-    // are coloured by their enclosing subquery wrapper instead, so they are not
-    // double-wrapped here.
+    // are coloured by their enclosing subquery wrapper instead.
     if (!has_pipe && !ctx.flatten_query && ctx.subquery_depth == 0) {
-      body = Concat({Tag("<div class=\"seg-bg q-whole\">"), body, Tag("</div>")});
+      body = Region("q-whole", body);
     }
     return body;
   }
@@ -1233,7 +1318,7 @@ absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
   DocPtr doc = builder.Build(root, ctx);
 
   Renderer renderer(width);
-  std::string body = renderer.Render(doc);
+  std::string body = CoalesceBlankLines(renderer.Render(doc));
   return absl::StrCat("<div class=\"formatted-sql boxed\">", body, "</div>");
 }
 

@@ -446,66 +446,56 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
    simple-box / full-box modes.
 
    These render the "boxed" pane, whose text layout is already computed by the
-   pretty-printer (parser/box_formatter.h): the text contains the final
-   newlines and indentation, so we render it with white-space: pre and the AST
-   <div>s are pure inline decoration drawn on top.
+   pretty-printer (parser/box_formatter.h): the text contains the final newlines
+   and indentation, so we render it with white-space: pre and the AST <div>s are
+   pure inline decoration drawn on top.
 
-   Structure is shown with solid background tints rather than per-node borders
-   (borders on an inline element that wraps across lines draw a separate box per
-   line, which looks broken). To make a multi-line node's background a single
-   continuous region with no gaps between lines, the tint classes add vertical
-   padding equal to the line leading and use box-decoration-break: clone, so the
-   background of every line fragment fills the full line height and they touch.
+   Structure is shown with solid background colours (no borders). A query/region
+   is wrapped in a "rgncolor" <div>; the renderer closes and re-opens these
+   wrappers around each line's indentation, so every region is a single-line
+   inline element whose background hugs the content (it never covers the leading
+   indentation, the parentheses around a subquery, or runs to the left margin).
+   Colours are OPAQUE so adjacent regions never add up into darker seams; small
+   vertical padding fills the line leading so a stack of same-coloured lines
+   reads as one continuous block.
    ========================================================================== */
 .formatted-sql.boxed {
   white-space: pre;
   line-height: 1.4;
 }
-.formatted-sql.boxed .ast,
-.formatted-sql.boxed .subq-bg,
-.formatted-sql.boxed .seg-bg {
+.formatted-sql.boxed .ast {
   display: inline;
 }
-
-/* Region tints. Each region is one solid background covering its whole extent:
-   a standard query (.q-whole), each segment of a pipe query (.seg-a/.seg-b,
-   which includes the "|>" marker), and each subquery (.subq-a/.subq-b,
-   alternating by nesting depth). Colours are OPAQUE so that where two regions'
-   line fragments meet there is no additive darkening (no seam), and vertical
-   padding + box-decoration-break: clone make a multi-line region one continuous
-   block with no gaps between lines. A nested region simply paints over its
-   parent within its own extent. */
-.formatted-sql.boxed .q-whole,
-.formatted-sql.boxed .subq-a,
-.formatted-sql.boxed .subq-b,
-.formatted-sql.boxed [class*="seg-"] {
+.formatted-sql.boxed .rgncolor {
+  display: inline;
   padding: 0.2em 0;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
 }
 
-/* Box colours by nesting depth: a standard query / depth-0 region is grey;
-   subqueries alternate two blues by depth. Pipe segments are a lighter/darker
-   pair of the same family ("-a" = the box colour, "-b" = a darker shade), so a
-   pipe chain reads as alternating bands within its query's box. */
+/* Region colours.
+   - A standard query (q-whole) and a top-level pipe chain use the grey family.
+   - Subqueries alternate blue / green by nesting depth (subq-blue / subq-green),
+     so each level contrasts with its parent.
+   - Pipe segments are a lighter ("-a", the box colour) / darker ("-b", ~20%
+     darker) pair of the enclosing query's family, so a pipe chain reads as
+     alternating bands within its query's box. */
 .formatted-sql.boxed .q-whole,
 .formatted-sql.boxed .seg-grey-a {
   background: #eef1f5;
 }
 .formatted-sql.boxed .seg-grey-b {
-  background: #dfe6ee;
+  background: #bfc6d0;  /* ~20% darker than grey-a */
 }
-.formatted-sql.boxed .subq-a,
-.formatted-sql.boxed .seg-blue1-a {
-  background: #e3edf9;
+.formatted-sql.boxed .subq-blue,
+.formatted-sql.boxed .seg-blue-a {
+  background: #dde9fb;
 }
-.formatted-sql.boxed .seg-blue1-b {
-  background: #d2e2f3;
+.formatted-sql.boxed .seg-blue-b {
+  background: #b1bdc9;  /* ~20% darker than blue-a */
 }
-.formatted-sql.boxed .subq-b,
-.formatted-sql.boxed .seg-blue2-a {
-  background: #cadcf0;
+.formatted-sql.boxed .subq-green,
+.formatted-sql.boxed .seg-green-a {
+  background: #e1f2e1;
 }
-.formatted-sql.boxed .seg-blue2-b {
-  background: #b7d0ea;
+.formatted-sql.boxed .seg-green-b {
+  background: #b4c2b4;  /* ~20% darker than green-a */
 }

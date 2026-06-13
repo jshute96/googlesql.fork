@@ -210,12 +210,22 @@ TEST(BoxFormatterTest, StructKeepsParens) {
               Eq("SELECT STRUCT(1 AS a, 2 AS b) AS s"));
 }
 
-TEST(BoxFormatterTest, SubqueryHasAlternatingBackgroundClass) {
+TEST(BoxFormatterTest, SubqueryColorsAlternateByDepth) {
+  // Depth 1 is blue, depth 2 is green, depth 3 is blue again.
   EXPECT_THAT(BoxHtml("SELECT * FROM (SELECT 1) AS s"),
-              HasSubstr("subq-bg subq-a"));
-  // A nested subquery gets the alternate colour.
+              HasSubstr("rgncolor subq-blue"));
   EXPECT_THAT(BoxHtml("SELECT * FROM (SELECT * FROM (SELECT 1) AS i) AS o"),
-              HasSubstr("subq-bg subq-b"));
+              HasSubstr("rgncolor subq-green"));
+  EXPECT_THAT(
+      BoxHtml("SELECT * FROM (SELECT * FROM (SELECT * FROM (SELECT 1) AS a) "
+              "AS b) AS c"),
+      HasSubstr("rgncolor subq-blue"));
+}
+
+TEST(BoxFormatterTest, SubqueryColorWrapsBodyNotParens) {
+  // The colour region is the query body; "(" is outside it.
+  std::string html = BoxHtml("SELECT * FROM (SELECT 1) AS s");
+  EXPECT_THAT(html, HasSubstr("(<div class=\"rgncolor subq-blue\">"));
 }
 
 TEST(BoxFormatterTest, PipeSegmentsHaveAlternatingBackgroundClass) {
@@ -227,7 +237,7 @@ TEST(BoxFormatterTest, PipeSegmentsHaveAlternatingBackgroundClass) {
 
 TEST(BoxFormatterTest, StandardQueryHasSingleWholeBackground) {
   std::string html = BoxHtml("SELECT a FROM t WHERE x > 1");
-  EXPECT_THAT(html, HasSubstr("seg-bg q-whole"));
+  EXPECT_THAT(html, HasSubstr("rgncolor q-whole"));
   // No pipe-segment tints in a standard query.
   EXPECT_THAT(html, Not(HasSubstr("seg-grey-")));
 }
