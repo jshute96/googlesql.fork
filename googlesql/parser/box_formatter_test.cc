@@ -79,6 +79,11 @@ std::string Box(absl::string_view sql, int width = 60,
   return PlainText(BoxHtml(sql, width, options));
 }
 
+TEST(BoxFormatterTest, AndChainBreaksBeforeOperator) {
+  EXPECT_THAT(Box("SELECT 1 FROM t WHERE aa = 1 AND bb = 2 AND cc = 3", 24),
+              Eq("SELECT 1\nFROM t\nWHERE\n  aa = 1\n  AND bb = 2\n  AND cc = 3"));
+}
+
 TEST(BoxFormatterTest, WrappedInBoxedContainer) {
   EXPECT_THAT(BoxHtml("SELECT 1"),
               HasSubstr("<div class=\"formatted-sql boxed\">"));
@@ -109,7 +114,7 @@ TEST(BoxFormatterTest, ListBreaksOnePerLineWithCommasAttached) {
   // Narrow width forces the select list to break; each item is on its own line
   // and the comma is attached to the end of the item.
   EXPECT_THAT(Box("SELECT alpha, beta, gamma FROM t", 16),
-              Eq("SELECT\n    alpha,\n    beta,\n    gamma\nFROM t"));
+              Eq("SELECT\n  alpha,\n  beta,\n  gamma\nFROM t"));
 }
 
 TEST(BoxFormatterTest, CommaIsInsideTheItemBox) {
@@ -124,9 +129,16 @@ TEST(BoxFormatterTest, CommaIsInsideTheItemBox) {
 
 TEST(BoxFormatterTest, PipeContentIndentsUnderOperator) {
   // Continuation of a pipe operator indents four columns (one inside the
-  // operator name, which starts at column three after "|> ").
+  // operator name, which starts at column three after "|> "); the AND chain
+  // breaks before the operator.
   EXPECT_THAT(Box("FROM t |> WHERE aaaa > 1 AND bbbb < 2", 20),
-              Eq("FROM t\n|> WHERE\n    aaaa > 1 AND bbbb < 2"));
+              Eq("FROM t\n|> WHERE\n    aaaa > 1\n    AND bbbb < 2"));
+}
+
+TEST(BoxFormatterTest, StandardClauseUsesTwoSpaceIndent) {
+  // Default indent is two spaces (outside pipe operators).
+  EXPECT_THAT(Box("SELECT a FROM t WHERE aaaa > 1 AND bbbb < 2", 20),
+              Eq("SELECT a\nFROM t\nWHERE\n  aaaa > 1\n  AND bbbb < 2"));
 }
 
 TEST(BoxFormatterTest, AggregateGroupByAlignsWithAggregate) {
@@ -144,7 +156,7 @@ TEST(BoxFormatterTest, SubqueryInlineWhenItFits) {
 
 TEST(BoxFormatterTest, SubqueryContentsIndentWhenBroken) {
   std::string out = Box("SELECT x FROM t WHERE a IN (SELECT y FROM uuuuuu)", 24);
-  EXPECT_THAT(out, HasSubstr("IN (\n        SELECT y\n        FROM uuuuuu\n    )"));
+  EXPECT_THAT(out, HasSubstr("IN (\n    SELECT y\n    FROM uuuuuu\n  )"));
 }
 
 TEST(BoxFormatterTest, LineCommentPreserved) {

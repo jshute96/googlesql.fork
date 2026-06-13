@@ -26,6 +26,7 @@
 #include "googlesql/parser/ast_node.h"
 #include "googlesql/public/language_options.h"
 #include "googlesql/public/parse_location.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -225,6 +226,67 @@ bool StartsWith(absl::string_view s, absl::string_view prefix) {
   return absl::StartsWith(s, prefix);
 }
 
+// Default continuation indent (columns) for wrapped clause content, lists and
+// parenthesized blocks. Pipe operators are the exception: their content lines
+// up under the operator name instead (see BuildPipe).
+constexpr int kDefaultIndent = 2;
+
+// ===========================================================================
+//                         FORMATTER CONFIGURATION
+//
+// How each AST node lays its children out as a box. This is the declarative
+// part of the formatter: the framework below is generic, and a node's layout
+// is just a choice from this small vocabulary. Most nodes need no entry -- the
+// layout is inferred from structure (a leading keyword + children => a clause;
+// comma-separated children => a list; otherwise a flat flow). Add an entry here
+// only to override that inference or to select a special layout.
+//
+// The layouts:
+//   kFlow      Children/keywords flow inline with no break points. Default for
+//              expressions, function calls, paths, leaves.
+//   kFlowWrap  Like kFlow, but may break before each operator and continue on
+//              the next line at the same indent. Used for AND/OR chains.
+//   kList      Comma-separated items: inline if they fit, else one per line,
+//              each comma tucked inside its item's box.
+//   kClause    A leading keyword followed by content (the content uses its own
+//              layout); content drops to an indented line when it doesn't fit.
+//   kVertical  Children each start a new line (a query's clause / pipe-op list).
+//   kSelect    SELECT/AGGREGATE: keyword + select list on one line, remaining
+//              clauses stacked, GROUP BY forced to its own aligned line.
+//   kParen     A parenthesized subquery/expression: inline "(...)" if it fits,
+//              else its contents indent between the parentheses.
+//   kPipeOp    A "|>" pipe operator.
+//   kStatements  A statement list (scripts): one statement per line.
+// ===========================================================================
+enum class Layout {
+  kFlow,
+  kFlowWrap,
+  kList,
+  kClause,
+  kVertical,
+  kSelect,
+  kParen,
+  kPipeOp,
+  kStatements,
+};
+
+// Per-node-kind layout overrides. Node kinds are GetNodeKindString() values
+// (the AST class name without the "AST" prefix). Pipe operators (kind starting
+// with "Pipe") are mapped to kPipeOp separately, by prefix.
+const absl::flat_hash_map<absl::string_view, Layout>& LayoutConfig() {
+  static const auto* const config =
+      new absl::flat_hash_map<absl::string_view, Layout>{
+          {"Query", Layout::kVertical},
+          {"Select", Layout::kSelect},
+          {"ExpressionSubquery", Layout::kParen},
+          {"TableSubquery", Layout::kParen},
+          {"StatementList", Layout::kStatements},
+          {"AndExpr", Layout::kFlowWrap},
+          {"OrExpr", Layout::kFlowWrap},
+      };
+  return *config;
+}
+
 class Builder {
  public:
   explicit Builder(absl::string_view sql) : sql_(sql) {}
@@ -234,7 +296,7 @@ class Builder {
   // ctx.clause_cont: extra indentation for a clause's wrapped content.
   struct Ctx {
     bool flatten_query = false;
-    int clause_cont = 4;
+    int clause_cont = kDefaultIndent;
   };
 
   DocPtr Build(const ASTNode* node, Ctx ctx, DocPtr trailer = nullptr) {
@@ -338,7 +400,8 @@ class Builder {
 
   bool GapHasComment(const Piece& p) const {
     absl::string_view g = GapText(p);
-    return absl::StrContains(g, "--") || absl::StrContains(g, "/*");
+    return absl::StrContains(g, "--") || absl::StrContains(g, "/*") ||
+           absl::StrContains(g, "#");
   }
 
   // Renders a literal gap as inline escaped text (with comments wrapped).
@@ -358,7 +421,9 @@ class Builder {
     std::vector<DocPtr> parts;
     size_t i = 0;
     while (i < g.size()) {
-      size_t line = g.find("--", i);
+      size_t dashes = g.find("--", i);
+      size_t hash = g.find('#', i);
+      size_t line = std::min(dashes, hash);
       size_t block = g.find("/*", i);
       size_t next = std::min(line, block);
       if (next == absl::string_view::npos) {
@@ -418,8 +483,6 @@ class Builder {
   // Builds the contents of a comma-separated list from pieces[first..end_child],
   // attaching each comma inside the preceding item's box.
   DocPtr BuildListBody(const std::vector<Piece>& ps, size_t first, Ctx ctx) {
-    Ctx item_ctx = ctx;
-    item_ctx.clause_cont = 4;
     // Gather child indices.
     std::vector<size_t> child_idx;
     for (size_t i = first; i < ps.size(); ++i) {
@@ -429,45 +492,65 @@ class Builder {
     for (size_t k = 0; k < child_idx.size(); ++k) {
       const bool last = (k + 1 == child_idx.size());
       DocPtr trailer = last ? nullptr : Esc(",");
-      parts.push_back(Build(ps[child_idx[k]].child, item_ctx, trailer));
+      parts.push_back(Build(ps[child_idx[k]].child, ctx, trailer));
       if (!last) parts.push_back(Line(" "));
     }
     return Group(Concat(std::move(parts)));
   }
 
-  DocPtr BuildInner(const ASTNode* node, const std::string& kind, Ctx ctx) {
-    if (kind == "Query") return BuildQuery(node, ctx);
-    if (StartsWith(kind, "Pipe")) return BuildPipe(node, ctx);
-    if (kind == "Select") return BuildSelect(node, ctx);
-    if (kind == "ExpressionSubquery" || kind == "TableSubquery") {
-      return BuildParen(node, ctx);
-    }
-    if (kind == "StatementList") return BuildStatementList(node, ctx);
-
-    std::vector<Piece> ps = Pieces(node);
-    // Keyword clause: leading keyword gap + child content. (Requiring a child
-    // avoids misclassifying a leaf whose text happens to start with a letter,
-    // e.g. an identifier, as a keyword.)
+  // Chooses the layout for `kind`: a configured override if present, the pipe
+  // operator layout for "Pipe*", otherwise inferred from the node's structure.
+  Layout ResolveLayout(const std::string& kind, const std::vector<Piece>& ps) {
+    if (StartsWith(kind, "Pipe")) return Layout::kPipeOp;
+    const auto& config = LayoutConfig();
+    auto it = config.find(kind);
+    if (it != config.end()) return it->second;
+    // Structural inference. A leading keyword gap with child content is a
+    // clause. (Requiring a child avoids misclassifying a leaf whose text
+    // happens to start with a letter, e.g. an identifier.)
     if (!ps.empty() && ps[0].child == nullptr && IsKeywordGap(ps[0]) &&
         HasAnyChild(ps)) {
-      return BuildClause(node, ps, ctx);
+      return Layout::kClause;
     }
-    // Comma list with no leading keyword (e.g. SelectList).
-    if (IsCommaList(ps, 0)) {
-      return BuildListBody(ps, 0, ctx);
-    }
-    return BuildGeneric(ps, ctx);
+    if (IsCommaList(ps, 0)) return Layout::kList;
+    return Layout::kFlow;
   }
 
-  // Generic inline rendering: children + literal gaps, no break points (except
-  // hard breaks introduced by comments). Suitable for expressions, calls,
-  // identifiers, leaves. A bare parenthesized Query child (e.g. the subquery in
-  // `x IN (SELECT ...)`, whose parens live in the surrounding gaps rather than
-  // a subquery node) is laid out as a paren group so it stays inline if it fits
-  // and indents as a unit otherwise.
-  DocPtr BuildGeneric(const std::vector<Piece>& ps, Ctx ctx) {
-    Ctx child_ctx = ctx;
-    child_ctx.clause_cont = 4;
+  DocPtr BuildInner(const ASTNode* node, const std::string& kind, Ctx ctx) {
+    std::vector<Piece> ps = Pieces(node);
+    switch (ResolveLayout(kind, ps)) {
+      case Layout::kVertical:
+        return BuildVertical(ps, ctx);
+      case Layout::kSelect:
+        return BuildSelect(ps, ctx);
+      case Layout::kParen:
+        return BuildParen(ps, ctx);
+      case Layout::kStatements:
+        return BuildStatementList(ps, ctx);
+      case Layout::kPipeOp:
+        return BuildPipe(ps, ctx);
+      case Layout::kClause:
+        return BuildClause(ps, ctx);
+      case Layout::kList:
+        return BuildListBody(ps, 0, ctx);
+      case Layout::kFlowWrap:
+        return BuildFlow(ps, ctx, /*wrap=*/true);
+      case Layout::kFlow:
+        return BuildFlow(ps, ctx, /*wrap=*/false);
+    }
+    return BuildFlow(ps, ctx, /*wrap=*/false);
+  }
+
+  // Inline rendering: children + literal gaps. With `wrap`, an inter-child gap
+  // that begins with whitespace (an operator such as " AND ") becomes a break
+  // point -- a space when flat, a newline at the current indent when broken --
+  // so a long operator chain breaks before each operator and the whole node is
+  // grouped (all on one line, or each operator on its own line). Without `wrap`
+  // there are no break points (except hard breaks from comments). A bare
+  // parenthesized Query child (e.g. the subquery in `x IN (SELECT ...)`, whose
+  // parens live in the surrounding gaps rather than a subquery node) is laid
+  // out as a paren group so it stays inline if it fits and indents otherwise.
+  DocPtr BuildFlow(const std::vector<Piece>& ps, Ctx ctx, bool wrap) {
     std::vector<DocPtr> parts;
     for (size_t i = 0; i < ps.size(); ++i) {
       const Piece& p = ps[i];
@@ -475,9 +558,12 @@ class Builder {
         if (IsParenthesizedQuery(ps, i)) {
           parts.push_back(BuildParenQuery(p.child, ctx));
         } else {
-          parts.push_back(Build(p.child, child_ctx));
+          parts.push_back(Build(p.child, ctx));
         }
       } else {
+        const bool between_children =
+            i > 0 && i + 1 < ps.size() && ps[i - 1].child != nullptr &&
+            ps[i + 1].child != nullptr;
         const bool before_query = i + 1 < ps.size() &&
                                   IsParenthesizedQuery(ps, i + 1);
         const bool after_query = i > 0 && IsParenthesizedQuery(ps, i - 1);
@@ -488,16 +574,21 @@ class Builder {
         std::string c = CollapseWs(GapText(p));
         // The "(" / ")" around a parenthesized Query are emitted by
         // BuildParenQuery, so strip them here to avoid duplication.
-        if (before_query && !c.empty() && c.back() == '(') {
-          c.pop_back();
+        if (before_query && !c.empty() && c.back() == '(') c.pop_back();
+        if (after_query && !c.empty() && c.front() == ')') c.erase(c.begin());
+        if (c.empty()) continue;
+        if (wrap && between_children && c.front() == ' ') {
+          // Break before the operator; keep the operator (and its trailing
+          // space) attached to the following operand.
+          parts.push_back(Line(" "));
+          parts.push_back(Esc(c.substr(1)));
+        } else {
+          parts.push_back(Esc(c));
         }
-        if (after_query && !c.empty() && c.front() == ')') {
-          c.erase(c.begin());
-        }
-        if (!c.empty()) parts.push_back(Esc(c));
       }
     }
-    return Concat(std::move(parts));
+    DocPtr body = Concat(std::move(parts));
+    return wrap ? Group(body) : body;
   }
 
   // True if pieces[i] is a Query child whose parentheses live in the adjacent
@@ -524,33 +615,51 @@ class Builder {
   DocPtr BuildParenQuery(const ASTNode* query, Ctx ctx) {
     Ctx inner = ctx;
     inner.flatten_query = true;
-    return Group(Concat({Esc("("),
-                         Nest(4, Concat({Line(""), Build(query, inner)})),
-                         Line(""), Esc(")")}));
+    return Group(Concat(
+        {Esc("("), Nest(kDefaultIndent, Concat({Line(""), Build(query, inner)})),
+         Line(""), Esc(")")}));
   }
 
   // keyword + content, where content stays on the keyword line if it fits,
   // else breaks onto indented lines.
-  DocPtr BuildClause(const ASTNode* node, const std::vector<Piece>& ps,
-                     Ctx ctx) {
+  DocPtr BuildClause(const std::vector<Piece>& ps, Ctx ctx) {
     std::string keyword = CollapseWs(GapText(ps[0]));
     keyword = std::string(absl::StripTrailingAsciiWhitespace(keyword));
     DocPtr content;
     if (IsCommaList(ps, 1)) {
       content = BuildListBody(ps, 1, ctx);
     } else {
-      content = BuildGeneric(
-          std::vector<Piece>(ps.begin() + 1, ps.end()), ctx);
+      content = BuildInnerContent(ps, 1, ctx);
     }
     return Concat({Esc(keyword),
                    Group(Nest(ctx.clause_cont, Concat({Line(" "), content})))});
   }
 
+  // Builds a clause's content (the pieces after the keyword) using the layout
+  // of the single content child when there is exactly one (so e.g. a WHERE
+  // whose child is an AndExpr inherits the AND/OR wrapping), else a plain flow.
+  DocPtr BuildInnerContent(const std::vector<Piece>& ps, size_t first,
+                           Ctx ctx) {
+    const ASTNode* only_child = nullptr;
+    bool single = true;
+    for (size_t i = first; i < ps.size(); ++i) {
+      if (ps[i].child != nullptr) {
+        if (only_child != nullptr) {
+          single = false;
+          break;
+        }
+        only_child = ps[i].child;
+      }
+    }
+    if (single && only_child != nullptr) return Build(only_child, ctx);
+    return BuildFlow(std::vector<Piece>(ps.begin() + first, ps.end()), ctx,
+                     /*wrap=*/false);
+  }
+
   // SELECT / AGGREGATE: the keyword and its select list go on the first line
   // (the list wraps when too long); every other clause child (FROM, WHERE,
   // GROUP BY, HAVING, ...) drops to its own line aligned with the keyword.
-  DocPtr BuildSelect(const ASTNode* node, Ctx ctx) {
-    std::vector<Piece> ps = Pieces(node);
+  DocPtr BuildSelect(const std::vector<Piece>& ps, Ctx ctx) {
     std::string keyword;
     size_t first = 0;
     if (!ps.empty() && ps[0].child == nullptr && IsKeywordGap(ps[0])) {
@@ -587,8 +696,7 @@ class Builder {
 
   // A pipe operator: "|> " at the margin, the operator name on the same line,
   // continuation indented under the operator name.
-  DocPtr BuildPipe(const ASTNode* node, Ctx ctx) {
-    std::vector<Piece> ps = Pieces(node);
+  DocPtr BuildPipe(const std::vector<Piece>& ps, Ctx ctx) {
     std::vector<DocPtr> parts;
     Ctx inner_ctx = ctx;
     inner_ctx.clause_cont = 1;  // +3 (pipe) + 1 = 4 columns of content indent
@@ -606,8 +714,7 @@ class Builder {
 
   // Parenthesized subquery: inline "(...)" if it fits, else the contents indent
   // on their own lines between the parentheses.
-  DocPtr BuildParen(const ASTNode* node, Ctx ctx) {
-    std::vector<Piece> ps = Pieces(node);
+  DocPtr BuildParen(const std::vector<Piece>& ps, Ctx ctx) {
     Ctx inner_ctx = ctx;
     inner_ctx.flatten_query = true;
     // The first child is the parenthesized query/expression; any later children
@@ -619,7 +726,7 @@ class Builder {
         break;
       }
     }
-    if (body_idx == ps.size()) return BuildGeneric(ps, ctx);
+    if (body_idx == ps.size()) return BuildFlow(ps, ctx, /*wrap=*/false);
 
     DocPtr body = Build(ps[body_idx].child, inner_ctx);
     // Consume the closing-paren gap right after the body, if present.
@@ -630,9 +737,9 @@ class Builder {
     }
     // Inline "(...)" if it fits; otherwise the contents indent on their own
     // lines between the parentheses.
-    DocPtr paren = Group(Concat({Esc("("),
-                                 Nest(4, Concat({Line(""), body})), Line(""),
-                                 Esc(")")}));
+    DocPtr paren = Group(Concat(
+        {Esc("("), Nest(kDefaultIndent, Concat({Line(""), body})), Line(""),
+         Esc(")")}));
     // Trailing pieces (alias, etc.) rendered inline after the parentheses.
     std::vector<DocPtr> parts = {paren};
     for (size_t i = after; i < ps.size(); ++i) {
@@ -650,11 +757,10 @@ class Builder {
     return parts.size() == 1 ? paren : Concat(std::move(parts));
   }
 
-  // A query: stack its clauses / pipe operators, each on its own line. At the
-  // top level (flatten_query == false) the stacking is unconditional; inside a
-  // subquery it is governed by the enclosing paren group.
-  DocPtr BuildQuery(const ASTNode* node, Ctx ctx) {
-    std::vector<Piece> ps = Pieces(node);
+  // Stack children, each on its own line (a query's clauses / pipe operators).
+  // At the top level (flatten_query == false) the stacking is unconditional;
+  // inside a subquery it is governed by the enclosing paren group.
+  DocPtr BuildVertical(const std::vector<Piece>& ps, Ctx ctx) {
     std::vector<DocPtr> parts;
     bool first = true;
     for (const Piece& p : ps) {
@@ -674,8 +780,7 @@ class Builder {
   }
 
   // A statement list (scripts): one statement per line, ";" attached.
-  DocPtr BuildStatementList(const ASTNode* node, Ctx ctx) {
-    std::vector<Piece> ps = Pieces(node);
+  DocPtr BuildStatementList(const std::vector<Piece>& ps, Ctx ctx) {
     std::vector<DocPtr> parts;
     bool first = true;
     for (size_t i = 0; i < ps.size(); ++i) {
