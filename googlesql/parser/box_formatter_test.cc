@@ -173,5 +173,48 @@ TEST(BoxFormatterTest, HtmlIsEscaped) {
   EXPECT_THAT(BoxHtml("SELECT '<a>' AS x"), HasSubstr("&lt;a&gt;"));
 }
 
+TEST(BoxFormatterTest, SetOperationStacks) {
+  EXPECT_THAT(Box("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3"),
+              Eq("SELECT 1\nUNION ALL\nSELECT 2\nUNION ALL\nSELECT 3"));
+}
+
+TEST(BoxFormatterTest, CaseArmsEachOnOwnLine) {
+  std::string out = Box("SELECT CASE WHEN aaaa > 1 THEN 1 ELSE 2 END FROM t", 20);
+  EXPECT_THAT(out, HasSubstr("CASE\n    WHEN aaaa > 1 THEN 1\n    ELSE 2\n  END"));
+}
+
+TEST(BoxFormatterTest, FunctionArgsBreakOnePerLine) {
+  std::string out = Box("SELECT f(aaaaaa, bbbbbb, cccccc) FROM t", 20);
+  EXPECT_THAT(out, HasSubstr("f(\n    aaaaaa,\n    bbbbbb,\n    cccccc\n  )"));
+}
+
+TEST(BoxFormatterTest, CommaFromTablesBreak) {
+  std::string out = Box("SELECT x FROM aaaa, bbbb, cccc WHERE z = 1", 12);
+  EXPECT_THAT(out, HasSubstr("FROM\n  aaaa,\n  bbbb,\n  cccc"));
+}
+
+TEST(BoxFormatterTest, ArrayKeepsBrackets) {
+  EXPECT_THAT(Box("SELECT [1, 2, 3] AS a"), Eq("SELECT [1, 2, 3] AS a"));
+}
+
+TEST(BoxFormatterTest, StructKeepsParens) {
+  EXPECT_THAT(Box("SELECT STRUCT(1 AS a, 2 AS b) AS s"),
+              Eq("SELECT STRUCT(1 AS a, 2 AS b) AS s"));
+}
+
+TEST(BoxFormatterTest, SubqueryHasAlternatingBackgroundClass) {
+  EXPECT_THAT(BoxHtml("SELECT * FROM (SELECT 1) AS s"),
+              HasSubstr("subq-bg subq-a"));
+  // A nested subquery gets the alternate colour.
+  EXPECT_THAT(BoxHtml("SELECT * FROM (SELECT * FROM (SELECT 1) AS i) AS o"),
+              HasSubstr("subq-bg subq-b"));
+}
+
+TEST(BoxFormatterTest, PipeOperatorsHaveAlternatingBackgroundClass) {
+  std::string html = BoxHtml("FROM t |> WHERE x > 1 |> SELECT y");
+  EXPECT_THAT(html, HasSubstr("pipe-a"));
+  EXPECT_THAT(html, HasSubstr("pipe-b"));
+}
+
 }  // namespace
 }  // namespace googlesql

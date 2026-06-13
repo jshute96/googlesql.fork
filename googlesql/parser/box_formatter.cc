@@ -257,6 +257,14 @@ constexpr int kDefaultIndent = 2;
 //              else its contents indent between the parentheses.
 //   kPipeOp    A "|>" pipe operator.
 //   kStatements  A statement list (scripts): one statement per line.
+//   kCall      A function call: callee + parenthesized argument list that
+//              breaks one-argument-per-line when it doesn't fit.
+//   kSetOp     A set operation (UNION/INTERSECT/EXCEPT): operands stacked with
+//              the operator on its own line between them.
+//   kCase      A searched CASE expression: WHEN/ELSE arms each on their own
+//              line, END dedented to the CASE column.
+//   kJoin      A FROM table list: comma-separated tables break one per line;
+//              explicit JOINs stay inline.
 // ===========================================================================
 enum class Layout {
   kFlow,
@@ -268,6 +276,10 @@ enum class Layout {
   kParen,
   kPipeOp,
   kStatements,
+  kCall,
+  kSetOp,
+  kCase,
+  kJoin,
 };
 
 // Per-node-kind layout overrides. Node kinds are GetNodeKindString() values
@@ -283,6 +295,10 @@ const absl::flat_hash_map<absl::string_view, Layout>& LayoutConfig() {
           {"StatementList", Layout::kStatements},
           {"AndExpr", Layout::kFlowWrap},
           {"OrExpr", Layout::kFlowWrap},
+          {"FunctionCall", Layout::kCall},
+          {"SetOperation", Layout::kSetOp},
+          {"CaseNoValueExpression", Layout::kCase},
+          {"Join", Layout::kJoin},
       };
   return *config;
 }
@@ -297,13 +313,17 @@ class Builder {
   struct Ctx {
     bool flatten_query = false;
     int clause_cont = kDefaultIndent;
+    int subquery_depth = 0;  // nesting depth of enclosing subqueries
   };
 
-  DocPtr Build(const ASTNode* node, Ctx ctx, DocPtr trailer = nullptr) {
+  DocPtr Build(const ASTNode* node, Ctx ctx, DocPtr trailer = nullptr,
+               absl::string_view extra_class = "") {
     const std::string kind = node->GetNodeKindString();
     DocPtr inner = BuildInner(node, kind, ctx);
+    std::string cls = absl::StrCat("ast ast-", kind);
+    if (!extra_class.empty()) absl::StrAppend(&cls, " ", extra_class);
     std::vector<DocPtr> parts;
-    parts.push_back(Tag(absl::StrCat("<div class=\"ast ast-", kind, "\">")));
+    parts.push_back(Tag(absl::StrCat("<div class=\"", cls, "\">")));
     parts.push_back(inner);
     if (trailer != nullptr) parts.push_back(trailer);
     parts.push_back(Tag("</div>"));
@@ -454,15 +474,68 @@ class Builder {
     return parts.empty() ? Nil() : Concat(std::move(parts));
   }
 
-  // True if the gap (collapsed) begins with a letter -- i.e. it is a leading
-  // keyword like "WHERE ", "GROUP BY ", "AGGREGATE ".
-  bool IsKeywordGap(const Piece& p) const {
-    std::string c = CollapseWs(GapText(p));
-    return !c.empty() && absl::ascii_isalpha(static_cast<unsigned char>(c[0]));
+  // If the gap begins with a keyword -- a run of letters and internal single
+  // spaces (e.g. "WHERE", "GROUP BY") that is separated from any following
+  // content by whitespace, a comment, or the end of the gap -- returns true and
+  // sets *kw_end to the byte offset just past the keyword. Returns false for
+  // gaps where punctuation is glued to the letters, such as "STRUCT(" or "f(",
+  // so those are not treated as clauses.
+  bool LeadingKeyword(const Piece& p, int* kw_end) const {
+    int i = p.begin;
+    while (i < p.end && absl::ascii_isspace(static_cast<unsigned char>(sql_[i]))) {
+      ++i;
+    }
+    if (i >= p.end || !absl::ascii_isalpha(static_cast<unsigned char>(sql_[i]))) {
+      return false;
+    }
+    int last_letter = i;
+    while (i < p.end) {
+      const char ch = sql_[i];
+      if (absl::ascii_isalpha(static_cast<unsigned char>(ch))) {
+        last_letter = i;
+        ++i;
+        continue;
+      }
+      if (ch == ' ' || ch == '\t') {
+        int j = i;
+        while (j < p.end && (sql_[j] == ' ' || sql_[j] == '\t')) ++j;
+        if (j < p.end &&
+            absl::ascii_isalpha(static_cast<unsigned char>(sql_[j]))) {
+          i = j;  // internal space between keyword words
+          continue;
+        }
+        *kw_end = last_letter + 1;  // separated by whitespace
+        return true;
+      }
+      if (ch == '\n' || ch == '\r') {
+        *kw_end = last_letter + 1;
+        return true;
+      }
+      if ((ch == '-' && i + 1 < p.end && sql_[i + 1] == '-') ||
+          (ch == '/' && i + 1 < p.end && sql_[i + 1] == '*') || ch == '#') {
+        *kw_end = last_letter + 1;  // separated by a comment
+        return true;
+      }
+      return false;  // glued punctuation, e.g. "STRUCT("
+    }
+    *kw_end = last_letter + 1;  // keyword runs to the end of the gap
+    return true;
   }
 
-  // Are the separator gaps between children commas? (a comma-separated list)
+  bool IsKeywordGap(const Piece& p) const {
+    int kw_end;
+    return LeadingKeyword(p, &kw_end);
+  }
+
+  // True if the pieces from `first` onward are a pure comma-separated list:
+  // they start and end with a child (no surrounding delimiters like the
+  // brackets of an array constructor, which would be dropped by the list
+  // builder) and the children are separated by commas.
   bool IsCommaList(const std::vector<Piece>& ps, size_t first_child) const {
+    if (first_child >= ps.size() || ps[first_child].child == nullptr ||
+        ps.back().child == nullptr) {
+      return false;
+    }
     int child_count = 0;
     int comma_seps = 0;
     bool prev_child = false;
@@ -535,6 +608,14 @@ class Builder {
         return BuildListBody(ps, 0, ctx);
       case Layout::kFlowWrap:
         return BuildFlow(ps, ctx, /*wrap=*/true);
+      case Layout::kCall:
+        return BuildCall(ps, ctx);
+      case Layout::kSetOp:
+        return BuildSetOp(node, ctx);
+      case Layout::kCase:
+        return BuildCase(ps, ctx);
+      case Layout::kJoin:
+        return BuildJoin(node, ps, ctx);
       case Layout::kFlow:
         return BuildFlow(ps, ctx, /*wrap=*/false);
     }
@@ -615,24 +696,51 @@ class Builder {
   DocPtr BuildParenQuery(const ASTNode* query, Ctx ctx) {
     Ctx inner = ctx;
     inner.flatten_query = true;
-    return Group(Concat(
+    inner.subquery_depth = ctx.subquery_depth + 1;
+    DocPtr paren = Group(Concat(
         {Esc("("), Nest(kDefaultIndent, Concat({Line(""), Build(query, inner)})),
          Line(""), Esc(")")}));
+    return WithSubqueryBackground(paren, inner.subquery_depth);
+  }
+
+  // Wraps a subquery's rendering in a background-tint div whose colour
+  // alternates with nesting depth, so nested subqueries stand out from their
+  // parents.
+  DocPtr WithSubqueryBackground(DocPtr doc, int depth) {
+    const char* cls = (depth % 2 == 1) ? "subq-bg subq-a" : "subq-bg subq-b";
+    return Concat({Tag(absl::StrCat("<div class=\"", cls, "\">")), doc,
+                   Tag("</div>")});
   }
 
   // keyword + content, where content stays on the keyword line if it fits,
   // else breaks onto indented lines.
   DocPtr BuildClause(const std::vector<Piece>& ps, Ctx ctx) {
-    std::string keyword = CollapseWs(GapText(ps[0]));
-    keyword = std::string(absl::StripTrailingAsciiWhitespace(keyword));
+    int kw_end = ps[0].end;
+    LeadingKeyword(ps[0], &kw_end);
+    std::string keyword = std::string(absl::StripAsciiWhitespace(
+        CollapseWs(sql_.substr(ps[0].begin, kw_end - ps[0].begin))));
+    // Content is the pieces after the keyword. If the keyword gap has leftover
+    // text (e.g. a comment after SELECT), keep it as a leading content piece.
+    std::vector<Piece> content_pieces(ps.begin() + 1, ps.end());
+    if (HasNonWhitespace(kw_end, ps[0].end)) {
+      content_pieces.insert(content_pieces.begin(),
+                            Piece{nullptr, kw_end, ps[0].end});
+    }
     DocPtr content;
-    if (IsCommaList(ps, 1)) {
-      content = BuildListBody(ps, 1, ctx);
+    if (IsCommaList(content_pieces, 0)) {
+      content = BuildListBody(content_pieces, 0, ctx);
     } else {
-      content = BuildInnerContent(ps, 1, ctx);
+      content = BuildInnerContent(content_pieces, 0, ctx);
     }
     return Concat({Esc(keyword),
                    Group(Nest(ctx.clause_cont, Concat({Line(" "), content})))});
+  }
+
+  bool HasNonWhitespace(int begin, int end) const {
+    for (int i = begin; i < end; ++i) {
+      if (!absl::ascii_isspace(static_cast<unsigned char>(sql_[i]))) return true;
+    }
+    return false;
   }
 
   // Builds a clause's content (the pieces after the keyword) using the layout
@@ -662,9 +770,15 @@ class Builder {
   DocPtr BuildSelect(const std::vector<Piece>& ps, Ctx ctx) {
     std::string keyword;
     size_t first = 0;
+    DocPtr keyword_rest = nullptr;  // e.g. a comment right after SELECT
     if (!ps.empty() && ps[0].child == nullptr && IsKeywordGap(ps[0])) {
-      keyword = std::string(
-          absl::StripTrailingAsciiWhitespace(CollapseWs(GapText(ps[0]))));
+      int kw_end = ps[0].end;
+      LeadingKeyword(ps[0], &kw_end);
+      keyword = std::string(absl::StripAsciiWhitespace(
+          CollapseWs(sql_.substr(ps[0].begin, kw_end - ps[0].begin))));
+      if (HasNonWhitespace(kw_end, ps[0].end)) {
+        keyword_rest = GapWithComments(Piece{nullptr, kw_end, ps[0].end});
+      }
       first = 1;
     }
     std::vector<const ASTNode*> kids;
@@ -673,6 +787,10 @@ class Builder {
     }
     std::vector<DocPtr> parts;
     if (!keyword.empty()) parts.push_back(Esc(keyword));
+    if (keyword_rest != nullptr) {
+      parts.push_back(Esc(" "));
+      parts.push_back(keyword_rest);
+    }
     bool attached_list = false;
     for (size_t k = 0; k < kids.size(); ++k) {
       const std::string ck = kids[k]->GetNodeKindString();
@@ -717,6 +835,7 @@ class Builder {
   DocPtr BuildParen(const std::vector<Piece>& ps, Ctx ctx) {
     Ctx inner_ctx = ctx;
     inner_ctx.flatten_query = true;
+    inner_ctx.subquery_depth = ctx.subquery_depth + 1;
     // The first child is the parenthesized query/expression; any later children
     // (e.g. a table alias) follow the closing paren.
     size_t body_idx = ps.size();
@@ -737,9 +856,11 @@ class Builder {
     }
     // Inline "(...)" if it fits; otherwise the contents indent on their own
     // lines between the parentheses.
-    DocPtr paren = Group(Concat(
-        {Esc("("), Nest(kDefaultIndent, Concat({Line(""), body})), Line(""),
-         Esc(")")}));
+    DocPtr paren = WithSubqueryBackground(
+        Group(Concat({Esc("("),
+                      Nest(kDefaultIndent, Concat({Line(""), body})), Line(""),
+                      Esc(")")})),
+        inner_ctx.subquery_depth);
     // Trailing pieces (alias, etc.) rendered inline after the parentheses.
     std::vector<DocPtr> parts = {paren};
     for (size_t i = after; i < ps.size(); ++i) {
@@ -763,10 +884,16 @@ class Builder {
   DocPtr BuildVertical(const std::vector<Piece>& ps, Ctx ctx) {
     std::vector<DocPtr> parts;
     bool first = true;
+    int pipe_index = 0;
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
         if (!first) parts.push_back(ClauseSep(ctx));
-        parts.push_back(Build(p.child, ctx));
+        // Alternate a background tint across a chain of pipe operators.
+        absl::string_view extra;
+        if (StartsWith(p.child->GetNodeKindString(), "Pipe")) {
+          extra = (pipe_index++ % 2 == 0) ? "pipe-a" : "pipe-b";
+        }
+        parts.push_back(Build(p.child, ctx, /*trailer=*/nullptr, extra));
         first = false;
       } else if (GapHasComment(p)) {
         parts.push_back(GapWithComments(p));
@@ -777,6 +904,153 @@ class Builder {
     // the whole query is inline or broken (so a subquery is either fully on one
     // line or fully indented -- never half-broken).
     return Concat(std::move(parts));
+  }
+
+  // A function call: callee + a parenthesized argument list. If the arguments
+  // are a clean comma list, they may break one-per-line between the
+  // parentheses; otherwise the call is rendered inline (lossless, so modifiers
+  // like DISTINCT are preserved).
+  DocPtr BuildCall(const std::vector<Piece>& ps, Ctx ctx) {
+    size_t open = ps.size(), close = ps.size();
+    for (size_t i = 0; i < ps.size(); ++i) {
+      if (ps[i].child == nullptr &&
+          absl::StrContains(GapText(ps[i]), "(") && open == ps.size()) {
+        open = i;
+      }
+      if (ps[i].child == nullptr && absl::StrContains(GapText(ps[i]), ")")) {
+        close = i;
+      }
+    }
+    if (open == ps.size() || close <= open) {
+      return BuildFlow(ps, ctx, /*wrap=*/false);
+    }
+    std::vector<Piece> args(ps.begin() + open + 1, ps.begin() + close);
+    if (!IsCommaList(args, 0)) return BuildFlow(ps, ctx, /*wrap=*/false);
+    DocPtr callee = BuildFlow(std::vector<Piece>(ps.begin(), ps.begin() + open),
+                              ctx, /*wrap=*/false);
+    DocPtr arg_list = BuildListBody(args, 0, ctx);
+    return Concat(
+        {callee, Group(Concat({Esc("("),
+                               Nest(kDefaultIndent, Concat({Line(""), arg_list})),
+                               Line(""), Esc(")")}))});
+  }
+
+  // A set operation (UNION / INTERSECT / EXCEPT): the operands stack with the
+  // operator on its own line between them. (The metadata-list child overlaps
+  // the operand ranges, so the operands are taken directly from the node and
+  // the operator text is read from the gaps between them.)
+  DocPtr BuildSetOp(const ASTNode* node, Ctx ctx) {
+    std::vector<const ASTNode*> operands;
+    for (int i = 0; i < node->num_children(); ++i) {
+      const ASTNode* c = node->child(i);
+      if (c == nullptr) continue;
+      if (StartsWith(c->GetNodeKindString(), "SetOperation")) continue;
+      if (c->start_location().GetByteOffset() < 0) continue;
+      operands.push_back(c);
+    }
+    std::sort(operands.begin(), operands.end(),
+              [](const ASTNode* a, const ASTNode* b) {
+                return a->start_location().GetByteOffset() <
+                       b->start_location().GetByteOffset();
+              });
+    if (operands.size() < 2) return Build(node, ctx);  // unexpected; be safe
+    std::vector<DocPtr> parts = {Build(operands[0], ctx)};
+    for (size_t i = 1; i < operands.size(); ++i) {
+      const int gb = operands[i - 1]->end_location().GetByteOffset();
+      const int ge = operands[i]->start_location().GetByteOffset();
+      std::string op;
+      if (gb >= 0 && ge >= gb) {
+        op = std::string(absl::StripAsciiWhitespace(
+            CollapseWs(sql_.substr(gb, ge - gb))));
+      }
+      parts.push_back(ClauseSep(ctx));
+      if (!op.empty()) {
+        parts.push_back(Esc(op));
+        parts.push_back(ClauseSep(ctx));
+      }
+      parts.push_back(Build(operands[i], ctx));
+    }
+    return Concat(std::move(parts));
+  }
+
+  // A searched CASE expression: each WHEN/ELSE arm starts a new line indented
+  // under CASE, and END dedents back to the CASE column. Stays inline if short.
+  DocPtr BuildCase(const std::vector<Piece>& ps, Ctx ctx) {
+    std::vector<DocPtr> body;
+    for (size_t i = 0; i < ps.size(); ++i) {
+      const Piece& p = ps[i];
+      if (p.child != nullptr) {
+        body.push_back(Build(p.child, ctx));
+        continue;
+      }
+      std::string c =
+          std::string(absl::StripAsciiWhitespace(CollapseWs(GapText(p))));
+      if (i == 0 && StartsWith(c, "CASE")) {
+        c = std::string(absl::StripAsciiWhitespace(c.substr(4)));
+      }
+      if (c == "END" || StartsWith(c, "END ") || c.empty()) continue;
+      if (StartsWith(c, "WHEN")) {
+        body.push_back(Line(" "));
+        body.push_back(Esc("WHEN "));
+      } else if (StartsWith(c, "ELSE")) {
+        body.push_back(Line(" "));
+        body.push_back(Esc("ELSE "));
+      } else if (StartsWith(c, "THEN")) {
+        body.push_back(Esc(" THEN "));
+      } else {
+        body.push_back(Esc(absl::StrCat(c, " ")));
+      }
+    }
+    return Group(Concat({Esc("CASE"), Nest(kDefaultIndent, Concat(body)),
+                         Line(" "), Esc("END")}));
+  }
+
+  // Recursively collects the table operands of a comma-only join (which is
+  // left-nested: `a, b, c` parses as Join(Join(a, b), c)). Returns false if any
+  // join operator is not a comma (i.e. there is an explicit JOIN).
+  bool CollectCommaJoin(const ASTNode* node, std::vector<const ASTNode*>* out) {
+    std::vector<const ASTNode*> kids;
+    for (int i = 0; i < node->num_children(); ++i) {
+      if (node->child(i) != nullptr) kids.push_back(node->child(i));
+    }
+    std::sort(kids.begin(), kids.end(), [](const ASTNode* a, const ASTNode* b) {
+      return a->start_location().GetByteOffset() <
+             b->start_location().GetByteOffset();
+    });
+    bool any_comma = false;
+    for (const ASTNode* c : kids) {
+      const std::string k = c->GetNodeKindString();
+      if (k == "Location") {
+        const int s = c->start_location().GetByteOffset();
+        const int e = c->end_location().GetByteOffset();
+        if (std::string(absl::StripAsciiWhitespace(sql_.substr(s, e - s))) !=
+            ",") {
+          return false;  // an explicit JOIN
+        }
+        any_comma = true;
+      } else if (k == "Join") {
+        if (!CollectCommaJoin(c, out)) return false;
+      } else {
+        out->push_back(c);
+      }
+    }
+    return any_comma;
+  }
+
+  // A FROM table expression: a plain comma-separated table list breaks one per
+  // line when it doesn't fit; explicit JOINs (with ON/USING) stay inline.
+  DocPtr BuildJoin(const ASTNode* node, const std::vector<Piece>& ps, Ctx ctx) {
+    std::vector<const ASTNode*> tables;
+    if (!CollectCommaJoin(node, &tables) || tables.size() < 2) {
+      return BuildFlow(ps, ctx, /*wrap=*/false);
+    }
+    std::vector<DocPtr> parts;
+    for (size_t k = 0; k < tables.size(); ++k) {
+      const bool last = (k + 1 == tables.size());
+      parts.push_back(Build(tables[k], ctx, last ? nullptr : Esc(",")));
+      if (!last) parts.push_back(Line(" "));
+    }
+    return Group(Concat(std::move(parts)));
   }
 
   // A statement list (scripts): one statement per line, ";" attached.

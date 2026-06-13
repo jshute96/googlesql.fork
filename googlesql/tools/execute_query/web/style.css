@@ -456,6 +456,24 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
   white-space: pre;
 }
 
+/* Alternating background tints (shared by both box modes). The formatter
+   emits a `subq-bg subq-a`/`subq-b` wrapper around each subquery, alternating
+   by nesting depth, so a nested subquery contrasts with its parent; and
+   `pipe-a`/`pipe-b` on successive pipe operators in a chain. The colours are
+   subtle so outlines and text stay legible. */
+.formatted-sql.boxed .subq-a {
+  background: rgba(74, 144, 217, 0.10);
+}
+.formatted-sql.boxed .subq-b {
+  background: rgba(240, 173, 78, 0.13);
+}
+.formatted-sql.boxed .pipe-a {
+  background: rgba(0, 0, 0, 0.04);
+}
+.formatted-sql.boxed .pipe-b {
+  background: rgba(74, 144, 217, 0.08);
+}
+
 /* simple-box: outline only the major structural nodes (subqueries, pipe
    operators, and the top-level clauses) so the shape of the query stands out
    without clutter. */
@@ -486,7 +504,6 @@ html[data-sql-format="full-box"] .formatted-sql.boxed .ast {
 }
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast[class*=" ast-Pipe"] {
   outline-color: #4a90d9;
-  background: rgba(74, 144, 217, 0.05);
 }
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast-Select,
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast-FromClause,

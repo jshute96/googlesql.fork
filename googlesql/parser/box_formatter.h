@@ -52,7 +52,7 @@ namespace googlesql {
 absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
                                          const ASTNode* root,
                                          const LanguageOptions& language_options,
-                                         int width = 60);
+                                         int width = 80);
 
 }  // namespace googlesql
 
