@@ -1500,6 +1500,15 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::StatusOr<std::string> GetInputPipeSQL(const ResolvedScan* input_scan,
                                               QueryExpression* input_qe);
 
+  // In Pipe syntax mode, if `input_scan` is a plain (non-value) table scan,
+  // expose its columns by their natural table-qualified names and drop the
+  // scan's SELECT list, so a pipe operator can be appended directly onto
+  // `FROM <table>` instead of forcing a `|> SELECT ... |> AS <alias>`
+  // re-aliasing wrapper. Returns true if the optimization was applied. A no-op
+  // (returns false) in Standard syntax mode or for non-table-scan inputs.
+  absl::StatusOr<bool> TryUseLeafTableScanColumns(const ResolvedScan* input_scan,
+                                                  QueryExpression* input_qe);
+
   // Builds a "running pipe query" QueryExpression whose FROM clause carries the
   // complete pipe-syntax string `pipe_sql`. The result does not carry a SELECT,
   // so a later operator can be appended (via GetInputPipeSQL) without wrapping.
