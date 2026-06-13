@@ -399,6 +399,7 @@ cc_library(
         "//googlesql/base:status",
         "//googlesql/base:strings",
         "//googlesql/common:options_utils",
+        "//googlesql/parser:html_formatter",
         "//googlesql/parser:parse_tree",
         "//googlesql/parser:parse_tree_serializer",
         "//googlesql/parser:parser_mode",

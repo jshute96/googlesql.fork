@@ -48,6 +48,14 @@ class ExecuteQueryWriter {
   virtual absl::Status parsed(absl::string_view parse_debug_string) {
     return WriteOperationString("parsed", parse_debug_string);
   }
+
+  // Experimental HTML rendering of the original SQL with the parse tree
+  // expressed as nested <div> elements (see parser/html_formatter.h). This is
+  // deliberately not routed through WriteOperationString: it is only meaningful
+  // in web mode, and the default is a no-op so other writers ignore it.
+  virtual absl::Status formatted_sql_html(absl::string_view html) {
+    return absl::OkStatus();
+  }
   // Note: This is being abused in some cases to send text directly as output.
   // This doesn't work as expected in web mode.  At most one of those outputs
   // shows up and it goes in the "Unparsed" section.

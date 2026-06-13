@@ -168,6 +168,16 @@
             <pre class="output parsed"><code class="language-less">{{{result_parsed}}}</code></pre>
             {{/result_parsed}}
 
+            {{#result_formatted_sql}}
+            <h3>Formatted SQL</h3>
+            <div class="formatted-sql-tabs" role="tablist">
+              <button type="button" class="fmt-tab active" data-format="default">Default</button>
+              <button type="button" class="fmt-tab" data-format="simple-box">Simple box</button>
+              <button type="button" class="fmt-tab" data-format="full-box">Full box</button>
+            </div>
+            <div class="output formatted-sql-output">{{{result_formatted_sql}}}</div>
+            {{/result_formatted_sql}}
+
             {{#result_explained }}
             <h3>Explain</h3>
             <pre class="output explained"><code class="language-less">{{result_explained}}</code></pre>

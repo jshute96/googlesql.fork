@@ -103,7 +103,8 @@ result_parsed:&lt;span class=&quot;ast-range&quot;&gt;Script [0-28]&lt;&#x2F;spa
         &lt;span class=&quot;ast-range&quot;&gt;PathExpression [10-15]&lt;&#x2F;span&gt;
           &lt;span class=&quot;ast-range&quot;&gt;Identifier(INT64) [10-15]&lt;&#x2F;span&gt;
       &lt;span class=&quot;ast-range&quot;&gt;IntLiteral(100) [24-27]&lt;&#x2F;span&gt;
-\
+
+result_formatted_sql:<div class="formatted-sql"><div class="ast ast-Script"><div class="ast ast-StatementList"><div class="ast ast-VariableDeclaration">DECLARE <div class="ast ast-IdentifierList"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-SimpleType"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">INT64</div></div></div> DEFAULT <div class="ast ast-IntLiteral">100</div></div>;</div></div></div>
 ==
 
 # Parse a procedural script loop
@@ -164,7 +165,13 @@ result_parsed:&lt;span class=&quot;ast-range&quot;&gt;Script [0-109]&lt;&#x2F;sp
             &lt;span class=&quot;ast-range&quot;&gt;PathExpression [92-93]&lt;&#x2F;span&gt;
               &lt;span class=&quot;ast-range&quot;&gt;Identifier(x) [92-93]&lt;&#x2F;span&gt;
             &lt;span class=&quot;ast-range&quot;&gt;IntLiteral(1) [96-97]&lt;&#x2F;span&gt;
-\
+
+result_formatted_sql:<div class="formatted-sql"><div class="ast ast-Script"><div class="ast ast-StatementList"><div class="ast ast-VariableDeclaration">DECLARE <div class="ast ast-IdentifierList"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-SimpleType"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">INT64</div></div></div> DEFAULT <div class="ast ast-IntLiteral">0</div></div>;
+<div class="ast ast-WhileStatement">WHILE <div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> &lt; <div class="ast ast-IntLiteral">3</div></div>
+DO
+  <div class="ast ast-StatementList"><div class="ast ast-QueryStatement"><div class="ast ast-Query"><div class="ast ast-Select">SELECT <div class="ast ast-SelectList"><div class="ast ast-SelectColumn"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-Alias">as <div class="ast ast-Identifier">num</div></div></div>, <div class="ast ast-SelectColumn"><div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> * <div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div></div> <div class="ast ast-Alias">as <div class="ast ast-Identifier">num_square</div></div></div></div></div></div></div>;
+  <div class="ast ast-SingleAssignment">SET <div class="ast ast-Identifier">x</div> = <div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> + <div class="ast ast-IntLiteral">1</div></div></div>;</div>
+END WHILE</div>;</div></div></div>
 ==
 
 # Execute a procedural script loop

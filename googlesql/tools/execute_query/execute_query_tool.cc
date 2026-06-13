@@ -32,6 +32,7 @@
 
 
 #include "googlesql/common/options_utils.h"
+#include "googlesql/parser/html_formatter.h"
 #include "googlesql/parser/parse_tree.h"
 #include "googlesql/parser/parser.h"
 #include "googlesql/parser/parser_mode.h"
@@ -1094,12 +1095,20 @@ static absl::StatusOr<const ASTNode*> ParseSql(
 }
 
 static absl::Status WriteParsedAndOrUnparsedAst(
-    const ASTNode* root, const ExecuteQueryConfig& config,
+    const ASTNode* root, absl::string_view sql, const ExecuteQueryConfig& config,
     ExecuteQueryWriter& writer) {
   if (config.has_tool_mode(ToolMode::kParse)) {
     // Note, ASTNode is not public, and therefore cannot be part of the
     // public interface, thus, we can only return the string.
     GOOGLESQL_RETURN_IF_ERROR(writer.parsed(root->DebugString()));
+
+    // Experimental: also emit an HTML rendering of the SQL with the parse tree
+    // expressed as nested <div>s. Best-effort -- failures are dropped silently.
+    absl::StatusOr<std::string> html =
+        SqlToHtml(sql, root, config.analyzer_options().language());
+    if (html.ok()) {
+      GOOGLESQL_RETURN_IF_ERROR(writer.formatted_sql_html(*html));
+    }
   }
   if (config.has_tool_mode(ToolMode::kUnparse)) {
     GOOGLESQL_RETURN_IF_ERROR(writer.unparsed(Unparse(root)));
@@ -2203,7 +2212,7 @@ static absl::Status ExecuteScript(absl::string_view script,
 
   if (config.has_tool_mode(ToolMode::kParse) ||
       config.has_tool_mode(ToolMode::kUnparse)) {
-    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, config, writer));
+    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, script, config, writer));
   }
   if (config.has_tool_mode(ToolMode::kExecute)) {
     GOOGLESQL_RETURN_IF_ERROR(ExplainAndOrExecuteSql(nullptr, config, writer, script));
@@ -2262,7 +2271,7 @@ static absl::Status ExecuteOneQuery(absl::string_view script,
 
   if (config.has_tool_mode(ToolMode::kParse) ||
       config.has_tool_mode(ToolMode::kUnparse)) {
-    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, config, writer));
+    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, script, config, writer));
   }
 
   // Macro support is enabled by intercepting `DEFINE MACRO` statements in the
