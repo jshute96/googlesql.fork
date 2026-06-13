@@ -371,6 +371,14 @@ bool QueryExpression::TryAppendGroupByClause(
       (group_by_all_ && !pipe_mode) || !group_by_list_.empty();
 
   bool appended = false;
+  // In Pipe syntax mode, a simple (non-ROLLUP/CUBE/grouping-sets) GROUP BY can
+  // inline each key as `<expr> AS <alias>` directly, avoiding a separate
+  // `|> EXTEND` operator (and the extra output column it would materialize,
+  // which can otherwise collide with an input column of the same name).
+  const bool inline_pipe_group_by = pipe_mode &&
+                                    rollup_column_id_list_.empty() &&
+                                    grouping_set_ids_info_.IsEmpty();
+  SQLAliasPairList pipe_group_by_columns;
   if (pipe_mode) {
     // In Pipe syntax mode, the GROUP BY ... part can refer to columns only by
     // aliases, not ordinal.
@@ -378,11 +386,13 @@ bool QueryExpression::TryAppendGroupByClause(
     // along with their aliases.
     auto [group_by_columns, aggregate_columns] =
         GetGroupByAndAggregateColumns();
+    pipe_group_by_columns = group_by_columns;
 
     // If there are group-by columns, we add them along with their aliases as
     // EXTEND clauses, so that we can refer to those aliases in the GROUP BY ...
-    // part later.
-    if (!group_by_columns.empty()) {
+    // part later -- unless we will inline `<expr> AS <alias>` in a simple
+    // GROUP BY below.
+    if (!group_by_columns.empty() && !inline_pipe_group_by) {
       absl::StrAppend(&sql, "EXTEND ",
                       JoinListWithAliases(group_by_columns, ", "), kPipe);
       appended = true;
@@ -457,6 +467,10 @@ bool QueryExpression::TryAppendGroupByClause(
       };
       AppendGroupingSetIdsInfoToSql(grouping_set_ids_info_, append_column_list,
                                     sql);
+    } else if (inline_pipe_group_by) {
+      // Inline each key as `<expr> AS <alias>` (there is no preceding EXTEND to
+      // define the aliases).
+      absl::StrAppend(&sql, JoinListWithAliases(pipe_group_by_columns, ", "));
     } else {
       // We assume while iterating the group_by_list_, the entries will be
       // sorted by the column id.
