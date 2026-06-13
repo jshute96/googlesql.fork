@@ -32,6 +32,7 @@
 
 
 #include "googlesql/common/options_utils.h"
+#include "googlesql/parser/box_formatter.h"
 #include "googlesql/parser/html_formatter.h"
 #include "googlesql/parser/parse_tree.h"
 #include "googlesql/parser/parser.h"
@@ -1102,12 +1103,15 @@ static absl::Status WriteParsedAndOrUnparsedAst(
     // public interface, thus, we can only return the string.
     GOOGLESQL_RETURN_IF_ERROR(writer.parsed(root->DebugString()));
 
-    // Experimental: also emit an HTML rendering of the SQL with the parse tree
-    // expressed as nested <div>s. Best-effort -- failures are dropped silently.
+    // Experimental: also emit HTML renderings of the SQL with the parse tree
+    // expressed as nested <div>s -- one preserving the original text, one with
+    // a computed "box" layout. Best-effort -- failures are dropped silently.
     absl::StatusOr<std::string> html =
         SqlToHtml(sql, root, config.analyzer_options().language());
-    if (html.ok()) {
-      GOOGLESQL_RETURN_IF_ERROR(writer.formatted_sql_html(*html));
+    absl::StatusOr<std::string> boxed =
+        SqlToBoxHtml(sql, root, config.analyzer_options().language());
+    if (html.ok() && boxed.ok()) {
+      GOOGLESQL_RETURN_IF_ERROR(writer.formatted_sql_html(*html, *boxed));
     }
   }
   if (config.has_tool_mode(ToolMode::kUnparse)) {

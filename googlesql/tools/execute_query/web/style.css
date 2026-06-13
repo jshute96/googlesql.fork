@@ -412,6 +412,21 @@ hr {
   font-weight: bold;
 }
 
+/* The "default" pane preserves the original text; the "boxed" pane shows the
+   computed box layout. The active tab (data-sql-format on <html>) selects which
+   pane is visible; simple-box and full-box share the boxed pane and differ only
+   in decoration below. */
+.fmt-pane {
+  display: none;
+}
+html[data-sql-format="default"] .fmt-pane-default {
+  display: block;
+}
+html[data-sql-format="simple-box"] .fmt-pane-boxed,
+html[data-sql-format="full-box"] .fmt-pane-boxed {
+  display: block;
+}
+
 /* ==========================================================================
    default mode: light boxes around subqueries and pipe operators, original
    whitespace preserved.
@@ -428,144 +443,55 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
 }
 
 /* ==========================================================================
-   simple-box mode.
+   simple-box / full-box modes.
 
-   Original whitespace is collapsed (white-space: normal); layout comes from the
-   box model below. Newlines are preserved only where they carry meaning:
-   inside comments and (multi-line) string literals.
+   These render the "boxed" pane, whose text layout is already computed by the
+   pretty-printer (parser/box_formatter.h): the text contains the final
+   newlines and indentation, so we render it with white-space: pre and the AST
+   <div>s are pure inline decoration drawn on top. Because a node may span
+   several lines, an inline element's outline is drawn per line fragment, which
+   reads as boxes hugging each line of the construct.
    ========================================================================== */
-html[data-sql-format="simple-box"] .formatted-sql {
-  white-space: normal;
-  line-height: 1.5;
-}
-html[data-sql-format="simple-box"] .formatted-sql .sql-comment,
-html[data-sql-format="simple-box"] .formatted-sql .ast-StringLiteral {
-  white-space: pre-wrap;
+.formatted-sql.boxed {
+  white-space: pre;
 }
 
-/* A query block stacks its parts (the leading SELECT/FROM..., or a FROM query
-   plus a sequence of pipe operators) vertically along the left margin. */
-html[data-sql-format="simple-box"] .formatted-sql .ast-Query {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+/* simple-box: outline only the major structural nodes (subqueries, pipe
+   operators, and the top-level clauses) so the shape of the query stands out
+   without clutter. */
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-Query,
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-ExpressionSubquery,
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-TableSubquery {
+  outline: 1px solid #bbb;
+  outline-offset: 2px;
+}
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast[class*=" ast-Pipe"] {
+  outline: 1px dashed #4a90d9;
+  outline-offset: 1px;
+}
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-Select,
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-FromClause,
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-WhereClause,
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-GroupBy,
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-Having,
+html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-OrderBy {
+  outline: 1px solid rgba(0, 0, 0, 0.12);
 }
 
-/* Each main clause / pipe operator is its own horizontal box (keyword on the
-   left, content flowing to the right and wrapping under it). */
-html[data-sql-format="simple-box"] .formatted-sql .ast-Query > .ast {
-  display: block;
-  max-width: 100%;
+/* full-box: give every node a faint box and tint the major structure, so the
+   whole parse-tree nesting is visible. */
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast {
+  outline: 1px solid rgba(0, 0, 0, 0.12);
+  outline-offset: 0;
 }
-
-/* Comma-separated lists flow left-to-right and wrap. */
-html[data-sql-format="simple-box"] .formatted-sql .ast-SelectList,
-html[data-sql-format="simple-box"] .formatted-sql .ast-GroupBy,
-html[data-sql-format="simple-box"] .formatted-sql .ast-OrderBy {
-  display: inline;
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast[class*=" ast-Pipe"] {
+  outline-color: #4a90d9;
+  background: rgba(74, 144, 217, 0.05);
 }
-
-/* AGGREGATE special case: the aggregate list sits to the right of AGGREGATE,
-   but GROUP BY always drops to its own line, aligned under AGGREGATE. The
-   PipeAggregate's Select node is a wrapping flex row; giving GroupBy a full
-   row basis forces it onto the next line. */
-html[data-sql-format="simple-box"] .formatted-sql .ast-PipeAggregate > .ast-Select {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: 1ch;
-}
-html[data-sql-format="simple-box"] .formatted-sql .ast-PipeAggregate > .ast-Select > .ast-GroupBy {
-  flex-basis: 100%;
-}
-
-/* Pipe operator marker stands out a little. */
-html[data-sql-format="simple-box"] .formatted-sql .ast[class*=" ast-Pipe"] {
-  color: #1a1a1a;
-}
-
-/* ==========================================================================
-   full-box mode.
-
-   Builds on the simple-box layout but makes the nesting visible: every AST
-   node draws as an actual nested box, expressions and call arguments flow as
-   wrapping rows of boxes, joins and lists stack. The result reads as a tree of
-   non-overlapping boxes.
-   ========================================================================== */
-html[data-sql-format="full-box"] .formatted-sql {
-  white-space: normal;
-  line-height: 1.4;
-}
-html[data-sql-format="full-box"] .formatted-sql .sql-comment,
-html[data-sql-format="full-box"] .formatted-sql .ast-StringLiteral {
-  white-space: pre-wrap;
-}
-
-/* Every node is a padded, outlined box. */
-html[data-sql-format="full-box"] .formatted-sql .ast {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: 0.5ch;
-  row-gap: 2px;
-  margin: 1px;
-  padding: 0 3px;
-  border: 1px solid rgba(0, 0, 0, 0.18);
-  border-radius: 4px;
-  vertical-align: top;
-}
-
-/* Leaf-ish nodes read better as plain inline boxes. */
-html[data-sql-format="full-box"] .formatted-sql .ast-Identifier,
-html[data-sql-format="full-box"] .formatted-sql .ast-IntLiteral,
-html[data-sql-format="full-box"] .formatted-sql .ast-FloatLiteral,
-html[data-sql-format="full-box"] .formatted-sql .ast-StringLiteral,
-html[data-sql-format="full-box"] .formatted-sql .ast-StringLiteralComponent,
-html[data-sql-format="full-box"] .formatted-sql .ast-Star {
-  display: inline;
-  border-style: dotted;
-}
-
-/* The query and its clause list stack vertically. */
-html[data-sql-format="full-box"] .formatted-sql .ast-Query {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 3px;
-}
-html[data-sql-format="full-box"] .formatted-sql .ast-Query > .ast {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-/* Comma lists: each item on its own line once they no longer fit. */
-html[data-sql-format="full-box"] .formatted-sql .ast-SelectList,
-html[data-sql-format="full-box"] .formatted-sql .ast-GroupBy {
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-/* Joins read top-to-bottom. */
-html[data-sql-format="full-box"] .formatted-sql .ast-Join {
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-/* AGGREGATE special case, same idea as simple-box. */
-html[data-sql-format="full-box"] .formatted-sql .ast-PipeAggregate > .ast-Select > .ast-GroupBy {
-  flex-basis: 100%;
-}
-
-/* Tint pipe operators and clauses so the major structure pops. */
-html[data-sql-format="full-box"] .formatted-sql .ast[class*=" ast-Pipe"] {
-  border-color: #4a90d9;
-  background: rgba(74, 144, 217, 0.06);
-}
-html[data-sql-format="full-box"] .formatted-sql .ast-Select,
-html[data-sql-format="full-box"] .formatted-sql .ast-FromClause,
-html[data-sql-format="full-box"] .formatted-sql .ast-WhereClause,
-html[data-sql-format="full-box"] .formatted-sql .ast-GroupBy,
-html[data-sql-format="full-box"] .formatted-sql .ast-OrderBy {
-  background: rgba(0, 0, 0, 0.02);
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast-Select,
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast-FromClause,
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast-WhereClause,
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast-GroupBy,
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast-OrderBy {
+  background: rgba(0, 0, 0, 0.03);
 }

@@ -175,7 +175,10 @@
               <button type="button" class="fmt-tab" data-format="simple-box">Simple box</button>
               <button type="button" class="fmt-tab" data-format="full-box">Full box</button>
             </div>
-            <div class="output formatted-sql-output">{{{result_formatted_sql}}}</div>
+            <div class="output formatted-sql-output">
+              <div class="fmt-pane fmt-pane-default">{{{result_formatted_sql}}}</div>
+              <div class="fmt-pane fmt-pane-boxed">{{{result_formatted_sql_boxed}}}</div>
+            </div>
             {{/result_formatted_sql}}
 
             {{#result_explained }}

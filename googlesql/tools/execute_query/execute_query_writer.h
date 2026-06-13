@@ -49,11 +49,14 @@ class ExecuteQueryWriter {
     return WriteOperationString("parsed", parse_debug_string);
   }
 
-  // Experimental HTML rendering of the original SQL with the parse tree
-  // expressed as nested <div> elements (see parser/html_formatter.h). This is
-  // deliberately not routed through WriteOperationString: it is only meaningful
-  // in web mode, and the default is a no-op so other writers ignore it.
-  virtual absl::Status formatted_sql_html(absl::string_view html) {
+  // Experimental HTML renderings of the SQL with the parse tree expressed as
+  // nested <div> elements: `original_html` preserves the original text
+  // (parser/html_formatter.h); `boxed_html` uses a computed pretty-printed
+  // layout (parser/box_formatter.h). This is deliberately not routed through
+  // WriteOperationString: it is only meaningful in web mode, and the default is
+  // a no-op so other writers ignore it.
+  virtual absl::Status formatted_sql_html(absl::string_view original_html,
+                                          absl::string_view boxed_html) {
     return absl::OkStatus();
   }
   // Note: This is being abused in some cases to send text directly as output.

@@ -570,6 +570,34 @@ cc_test(
 )
 
 cc_library(
+    name = "box_formatter",
+    srcs = ["box_formatter.cc"],
+    hdrs = ["box_formatter.h"],
+    deps = [
+        ":parser",
+        "//googlesql/base:ret_check",
+        "//googlesql/public:language_options",
+        "//googlesql/public:parse_location",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "box_formatter_test",
+    srcs = ["box_formatter_test.cc"],
+    deps = [
+        ":box_formatter",
+        ":parser",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "//googlesql/base/testing:status_matchers",
+        "//googlesql/public:language_options",
+        "//googlesql/public:options_cc_proto",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "bison_parser_generated_lib",
     srcs = [
         "join_processor.cc",

@@ -362,6 +362,7 @@ static void RunFileBasedTest(
       "{{/result_parsed}}\n"
       "{{#result_formatted_sql}}\n"
       "result_formatted_sql:{{{result_formatted_sql}}}\n"
+      "result_formatted_sql_boxed:{{{result_formatted_sql_boxed}}}\n"
       "{{/result_formatted_sql}}\n"
       "{{#result_explained }}\n"
       "result_explained:{{result_explained}}\n"
