@@ -251,7 +251,7 @@ class Renderer {
         return;
       case Kind::kColorPush:
         out_ += absl::StrCat("<div class=\"", d->html, "\">");
-        color_stack_.push_back(d->html);
+        color_stack_.push_back({d->html, col_});
         return;
       case Kind::kColorPop:
         out_ += "</div>";
@@ -281,14 +281,29 @@ class Renderer {
     }
   }
 
-  // Emits a line break, closing the open colour regions before the newline and
-  // re-opening them after the indentation, so indentation is never coloured.
+  // Emits a line break. Each open colour region was opened at some column (its
+  // left edge); on the new line the regions are re-opened as nested bands so
+  // that each region's colour fills from its own left edge rightward. The
+  // indentation between a parent region's edge and a child's edge therefore
+  // takes the parent's colour, while the area left of the outermost region is
+  // uncoloured. This makes nested regions read as nested rectangles.
   void Newline(int indent) {
     for (size_t i = color_stack_.size(); i-- > 0;) out_ += "</div>";
     out_ += '\n';
-    out_.append(indent, ' ');
-    for (const std::string& cls : color_stack_) {
-      out_ += absl::StrCat("<div class=\"", cls, "\">");
+    int col = 0;
+    const int outer_left =
+        color_stack_.empty() ? indent
+                             : std::min(color_stack_.front().second, indent);
+    out_.append(outer_left - col, ' ');
+    col = outer_left;
+    for (size_t i = 0; i < color_stack_.size(); ++i) {
+      out_ += absl::StrCat("<div class=\"", color_stack_[i].first, "\">");
+      int band_end = (i + 1 < color_stack_.size())
+                         ? std::min(color_stack_[i + 1].second, indent)
+                         : indent;
+      if (band_end < col) band_end = col;
+      out_.append(band_end - col, ' ');
+      col = band_end;
     }
     col_ = indent;
   }
@@ -296,7 +311,8 @@ class Renderer {
   int width_;
   std::string out_;
   int col_ = 0;
-  std::vector<std::string> color_stack_;
+  // Open colour regions as (CSS class, column where opened).
+  std::vector<std::pair<std::string, int>> color_stack_;
 };
 
 // ---------------------------------------------------------------------------
