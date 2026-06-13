@@ -448,67 +448,62 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
    These render the "boxed" pane, whose text layout is already computed by the
    pretty-printer (parser/box_formatter.h): the text contains the final
    newlines and indentation, so we render it with white-space: pre and the AST
-   <div>s are pure inline decoration drawn on top. Because a node may span
-   several lines, an inline element's outline is drawn per line fragment, which
-   reads as boxes hugging each line of the construct.
+   <div>s are pure inline decoration drawn on top.
+
+   Structure is shown with solid background tints rather than per-node borders
+   (borders on an inline element that wraps across lines draw a separate box per
+   line, which looks broken). To make a multi-line node's background a single
+   continuous region with no gaps between lines, the tint classes add vertical
+   padding equal to the line leading and use box-decoration-break: clone, so the
+   background of every line fragment fills the full line height and they touch.
    ========================================================================== */
 .formatted-sql.boxed {
   white-space: pre;
+  line-height: 1.4;
+}
+.formatted-sql.boxed .ast,
+.formatted-sql.boxed .subq-bg {
+  display: inline;
 }
 
-/* Alternating background tints (shared by both box modes). The formatter
-   emits a `subq-bg subq-a`/`subq-b` wrapper around each subquery, alternating
-   by nesting depth, so a nested subquery contrasts with its parent; and
-   `pipe-a`/`pipe-b` on successive pipe operators in a chain. The colours are
-   subtle so outlines and text stay legible. */
+/* Any tinted region: fill the full line height (no gaps) across wrapped lines. */
+.formatted-sql.boxed .subq-a,
+.formatted-sql.boxed .subq-b,
+.formatted-sql.boxed .pipe-a,
+.formatted-sql.boxed .pipe-b,
+.formatted-sql.boxed .clause-bg {
+  padding: 0.2em 0;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* Alternating tints (shared by both box modes): the formatter wraps each
+   subquery in `subq-bg subq-a`/`subq-b` (alternating by nesting depth) and tags
+   successive pipe operators `pipe-a`/`pipe-b`. One tint is left transparent so
+   the alternation reads as "lighter / darker". */
 .formatted-sql.boxed .subq-a {
-  background: rgba(74, 144, 217, 0.10);
+  background: rgba(70, 130, 180, 0.10);
 }
 .formatted-sql.boxed .subq-b {
-  background: rgba(240, 173, 78, 0.13);
+  background: rgba(70, 130, 180, 0.20);
 }
 .formatted-sql.boxed .pipe-a {
-  background: rgba(0, 0, 0, 0.04);
+  background: transparent;
 }
 .formatted-sql.boxed .pipe-b {
-  background: rgba(74, 144, 217, 0.08);
+  background: rgba(0, 0, 0, 0.05);
 }
 
-/* simple-box: outline only the major structural nodes (subqueries, pipe
-   operators, and the top-level clauses) so the shape of the query stands out
-   without clutter. */
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-Query,
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-ExpressionSubquery,
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-TableSubquery {
-  outline: 1px solid #bbb;
-  outline-offset: 2px;
-}
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast[class*=" ast-Pipe"] {
-  outline: 1px dashed #4a90d9;
-  outline-offset: 1px;
-}
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-Select,
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-FromClause,
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-WhereClause,
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-GroupBy,
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-Having,
-html[data-sql-format="simple-box"] .formatted-sql.boxed .ast-OrderBy {
-  outline: 1px solid rgba(0, 0, 0, 0.12);
-}
-
-/* full-box: give every node a faint box and tint the major structure, so the
-   whole parse-tree nesting is visible. */
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast {
-  outline: 1px solid rgba(0, 0, 0, 0.12);
-  outline-offset: 0;
-}
-html[data-sql-format="full-box"] .formatted-sql.boxed .ast[class*=" ast-Pipe"] {
-  outline-color: #4a90d9;
-}
+/* full-box additionally tints the major query clauses so the whole structure
+   reads, still as solid backgrounds rather than boxes. */
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast-Select,
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast-FromClause,
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast-WhereClause,
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast-GroupBy,
+html[data-sql-format="full-box"] .formatted-sql.boxed .ast-Having,
 html[data-sql-format="full-box"] .formatted-sql.boxed .ast-OrderBy {
-  background: rgba(0, 0, 0, 0.03);
+  background: rgba(0, 0, 0, 0.04);
+  padding: 0.2em 0;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }

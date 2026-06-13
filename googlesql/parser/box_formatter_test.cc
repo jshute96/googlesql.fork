@@ -79,6 +79,14 @@ std::string Box(absl::string_view sql, int width = 60,
   return PlainText(BoxHtml(sql, width, options));
 }
 
+TEST(BoxFormatterTest, JoinChainEachJoinOnOwnLineUnderFrom) {
+  EXPECT_THAT(
+      Box("SELECT a.x FROM aa AS a JOIN bb AS b ON a.id = b.id "
+          "LEFT JOIN cc AS c ON b.k = c.k"),
+      Eq("SELECT a.x\nFROM aa AS a\nJOIN bb AS b ON a.id = b.id\n"
+         "LEFT JOIN cc AS c ON b.k = c.k"));
+}
+
 TEST(BoxFormatterTest, AndChainBreaksBeforeOperator) {
   EXPECT_THAT(Box("SELECT 1 FROM t WHERE aa = 1 AND bb = 2 AND cc = 3", 24),
               Eq("SELECT 1\nFROM t\nWHERE\n  aa = 1\n  AND bb = 2\n  AND cc = 3"));

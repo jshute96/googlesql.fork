@@ -726,6 +726,14 @@ class Builder {
       content_pieces.insert(content_pieces.begin(),
                             Piece{nullptr, kw_end, ps[0].end});
     }
+    // Join chain (FROM a JOIN b ON ...): keep the leading table on the keyword
+    // line and align each "[LEFT] JOIN" under the keyword (no extra indent).
+    if (content_pieces.size() == 1 && content_pieces[0].child != nullptr &&
+        content_pieces[0].child->GetNodeKindString() == "Join" &&
+        HasExplicitJoin(content_pieces[0].child)) {
+      return Concat({Esc(keyword), Esc(" "),
+                     Build(content_pieces[0].child, ctx)});
+    }
     DocPtr content;
     if (IsCommaList(content_pieces, 0)) {
       content = BuildListBody(content_pieces, 0, ctx);
@@ -1037,9 +1045,81 @@ class Builder {
     return any_comma;
   }
 
+  // True if the join (sub)tree contains an explicit JOIN (a join operator other
+  // than a comma).
+  bool HasExplicitJoin(const ASTNode* node) const {
+    for (int i = 0; i < node->num_children(); ++i) {
+      const ASTNode* c = node->child(i);
+      if (c == nullptr) continue;
+      const std::string k = c->GetNodeKindString();
+      if (k == "Join") {
+        if (HasExplicitJoin(c)) return true;
+      } else if (k == "Location") {
+        const int s = c->start_location().GetByteOffset();
+        const int e = c->end_location().GetByteOffset();
+        if (std::string(absl::StripAsciiWhitespace(sql_.substr(s, e - s))) !=
+            ",") {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Flattens a (left-nested) join tree into its children in source order.
+  void FlattenJoinItems(const ASTNode* node,
+                        std::vector<const ASTNode*>* items) {
+    std::vector<const ASTNode*> kids;
+    for (int i = 0; i < node->num_children(); ++i) {
+      if (node->child(i) != nullptr) kids.push_back(node->child(i));
+    }
+    std::sort(kids.begin(), kids.end(), [](const ASTNode* a, const ASTNode* b) {
+      return a->start_location().GetByteOffset() <
+             b->start_location().GetByteOffset();
+    });
+    for (const ASTNode* c : kids) {
+      if (c->GetNodeKindString() == "Join") {
+        FlattenJoinItems(c, items);
+      } else {
+        items->push_back(c);
+      }
+    }
+  }
+
+  // A join chain: each "[LEFT/...] JOIN <table> ON ..." starts a new line,
+  // aligned with the leading table (which sits on the FROM keyword's line).
+  DocPtr BuildJoinChain(const ASTNode* node, Ctx ctx) {
+    std::vector<const ASTNode*> items;
+    FlattenJoinItems(node, &items);
+    std::vector<DocPtr> parts;
+    bool need_space = false;
+    for (const ASTNode* item : items) {
+      if (item->GetNodeKindString() == "Location") {
+        const int s = item->start_location().GetByteOffset();
+        const int e = item->end_location().GetByteOffset();
+        std::string op =
+            std::string(absl::StripAsciiWhitespace(sql_.substr(s, e - s)));
+        if (op == ",") {
+          parts.push_back(Esc(","));  // a comma stays on the previous line
+        } else {
+          parts.push_back(HardLine());
+          parts.push_back(Esc(op));
+        }
+        need_space = true;
+      } else {
+        if (need_space) parts.push_back(Esc(" "));
+        parts.push_back(Build(item, ctx));
+        need_space = true;
+      }
+    }
+    return Concat(std::move(parts));
+  }
+
   // A FROM table expression: a plain comma-separated table list breaks one per
-  // line when it doesn't fit; explicit JOINs (with ON/USING) stay inline.
+  // line when it doesn't fit; an explicit JOIN chain puts each JOIN on its own
+  // line (see also BuildClause, which keeps the JOINs aligned under FROM).
   DocPtr BuildJoin(const ASTNode* node, const std::vector<Piece>& ps, Ctx ctx) {
+    if (HasExplicitJoin(node)) return BuildJoinChain(node, ctx);
     std::vector<const ASTNode*> tables;
     if (!CollectCommaJoin(node, &tables) || tables.size() < 2) {
       return BuildFlow(ps, ctx, /*wrap=*/false);
