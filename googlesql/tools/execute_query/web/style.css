@@ -445,57 +445,63 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
 /* ==========================================================================
    simple-box / full-box modes.
 
-   These render the "boxed" pane, whose text layout is already computed by the
-   pretty-printer (parser/box_formatter.h): the text contains the final newlines
-   and indentation, so we render it with white-space: pre and the AST <div>s are
-   pure inline decoration drawn on top.
-
-   Structure is shown with solid background colours (no borders). A query/region
-   is wrapped in a "rgncolor" <div>; the renderer closes and re-opens these
-   wrappers around each line's indentation, so every region is a single-line
-   inline element whose background hugs the content (it never covers the leading
-   indentation, the parentheses around a subquery, or runs to the left margin).
-   Colours are OPAQUE so adjacent regions never add up into darker seams; small
-   vertical padding fills the line leading so a stack of same-coloured lines
-   reads as one continuous block.
+   The "boxed" pane's text layout is computed by the pretty-printer
+   (parser/box_formatter.h). Each query / pipe segment / subquery / table name
+   is wrapped in a "rect" <div> rendered as an inline-block box: it shrink-wraps
+   to its widest line (so the highlight is a real rectangle, not ragged), and
+   its contents are indented relative to it, so nested regions render as nested
+   rectangles. Colours are opaque. Subqueries and table names also get a 1px
+   border (they will be clickable/hoverable).
    ========================================================================== */
 .formatted-sql.boxed {
   white-space: pre;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 .formatted-sql.boxed .ast {
   display: inline;
 }
-.formatted-sql.boxed .rgncolor {
-  display: inline;
-  padding: 0.2em 0;
+.formatted-sql.boxed .rect {
+  display: inline-block;
+  vertical-align: top;
+  white-space: pre;
+  box-sizing: border-box;
 }
 
 /* Region colours.
    - A standard query (q-whole) and a top-level pipe chain use the grey family.
-   - Subqueries alternate blue / green by nesting depth (subq-blue / subq-green),
-     so each level contrasts with its parent.
-   - Pipe segments are a lighter ("-a", the box colour) / darker ("-b", ~20%
-     darker) pair of the enclosing query's family, so a pipe chain reads as
-     alternating bands within its query's box. */
-.formatted-sql.boxed .q-whole,
-.formatted-sql.boxed .seg-grey-a {
+   - Subqueries alternate blue / green by nesting depth.
+   - Pipe segments are a darker ("-b", first/odd) / lighter ("-a") pair of the
+     enclosing query's family, so a pipe chain reads as alternating bands. */
+.rect.q-whole,
+.rect.seg-grey-a {
   background: #eef1f5;
 }
-.formatted-sql.boxed .seg-grey-b {
-  background: #bfc6d0;  /* ~20% darker than grey-a */
+.rect.seg-grey-b {
+  background: #bfc6d0;
 }
-.formatted-sql.boxed .subq-blue,
-.formatted-sql.boxed .seg-blue-a {
+.rect.subq-blue,
+.rect.seg-blue-a {
   background: #dde9fb;
 }
-.formatted-sql.boxed .seg-blue-b {
-  background: #b1bdc9;  /* ~20% darker than blue-a */
+.rect.seg-blue-b {
+  background: #b1bdc9;
 }
-.formatted-sql.boxed .subq-green,
-.formatted-sql.boxed .seg-green-a {
+.rect.subq-green,
+.rect.seg-green-a {
   background: #e1f2e1;
 }
-.formatted-sql.boxed .seg-green-b {
-  background: #b4c2b4;  /* ~20% darker than green-a */
+.rect.seg-green-b {
+  background: #b4c2b4;
+}
+
+/* Clickable regions get a 1px border. */
+.rect.subq-blue {
+  border: 1px solid #9bb8df;
+}
+.rect.subq-green {
+  border: 1px solid #9ac79a;
+}
+.rect.table {
+  background: #ffe4bf;
+  border: 1px solid #e0a24c;
 }

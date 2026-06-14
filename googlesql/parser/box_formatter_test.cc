@@ -162,9 +162,13 @@ TEST(BoxFormatterTest, SubqueryInlineWhenItFits) {
               Eq("SELECT *\nFROM (SELECT 1) AS s"));
 }
 
-TEST(BoxFormatterTest, SubqueryContentsIndentWhenBroken) {
-  std::string out = Box("SELECT x FROM t WHERE a IN (SELECT y FROM uuuuuu)", 24);
-  EXPECT_THAT(out, HasSubstr("IN (\n    SELECT y\n    FROM uuuuuu\n  )"));
+TEST(BoxFormatterTest, SubqueryContentsBreakWhenLong) {
+  // The subquery body breaks across lines inside its own region. (Visual
+  // indentation comes from the inline-block box, so the stripped text is
+  // relative to the box rather than absolutely indented.)
+  std::string sql = "SELECT x FROM t WHERE a IN (SELECT y FROM uuuuuu)";
+  EXPECT_THAT(BoxHtml(sql, 24), HasSubstr("rect subq-blue"));
+  EXPECT_THAT(Box(sql, 24), HasSubstr("SELECT y\nFROM uuuuuu"));
 }
 
 TEST(BoxFormatterTest, LineCommentPreserved) {
@@ -213,19 +217,19 @@ TEST(BoxFormatterTest, StructKeepsParens) {
 TEST(BoxFormatterTest, SubqueryColorsAlternateByDepth) {
   // Depth 1 is blue, depth 2 is green, depth 3 is blue again.
   EXPECT_THAT(BoxHtml("SELECT * FROM (SELECT 1) AS s"),
-              HasSubstr("rgncolor subq-blue"));
+              HasSubstr("rect subq-blue"));
   EXPECT_THAT(BoxHtml("SELECT * FROM (SELECT * FROM (SELECT 1) AS i) AS o"),
-              HasSubstr("rgncolor subq-green"));
+              HasSubstr("rect subq-green"));
   EXPECT_THAT(
       BoxHtml("SELECT * FROM (SELECT * FROM (SELECT * FROM (SELECT 1) AS a) "
               "AS b) AS c"),
-      HasSubstr("rgncolor subq-blue"));
+      HasSubstr("rect subq-blue"));
 }
 
 TEST(BoxFormatterTest, SubqueryColorWrapsBodyNotParens) {
   // The colour region is the query body; "(" is outside it.
   std::string html = BoxHtml("SELECT * FROM (SELECT 1) AS s");
-  EXPECT_THAT(html, HasSubstr("(<div class=\"rgncolor subq-blue\">"));
+  EXPECT_THAT(html, HasSubstr("(<div class=\"rect subq-blue\">"));
 }
 
 TEST(BoxFormatterTest, PipeSegmentsHaveAlternatingBackgroundClass) {
@@ -237,9 +241,16 @@ TEST(BoxFormatterTest, PipeSegmentsHaveAlternatingBackgroundClass) {
 
 TEST(BoxFormatterTest, StandardQueryHasSingleWholeBackground) {
   std::string html = BoxHtml("SELECT a FROM t WHERE x > 1");
-  EXPECT_THAT(html, HasSubstr("rgncolor q-whole"));
+  EXPECT_THAT(html, HasSubstr("rect q-whole"));
   // No pipe-segment tints in a standard query.
   EXPECT_THAT(html, Not(HasSubstr("seg-grey-")));
+}
+
+TEST(BoxFormatterTest, TableNameHasItsOwnRegion) {
+  std::string html = BoxHtml("SELECT x FROM my_table");
+  EXPECT_THAT(html, HasSubstr("rect table"));
+  // The table path is inside the table region.
+  EXPECT_THAT(html, HasSubstr("rect table\"><div class=\"ast ast-PathExpression"));
 }
 
 TEST(BoxFormatterTest, CommentBetweenPipesHasNoBlankLines) {

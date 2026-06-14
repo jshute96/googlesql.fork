@@ -171,14 +171,13 @@ DocPtr Concat(std::vector<DocPtr> parts) {
   d->children = std::move(parts);
   return d;
 }
-// Opens a background-colour region with CSS class "rgncolor <cls>". The
-// renderer tracks open regions and re-emits them after each line's
-// indentation, so a colour never covers the leading whitespace of a wrapped
-// line (the colour hugs the content, not the indent).
+// Opens a rectangular region (a single inline-block box) with CSS class
+// "rect <cls>". Nested regions render as nested rectangles; the box shrink-
+// wraps to its widest line and its contents are indented relative to it.
 DocPtr ColorPush(absl::string_view cls) {
   auto d = std::make_shared<Doc>();
   d->kind = Kind::kColorPush;
-  d->html = absl::StrCat("rgncolor ", cls);
+  d->html = std::string(cls);
   return d;
 }
 DocPtr ColorPop() {
@@ -250,12 +249,15 @@ class Renderer {
         col_ += d->width;
         return;
       case Kind::kColorPush:
-        out_ += absl::StrCat("<div class=\"", d->html, "\">");
-        color_stack_.push_back({d->html, col_});
+        // A region is a single inline-block box (see CSS .rect) that shrink-
+        // wraps to its widest line. Its contents are indented relative to where
+        // the box opens, so nested regions render as nested rectangles.
+        out_ += absl::StrCat("<div class=\"rect ", d->html, "\">");
+        region_base_.push_back(col_);
         return;
       case Kind::kColorPop:
         out_ += "</div>";
-        if (!color_stack_.empty()) color_stack_.pop_back();
+        if (!region_base_.empty()) region_base_.pop_back();
         return;
       case Kind::kLine:
         if (flat && !d->hard) {
@@ -281,38 +283,25 @@ class Renderer {
     }
   }
 
-  // Emits a line break. Each open colour region was opened at some column (its
-  // left edge); on the new line the regions are re-opened as nested bands so
-  // that each region's colour fills from its own left edge rightward. The
-  // indentation between a parent region's edge and a child's edge therefore
-  // takes the parent's colour, while the area left of the outermost region is
-  // uncoloured. This makes nested regions read as nested rectangles.
+  // Emits a line break. Indentation is emitted relative to the innermost open
+  // region's left edge (the column where it opened), because each region is an
+  // inline-block box that provides its own left offset; emitting absolute
+  // indentation would double-count it. `col_` still tracks the absolute column
+  // for layout/fit decisions.
   void Newline(int indent) {
-    for (size_t i = color_stack_.size(); i-- > 0;) out_ += "</div>";
     out_ += '\n';
-    int col = 0;
-    const int outer_left =
-        color_stack_.empty() ? indent
-                             : std::min(color_stack_.front().second, indent);
-    out_.append(outer_left - col, ' ');
-    col = outer_left;
-    for (size_t i = 0; i < color_stack_.size(); ++i) {
-      out_ += absl::StrCat("<div class=\"", color_stack_[i].first, "\">");
-      int band_end = (i + 1 < color_stack_.size())
-                         ? std::min(color_stack_[i + 1].second, indent)
-                         : indent;
-      if (band_end < col) band_end = col;
-      out_.append(band_end - col, ' ');
-      col = band_end;
-    }
+    const int base = region_base_.empty() ? 0 : region_base_.back();
+    int rel = indent - base;
+    if (rel < 0) rel = 0;
+    out_.append(rel, ' ');
     col_ = indent;
   }
 
   int width_;
   std::string out_;
   int col_ = 0;
-  // Open colour regions as (CSS class, column where opened).
-  std::vector<std::pair<std::string, int>> color_stack_;
+  // Absolute column where each currently-open region was opened.
+  std::vector<int> region_base_;
 };
 
 // ---------------------------------------------------------------------------
@@ -383,6 +372,7 @@ enum class Layout {
   kSetOp,
   kCase,
   kJoin,
+  kTablePath,  // a table reference; its name path gets its own region
 };
 
 // Per-node-kind layout overrides. Node kinds are GetNodeKindString() values
@@ -402,6 +392,7 @@ const absl::flat_hash_map<absl::string_view, Layout>& LayoutConfig() {
           {"SetOperation", Layout::kSetOp},
           {"CaseNoValueExpression", Layout::kCase},
           {"Join", Layout::kJoin},
+          {"TablePathExpression", Layout::kTablePath},
       };
   return *config;
 }
@@ -750,10 +741,34 @@ class Builder {
         return BuildCase(ps, ctx);
       case Layout::kJoin:
         return BuildJoin(node, ps, ctx);
+      case Layout::kTablePath:
+        return BuildTablePath(ps, ctx);
       case Layout::kFlow:
         return BuildFlow(ps, ctx, /*wrap=*/false);
     }
     return BuildFlow(ps, ctx, /*wrap=*/false);
+  }
+
+  // A table reference: the table-name path is wrapped in its own (orange)
+  // region so it can be highlighted and (later) clicked. Other children (e.g.
+  // an alias) render normally.
+  DocPtr BuildTablePath(const std::vector<Piece>& ps, Ctx ctx) {
+    std::vector<DocPtr> parts;
+    bool named = false;
+    for (const Piece& p : ps) {
+      if (p.child != nullptr) {
+        if (!named && p.child->GetNodeKindString() == "PathExpression") {
+          parts.push_back(Region("table", Build(p.child, ctx)));
+          named = true;
+        } else {
+          parts.push_back(Build(p.child, ctx));
+        }
+      } else {
+        DocPtr g = GapInline(p);
+        if (g->kind != Kind::kNil) parts.push_back(g);
+      }
+    }
+    return Concat(std::move(parts));
   }
 
   // Inline rendering: children + literal gaps. With `wrap`, an inter-child gap
@@ -1049,8 +1064,9 @@ class Builder {
       if (p.child != nullptr) {
         if (!first) parts.push_back(ClauseSep(ctx));
         if (has_pipe) {
+          // Alternate darker/lighter, starting with the darker shade ("-b").
           std::string cls =
-              absl::StrCat("seg-", family, "-", (seg++ % 2 == 0) ? "a" : "b");
+              absl::StrCat("seg-", family, "-", (seg++ % 2 == 0) ? "b" : "a");
           parts.push_back(Region(cls, Build(p.child, ctx)));
         } else {
           parts.push_back(Build(p.child, ctx));
