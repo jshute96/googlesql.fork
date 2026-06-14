@@ -141,6 +141,12 @@ struct ResolveQueryOptions {
   // ResolvedGeneralizedQueryStmt is enabled in SupportedStatementKinds, and
   // then it will be turned off for nested queries.
   bool allow_terminal = false;
+
+  // An optional human-readable title recorded for this query node in
+  // `ast_node_resolved_info_map_`, used by query visualizer tooling as a
+  // heading. If empty, a title is derived from the query's role (outer query,
+  // expression subquery, or a generic query fragment).
+  std::string node_title_hint;
 };
 
 // This class contains most of the implementation of GoogleSQL analysis.

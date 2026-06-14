@@ -1147,23 +1147,42 @@ static std::string DescribeNameListHtml(const NameList& name_list,
   return absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}});
 }
 
-// Builds the hover-box HTML for an AST node's resolver info: the input and/or
-// output NameLists, each under a heading.
+// Builds the hover-box HTML for an AST node's resolver info: an optional title
+// heading, then the NameList(s).  When both an input and output NameList are
+// present (e.g. a pipe operator), they are shown as a single merged diff under
+// an "Input / output NameList" heading; a pass-through operator like `|> WHERE`
+// then shows no diff markers.  When only one NameList is present (e.g. a query's
+// output or a table scan), it is shown on its own.
 static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
                                          ProductMode product_mode) {
   std::string html;
-  auto add = [&](absl::string_view heading,
-                 const std::shared_ptr<const NameList>& nl) {
-    if (nl == nullptr) return;
+  if (!info.node_title.empty()) {
+    absl::StrAppend(&html, "<div class=\"hi-title\">",
+                    EscapeHtmlText(info.node_title), "</div>");
+  }
+  auto add_single = [&](absl::string_view heading, const NameList& nl) {
     absl::StrAppend(&html, "<div class=\"hi-h\">", heading,
                     "</div><div class=\"hi-nl\">",
-                    DescribeNameListHtml(*nl, product_mode), "</div>");
+                    DescribeNameListHtml(nl, product_mode), "</div>");
   };
   if (info.resolved_scan_info.has_value()) {
-    add("Input NameList", info.resolved_scan_info->input_name_list);
-    add("Output NameList", info.resolved_scan_info->output_name_list);
-  } else if (info.table_scan_info.has_value()) {
-    add("Output NameList", info.table_scan_info->output_name_list);
+    const auto& scan = *info.resolved_scan_info;
+    if (scan.input_name_list != nullptr && scan.output_name_list != nullptr) {
+      absl::StrAppend(
+          &html, "<div class=\"hi-h\">Input / output NameList</div>",
+          "<div class=\"hi-nl\">",
+          reflection::FormatResultTableDiffHtml(
+              scan.input_name_list->Describe(product_mode),
+              scan.output_name_list->Describe(product_mode)),
+          "</div>");
+    } else if (scan.output_name_list != nullptr) {
+      add_single("Output NameList", *scan.output_name_list);
+    } else if (scan.input_name_list != nullptr) {
+      add_single("Input NameList", *scan.input_name_list);
+    }
+  } else if (info.table_scan_info.has_value() &&
+             info.table_scan_info->output_name_list != nullptr) {
+    add_single("Output NameList", *info.table_scan_info->output_name_list);
   }
   return html;
 }

@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "absl/container/flat_hash_map.h"
 
@@ -62,6 +63,11 @@ struct ResolvedScanInfo {
 // and similar tooling.  Which fields are populated depends on the kind of node
 // and what the resolver was able to learn about it.
 struct ASTNodeResolvedInfo {
+  // A short human-readable title for this node, for use as a heading in
+  // visualizer tooling. Examples: "Table my.dataset.T", "|> WHERE",
+  // "FROM query", "Table subquery", "CTE subquery cte_name". May be empty.
+  std::string node_title;
+
   // Set when this AST node resolved to a ResolvedTableScan.
   std::optional<TableScanInfo> table_scan_info;
 

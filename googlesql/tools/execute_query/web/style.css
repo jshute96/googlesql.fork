@@ -536,14 +536,35 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
 .formatted-sql.boxed .rect:has(.rect:hover) > .hover-info {
   display: none;
 }
+.formatted-sql.boxed .hi-title {
+  font-weight: bold;
+  font-size: 13px;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #ccc;
+}
 .formatted-sql.boxed .hi-h {
   font-weight: bold;
-  margin: 6px 0 2px;
+  /* Extra top margin gives a blank line of separation between successive
+     NameList sections (e.g. input vs. output). */
+  margin: 14px 0 2px;
 }
+.formatted-sql.boxed .hi-title + .hi-h,
 .formatted-sql.boxed .hi-h:first-child {
   margin-top: 0;
 }
 .formatted-sql.boxed .hi-nl {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   white-space: pre;
+}
+/* NameList diff markers: removed items struck out on red, added items on
+   green. Inline so they sit within the monospace table layout. */
+.formatted-sql.boxed .nl-del {
+  background: #ffd7d5;
+  color: #82071e;
+  text-decoration: line-through;
+}
+.formatted-sql.boxed .nl-add {
+  background: #d2f8d2;
+  color: #0a5c2b;
 }

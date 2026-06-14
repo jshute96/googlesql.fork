@@ -734,7 +734,7 @@ class Builder {
     std::vector<Piece> ps = Pieces(node);
     switch (ResolveLayout(kind, ps)) {
       case Layout::kVertical:
-        return BuildVertical(ps, ctx);
+        return BuildVertical(node, ps, ctx);
       case Layout::kSelect:
         return BuildSelect(ps, ctx);
       case Layout::kParen:
@@ -870,8 +870,8 @@ class Builder {
     inner.subquery_depth = ctx.subquery_depth + 1;
     // Only the query body is coloured; the parentheses and the leading
     // indentation stay the parent's colour.
-    DocPtr body = Region(SubqueryColor(inner.subquery_depth),
-                         Build(query, inner));
+    DocPtr body = RegionAnnotated(SubqueryColor(inner.subquery_depth), query,
+                                  Build(query, inner));
     return Group(Concat({Esc("("), Nest(kDefaultIndent, Concat({Line(""), body})),
                          Line(""), Esc(")")}));
   }
@@ -1021,8 +1021,9 @@ class Builder {
 
     // Only the query body is coloured; the parentheses / alias / indentation
     // stay the parent's colour.
-    DocPtr body = Region(SubqueryColor(inner_ctx.subquery_depth),
-                         Build(ps[body_idx].child, inner_ctx));
+    DocPtr body = RegionAnnotated(SubqueryColor(inner_ctx.subquery_depth),
+                                  ps[body_idx].child,
+                                  Build(ps[body_idx].child, inner_ctx));
     // Consume the closing-paren gap right after the body, if present.
     size_t after = body_idx + 1;
     if (after < ps.size() && ps[after].child == nullptr &&
@@ -1054,7 +1055,8 @@ class Builder {
   // Stack children, each on its own line (a query's clauses / pipe operators).
   // At the top level (flatten_query == false) the stacking is unconditional;
   // inside a subquery it is governed by the enclosing paren group.
-  DocPtr BuildVertical(const std::vector<Piece>& ps, Ctx ctx) {
+  DocPtr BuildVertical(const ASTNode* node, const std::vector<Piece>& ps,
+                       Ctx ctx) {
     // A pipe query (FROM ... |> ... |> ...) colours each segment (the leading
     // FROM query and each pipe operator) as one solid alternating-tinted unit,
     // including its "|>" marker. A standard query has no pipe segments and is
@@ -1100,7 +1102,7 @@ class Builder {
     // A standard (non-pipe) top-level query is one solid colour. Nested queries
     // are coloured by their enclosing subquery wrapper instead.
     if (!has_pipe && !ctx.flatten_query && ctx.subquery_depth == 0) {
-      body = Region("q-whole", body);
+      body = RegionAnnotated("q-whole", node, body);
     }
     return body;
   }
