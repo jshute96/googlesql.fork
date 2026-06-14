@@ -445,6 +445,9 @@ class Builder {
     for (int i = 0; i < node->num_children(); ++i) {
       const ASTNode* c = node->child(i);
       if (c == nullptr) continue;
+      // The pipe-JOIN LHS placeholder stands in for the pipe input; its source
+      // range spans the whole join, so rendering it would duplicate the join.
+      if (c->GetNodeKindString() == "PipeJoinLhsPlaceholder") continue;
       const int s = c->start_location().GetByteOffset();
       const int e = c->end_location().GetByteOffset();
       if (s < 0 || e <= s || s < ns || e > ne) continue;
@@ -994,8 +997,12 @@ class Builder {
       if (p.child != nullptr) {
         parts.push_back(Nest(3, Build(p.child, inner_ctx)));
       } else {
-        // The leading "|>" marker (and any stray punctuation/keywords).
+        // The leading "|>" marker (and any stray punctuation/keywords). Always
+        // put a space after the bare "|>" before the operator; for most
+        // operators the gap's trailing space supplies it, but for `|> JOIN` the
+        // following Join node's range swallows the space.
         std::string c = CollapseWs(GapText(p));
+        if (c == "|>") c = "|> ";
         if (!c.empty()) parts.push_back(Esc(c));
       }
     }
@@ -1271,7 +1278,11 @@ class Builder {
              b->start_location().GetByteOffset();
     });
     for (const ASTNode* c : kids) {
-      if (c->GetNodeKindString() == "Join") {
+      const std::string k = c->GetNodeKindString();
+      // Skip the pipe-JOIN LHS placeholder (the implicit pipe input); its range
+      // spans the whole join, so emitting it would duplicate the join text.
+      if (k == "PipeJoinLhsPlaceholder") continue;
+      if (k == "Join") {
         FlattenJoinItems(c, items);
       } else {
         items->push_back(c);
@@ -1286,6 +1297,7 @@ class Builder {
     FlattenJoinItems(node, &items);
     std::vector<DocPtr> parts;
     bool need_space = false;
+    bool first = true;
     for (const ASTNode* item : items) {
       if (item->GetNodeKindString() == "Location") {
         const int s = item->start_location().GetByteOffset();
@@ -1295,7 +1307,10 @@ class Builder {
         if (op == ",") {
           parts.push_back(Esc(","));  // a comma stays on the previous line
         } else {
-          parts.push_back(HardLine());
+          // A leading JOIN keyword (a pipe `|> JOIN`, where there is no prior
+          // table on this line) stays inline; otherwise each JOIN starts a new
+          // line aligned under the leading table.
+          if (!first) parts.push_back(HardLine());
           parts.push_back(Esc(op));
         }
         need_space = true;
@@ -1304,6 +1319,7 @@ class Builder {
         parts.push_back(Build(item, ctx));
         need_space = true;
       }
+      first = false;
     }
     return Concat(std::move(parts));
   }

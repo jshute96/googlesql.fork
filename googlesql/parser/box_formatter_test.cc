@@ -259,5 +259,15 @@ TEST(BoxFormatterTest, CommentBetweenPipesHasNoBlankLines) {
   EXPECT_THAT(out, Eq("FROM t\n|> WHERE x > 1 -- note\n|> SELECT y"));
 }
 
+TEST(BoxFormatterTest, PipeJoinRendersOnceWithSpaceAfterMarker) {
+  // The pipe-JOIN LHS placeholder node spans the whole join; it must not be
+  // rendered (which previously duplicated the JOIN line), and "|>" gets a space
+  // before the JOIN keyword even though the Join node's range swallows it.
+  std::string out = Box(
+      "FROM t AS a |> JOIN u AS b ON a.id = b.id |> SELECT a.x", 80);
+  EXPECT_THAT(out,
+              Eq("FROM t AS a\n|> JOIN u AS b ON a.id = b.id\n|> SELECT a.x"));
+}
+
 }  // namespace
 }  // namespace googlesql
