@@ -189,6 +189,12 @@ DocPtr ColorPop() {
 DocPtr Region(absl::string_view cls, DocPtr inner) {
   return Concat({ColorPush(cls), std::move(inner), ColorPop()});
 }
+// A hover box attached inside a region (shown on :hover via CSS). The content
+// is supplied as ready-made HTML and emitted verbatim (zero layout width).
+DocPtr HoverBox(absl::string_view html) {
+  return Concat({Tag("<div class=\"hover-info\">"), Tag(std::string(html)),
+                 Tag("</div>")});
+}
 
 constexpr int kInf = 1 << 29;
 
@@ -399,7 +405,8 @@ const absl::flat_hash_map<absl::string_view, Layout>& LayoutConfig() {
 
 class Builder {
  public:
-  explicit Builder(absl::string_view sql) : sql_(sql) {}
+  Builder(absl::string_view sql, BoxAnnotator annotate)
+      : sql_(sql), annotate_(std::move(annotate)) {}
 
   // ctx.flatten_query: whether a Query may be laid out inline (true inside a
   // subquery's parentheses) vs. always stacked (false at the top level).
@@ -422,6 +429,15 @@ class Builder {
   }
 
  private:
+  // Wraps `inner` in a colour region for `node`, attaching a hover box if the
+  // annotator has HTML for that node.
+  DocPtr RegionAnnotated(absl::string_view cls, const ASTNode* node,
+                         DocPtr inner) {
+    std::string hover = annotate_ ? annotate_(node) : "";
+    if (hover.empty()) return Region(cls, std::move(inner));
+    return Region(cls, Concat({std::move(inner), HoverBox(hover)}));
+  }
+
   std::vector<Piece> Pieces(const ASTNode* node) {
     const int ns = node->start_location().GetByteOffset();
     const int ne = node->end_location().GetByteOffset();
@@ -758,7 +774,7 @@ class Builder {
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
         if (!named && p.child->GetNodeKindString() == "PathExpression") {
-          parts.push_back(Region("table", Build(p.child, ctx)));
+          parts.push_back(RegionAnnotated("table", p.child, Build(p.child, ctx)));
           named = true;
         } else {
           parts.push_back(Build(p.child, ctx));
@@ -1067,7 +1083,7 @@ class Builder {
           // Alternate darker/lighter, starting with the darker shade ("-b").
           std::string cls =
               absl::StrCat("seg-", family, "-", (seg++ % 2 == 0) ? "b" : "a");
-          parts.push_back(Region(cls, Build(p.child, ctx)));
+          parts.push_back(RegionAnnotated(cls, p.child, Build(p.child, ctx)));
         } else {
           parts.push_back(Build(p.child, ctx));
         }
@@ -1328,6 +1344,7 @@ class Builder {
   }
 
   absl::string_view sql_;
+  BoxAnnotator annotate_;
 };
 
 }  // namespace
@@ -1335,7 +1352,7 @@ class Builder {
 absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
                                          const ASTNode* root,
                                          const LanguageOptions& language_options,
-                                         int width) {
+                                         int width, BoxAnnotator annotate) {
   GOOGLESQL_RET_CHECK_NE(root, nullptr);
   const int root_start = root->start_location().GetByteOffset();
   const int root_end = root->end_location().GetByteOffset();
@@ -1344,7 +1361,7 @@ absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
   GOOGLESQL_RET_CHECK_LE(root_end, static_cast<int>(sql.size()));
   (void)language_options;  // Comments are detected directly from gap text.
 
-  Builder builder(sql);
+  Builder builder(sql, std::move(annotate));
   Builder::Ctx ctx;
   ctx.flatten_query = false;
   DocPtr doc = builder.Build(root, ctx);

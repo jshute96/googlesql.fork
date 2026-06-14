@@ -59,6 +59,13 @@ class ExecuteQueryWriter {
                                           absl::string_view boxed_html) {
     return absl::OkStatus();
   }
+
+  // Experimental HTML "query viewer" for analyze mode: the box-formatted query
+  // (parser/box_formatter.h) with per-AST-node resolver info (input/output
+  // NameLists) attached as hover boxes. Web-only; default no-op.
+  virtual absl::Status formatted_analyzed_html(absl::string_view html) {
+    return absl::OkStatus();
+  }
   // Note: This is being abused in some cases to send text directly as output.
   // This doesn't work as expected in web mode.  At most one of those outputs
   // shows up and it goes in the "Unparsed" section.

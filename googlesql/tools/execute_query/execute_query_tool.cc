@@ -32,6 +32,8 @@
 
 
 #include "googlesql/common/options_utils.h"
+#include "googlesql/analyzer/name_scope.h"
+#include "googlesql/common/reflection_helper.h"
 #include "googlesql/parser/box_formatter.h"
 #include "googlesql/parser/html_formatter.h"
 #include "googlesql/parser/parse_tree.h"
@@ -39,6 +41,7 @@
 #include "googlesql/parser/parser_mode.h"
 #include "googlesql/public/analyzer.h"
 #include "googlesql/public/analyzer_output.h"
+#include "googlesql/public/ast_node_resolved_info.h"
 #include "googlesql/public/builtin_function_options.h"
 #include "googlesql/public/catalog.h"
 #include "googlesql/public/error_helpers.h"
@@ -90,6 +93,7 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
@@ -1128,6 +1132,65 @@ static bool IsAnalysisRequired(const ExecuteQueryConfig& config) {
          config.has_tool_mode(ToolMode::kExecute);
 }
 
+// HTML-escapes text for embedding in the query-viewer hover boxes.
+static std::string EscapeHtmlText(absl::string_view s) {
+  return absl::StrReplaceAll(
+      s, {{"&", "&amp;"}, {"<", "&lt;"}, {">", "&gt;"}, {"\"", "&quot;"}});
+}
+
+// Renders a NameList using the same formatting as `|> DESCRIBE`, as HTML
+// (newlines become <br> so it stays a single token in the box output).
+static std::string DescribeNameListHtml(const NameList& name_list,
+                                        ProductMode product_mode) {
+  std::string text =
+      reflection::FormatResultTable(name_list.Describe(product_mode));
+  return absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}});
+}
+
+// Builds the hover-box HTML for an AST node's resolver info: the input and/or
+// output NameLists, each under a heading.
+static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
+                                         ProductMode product_mode) {
+  std::string html;
+  auto add = [&](absl::string_view heading,
+                 const std::shared_ptr<const NameList>& nl) {
+    if (nl == nullptr) return;
+    absl::StrAppend(&html, "<div class=\"hi-h\">", heading,
+                    "</div><div class=\"hi-nl\">",
+                    DescribeNameListHtml(*nl, product_mode), "</div>");
+  };
+  if (info.resolved_scan_info.has_value()) {
+    add("Input NameList", info.resolved_scan_info->input_name_list);
+    add("Output NameList", info.resolved_scan_info->output_name_list);
+  } else if (info.table_scan_info.has_value()) {
+    add("Output NameList", info.table_scan_info->output_name_list);
+  }
+  return html;
+}
+
+// Emits the analyze-mode "query viewer": the box-formatted query with each
+// AST node's resolver info (NameLists) attached as a hover box.
+static absl::Status WriteAnalyzedQueryViewer(absl::string_view sql,
+                                             const ASTNode* ast,
+                                             const AnalyzerOutput& output,
+                                             const ExecuteQueryConfig& config,
+                                             ExecuteQueryWriter& writer) {
+  const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
+  const ProductMode product_mode =
+      config.analyzer_options().language().product_mode();
+  BoxAnnotator annotate = [&info_map, product_mode](const ASTNode* node) {
+    auto it = info_map.find(node);
+    if (it == info_map.end()) return std::string();
+    return ResolvedInfoHoverHtml(it->second, product_mode);
+  };
+  absl::StatusOr<std::string> html = SqlToBoxHtml(
+      sql, ast, config.analyzer_options().language(), /*width=*/80, annotate);
+  if (html.ok()) {
+    GOOGLESQL_RETURN_IF_ERROR(writer.formatted_analyzed_html(*html));
+  }
+  return absl::OkStatus();
+}
+
 static absl::StatusOr<const ResolvedNode*> AnalyzeSql(
     absl::string_view sql, const ASTNode* ast, ExecuteQueryConfig& config,
     ExecuteQueryWriter& writer,
@@ -1166,6 +1229,12 @@ static absl::StatusOr<const ResolvedNode*> AnalyzeSql(
                                     /*post_rewrite=*/false));
     pre_rewrite_debug_string =
         (*analyzer_output)->resolved_node()->DebugString();
+    // Query viewer: box-formatted query with resolver info as hover boxes.
+    // (Uses the pre-rewrite output, whose info map is keyed on the parse AST.)
+    if (config.sql_mode() == SqlMode::kQuery) {
+      GOOGLESQL_RETURN_IF_ERROR(WriteAnalyzedQueryViewer(sql, ast, **analyzer_output,
+                                                config, writer));
+    }
   }
 
   // Apply rewrites.

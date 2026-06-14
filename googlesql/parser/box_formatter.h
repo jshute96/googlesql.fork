@@ -17,6 +17,7 @@
 #ifndef GOOGLESQL_PARSER_BOX_FORMATTER_H_
 #define GOOGLESQL_PARSER_BOX_FORMATTER_H_
 
+#include <functional>
 #include <string>
 
 #include "googlesql/parser/ast_node.h"
@@ -25,6 +26,13 @@
 #include "absl/strings/string_view.h"
 
 namespace googlesql {
+
+// Optional callback that returns extra HTML to attach to an AST node's region
+// (shown as a hover box). Returns "" for nodes with nothing to attach. This
+// keeps the parser layer free of analyzer types: the caller (which has the
+// resolver info) supplies the rendered HTML. Only nodes that already form a
+// region (subqueries, pipe operators, table names) can carry an annotation.
+using BoxAnnotator = std::function<std::string(const ASTNode*)>;
 
 // Experimental: renders `sql` as HTML using a computed "box" layout instead of
 // the original whitespace. The layout is produced by a width-aware
@@ -52,7 +60,8 @@ namespace googlesql {
 absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
                                          const ASTNode* root,
                                          const LanguageOptions& language_options,
-                                         int width = 80);
+                                         int width = 80,
+                                         BoxAnnotator annotate = nullptr);
 
 }  // namespace googlesql
 

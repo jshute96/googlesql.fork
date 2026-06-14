@@ -163,6 +163,11 @@
             {{/result_analyzed_post_rewrite}}
             {{/result_analyzed}}
 
+            {{#result_formatted_analyzed}}
+            <h3>Query viewer</h3>
+            <div class="output">{{{result_formatted_analyzed}}}</div>
+            {{/result_formatted_analyzed}}
+
             {{#result_parsed}}
             <h3>Parse</h3>
             <pre class="output parsed"><code class="language-less">{{{result_parsed}}}</code></pre>

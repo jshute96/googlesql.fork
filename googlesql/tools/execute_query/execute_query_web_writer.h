@@ -71,6 +71,12 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
     return absl::OkStatus();
   }
 
+  absl::Status formatted_analyzed_html(absl::string_view html) override {
+    current_statement_params_["result_formatted_analyzed"] = std::string(html);
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
   absl::Status unparsed(absl::string_view unparse_string) override {
     current_statement_params_["result_unparsed"] = std::string(unparse_string);
     got_results_ = true;
