@@ -2543,12 +2543,21 @@ cc_library(
 )
 
 cc_library(
+    name = "ast_node_resolved_info",
+    hdrs = ["ast_node_resolved_info.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+    ],
+)
+
+cc_library(
     name = "analyzer_output",
     srcs = ["analyzer_output.cc"],
     hdrs = ["analyzer_output.h"],
     deps = [
         ":analyzer_options",
         ":analyzer_output_properties",
+        ":ast_node_resolved_info",
         ":id_string",
         ":language_options",
         ":options_cc_proto",
