@@ -151,9 +151,44 @@ std::string SQLBuilder::GetColumnAlias(const ResolvedColumn& column) {
     return googlesql_base::FindOrDie(computed_column_alias(), column.column_id());
   }
 
-  const std::string alias = GenerateUniqueAliasName();
+  // In Pipe target mode, prefer a readable alias derived from the column's name
+  // (e.g. `int32`, `k`) instead of an opaque `a_<id>`, falling back to the
+  // generated name only for anonymous/internal columns (names that are empty or
+  // start with '$', such as `$col1`). Uniqueness is preserved by suffixing.
+  std::string alias;
+  const absl::string_view name = column.name();
+  if (IsPipeSyntaxTargetMode() && !name.empty() &&
+      !absl::StartsWith(name, "$")) {
+    alias = MakeUniqueColumnAlias(name);
+  } else {
+    alias = GenerateUniqueAliasName();
+  }
   googlesql_base::InsertOrDie(&mutable_computed_column_alias(), column.column_id(), alias);
   return alias;
+}
+
+bool SQLBuilder::ColumnAliasIsTaken(absl::string_view alias) const {
+  // SQL identifiers are case-insensitive, so aliases must be unique ignoring
+  // case (e.g. a table column `Value` and a group-by key `value` collide).
+  for (const auto& [column_id, column_alias] : computed_column_alias()) {
+    if (absl::EqualsIgnoreCase(column_alias, alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string SQLBuilder::MakeUniqueColumnAlias(absl::string_view name) {
+  std::string candidate = ToIdentifierLiteral(name);
+  if (!ColumnAliasIsTaken(candidate)) {
+    return candidate;
+  }
+  for (int suffix = 2;; ++suffix) {
+    candidate = ToIdentifierLiteral(absl::StrCat(name, "_", suffix));
+    if (!ColumnAliasIsTaken(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 std::string SQLBuilder::UpdateColumnAlias(const ResolvedColumn& column) {
@@ -3265,6 +3300,12 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
 
   // Capture has_group_by_clause before possibly wrapping the query.
   bool has_group_by_clause = query_expression->HasGroupByClause();
+  // For a plain table-scan input in Pipe mode, reference its columns by their
+  // natural names so we append `|> SELECT/EXTEND` directly onto `FROM <table>`
+  // rather than wrapping the scan under a fresh alias.
+  GOOGLESQL_RETURN_IF_ERROR(
+      TryUseLeafTableScanColumns(node->input_scan(), query_expression.get())
+          .status());
   if (query_expression->CanFormSQLQuery()) {
     GOOGLESQL_RETURN_IF_ERROR(
         WrapQueryExpression(node->input_scan(), query_expression.get()));
@@ -4112,6 +4153,33 @@ absl::Status SQLBuilder::SetPathForColumnsInScan(const ResolvedScan* scan,
                                           ToIdentifierLiteral(column.name())));
   }
   return absl::OkStatus();
+}
+
+absl::StatusOr<bool> SQLBuilder::TryUseLeafTableScanColumns(
+    const ResolvedScan* input_scan, QueryExpression* input_qe) {
+  if (!IsPipeSyntaxTargetMode()) {
+    return false;
+  }
+  if (input_scan->node_kind() != RESOLVED_TABLE_SCAN) {
+    return false;
+  }
+  const auto* table_scan = input_scan->GetAs<ResolvedTableScan>();
+  if (table_scan->table()->IsValueTable()) {
+    return false;
+  }
+  GOOGLESQL_RETURN_IF_ERROR(SetPathForColumnsInScan(
+      table_scan,
+      googlesql_base::FindWithDefault(table_alias_map(), table_scan->table())));
+  // Reserve a (natural-name) alias for each table column so that columns later
+  // derived from them -- e.g. a group-by key `k := <table_column>` -- are made
+  // globally unique against them and don't produce ambiguous bare references.
+  // When the table scan is collapsed into a consumer (e.g. an aggregate) its
+  // columns are otherwise referenced only by path and never get an alias.
+  for (const ResolvedColumn& column : table_scan->column_list()) {
+    GetColumnAlias(column);
+  }
+  input_qe->ResetSelectClause();
+  return true;
 }
 
 absl::Status SQLBuilder::SetPathForColumnsInReturningExpr(
@@ -5513,6 +5581,11 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
         node->grouping_set_list(), node->rollup_column_list(),
         rollup_column_id_list, grouping_set_ids_info));
   }
+  // For a plain table-scan input in Pipe mode, reference its columns by their
+  // natural names so we append `|> AGGREGATE` directly onto `FROM <table>`
+  // rather than wrapping the scan under a fresh alias.
+  GOOGLESQL_RETURN_IF_ERROR(
+      TryUseLeafTableScanColumns(node->input_scan(), query_expression).status());
   if (!query_expression->CanSetGroupByClause()) {
     GOOGLESQL_RETURN_IF_ERROR(WrapQueryExpression(node->input_scan(), query_expression));
   }
@@ -11848,6 +11921,12 @@ absl::StatusOr<std::string> SQLBuilder::GetInputPipeSQL(
   // columns the caller already bound -- so it is rendered directly with no
   // re-aliasing wrapper. GetSQLQuery(kPipe) supplies the leading FROM keyword
   // for a bare table and emits an already-pipe string verbatim.
+  //
+  // For a plain table-scan input, expose its columns by their natural names so
+  // the operator appends directly onto `FROM <table>` rather than wrapping the
+  // scan under a fresh alias.
+  GOOGLESQL_RETURN_IF_ERROR(
+      TryUseLeafTableScanColumns(input_scan, input_qe).status());
   if (input_qe->CanFormSQLQuery()) {
     GOOGLESQL_RETURN_IF_ERROR(
         MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
@@ -12008,8 +12087,15 @@ absl::StatusOr<std::string> SQLBuilder::RenderPipeOperatorInput(
     // The input is a subpipeline operator chain; append directly onto it.
     return std::string(input_qe->FromClause());
   }
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
+  // For a plain table-scan input, reference its columns by their natural names
+  // so the operator appends directly onto `FROM <table>` rather than wrapping
+  // the scan under a fresh alias.
+  GOOGLESQL_ASSIGN_OR_RETURN(bool used_leaf_columns,
+                   TryUseLeafTableScanColumns(input_scan, input_qe));
+  if (!used_leaf_columns) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
+  }
   return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
 }
 
