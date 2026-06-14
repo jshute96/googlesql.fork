@@ -357,7 +357,8 @@ class QueryExpression {
   // Appenders for each clause. If the clause exists, they create the SQL for
   // the clause and append it to <sql>. They return true if the clause SQL is
   // appended, false otherwise.
-  bool TryAppendSelectClause(std::string& sql) const;
+  bool TryAppendSelectClause(std::string& sql,
+                             bool omit_redundant_aliases = false) const;
   bool TryAppendSetOpClauses(std::string& sql,
                              TargetSyntaxMode target_syntax_mode) const;
   bool TryAppendPivotClause(std::string& sql) const;
