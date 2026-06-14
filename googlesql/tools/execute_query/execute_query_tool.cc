@@ -32,11 +32,16 @@
 
 
 #include "googlesql/common/options_utils.h"
+#include "googlesql/analyzer/name_scope.h"
+#include "googlesql/common/reflection_helper.h"
+#include "googlesql/parser/box_formatter.h"
+#include "googlesql/parser/html_formatter.h"
 #include "googlesql/parser/parse_tree.h"
 #include "googlesql/parser/parser.h"
 #include "googlesql/parser/parser_mode.h"
 #include "googlesql/public/analyzer.h"
 #include "googlesql/public/analyzer_output.h"
+#include "googlesql/public/ast_node_resolved_info.h"
 #include "googlesql/public/builtin_function_options.h"
 #include "googlesql/public/catalog.h"
 #include "googlesql/public/error_helpers.h"
@@ -88,6 +93,7 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
@@ -1094,12 +1100,23 @@ static absl::StatusOr<const ASTNode*> ParseSql(
 }
 
 static absl::Status WriteParsedAndOrUnparsedAst(
-    const ASTNode* root, const ExecuteQueryConfig& config,
+    const ASTNode* root, absl::string_view sql, const ExecuteQueryConfig& config,
     ExecuteQueryWriter& writer) {
   if (config.has_tool_mode(ToolMode::kParse)) {
     // Note, ASTNode is not public, and therefore cannot be part of the
     // public interface, thus, we can only return the string.
     GOOGLESQL_RETURN_IF_ERROR(writer.parsed(root->DebugString()));
+
+    // Experimental: also emit HTML renderings of the SQL with the parse tree
+    // expressed as nested <div>s -- one preserving the original text, one with
+    // a computed "box" layout. Best-effort -- failures are dropped silently.
+    absl::StatusOr<std::string> html =
+        SqlToHtml(sql, root, config.analyzer_options().language());
+    absl::StatusOr<std::string> boxed =
+        SqlToBoxHtml(sql, root, config.analyzer_options().language());
+    if (html.ok() && boxed.ok()) {
+      GOOGLESQL_RETURN_IF_ERROR(writer.formatted_sql_html(*html, *boxed));
+    }
   }
   if (config.has_tool_mode(ToolMode::kUnparse)) {
     GOOGLESQL_RETURN_IF_ERROR(writer.unparsed(Unparse(root)));
@@ -1113,6 +1130,84 @@ static bool IsAnalysisRequired(const ExecuteQueryConfig& config) {
          config.has_tool_mode(ToolMode::kUnAnalyze) ||
          config.has_tool_mode(ToolMode::kExplain) ||
          config.has_tool_mode(ToolMode::kExecute);
+}
+
+// HTML-escapes text for embedding in the query-viewer hover boxes.
+static std::string EscapeHtmlText(absl::string_view s) {
+  return absl::StrReplaceAll(
+      s, {{"&", "&amp;"}, {"<", "&lt;"}, {">", "&gt;"}, {"\"", "&quot;"}});
+}
+
+// Renders a NameList using the same formatting as `|> DESCRIBE`, as HTML
+// (newlines become <br> so it stays a single token in the box output).
+static std::string DescribeNameListHtml(const NameList& name_list,
+                                        ProductMode product_mode) {
+  std::string text =
+      reflection::FormatResultTable(name_list.Describe(product_mode));
+  return absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}});
+}
+
+// Builds the hover-box HTML for an AST node's resolver info: an optional title
+// heading, then the NameList(s).  When both an input and output NameList are
+// present (e.g. a pipe operator), they are shown as a single merged diff under
+// an "Input / output NameList" heading; a pass-through operator like `|> WHERE`
+// then shows no diff markers.  When only one NameList is present (e.g. a query's
+// output or a table scan), it is shown on its own.
+static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
+                                         ProductMode product_mode) {
+  std::string html;
+  if (!info.node_title.empty()) {
+    absl::StrAppend(&html, "<div class=\"hi-title\">",
+                    EscapeHtmlText(info.node_title), "</div>");
+  }
+  auto add_single = [&](absl::string_view heading, const NameList& nl) {
+    absl::StrAppend(&html, "<div class=\"hi-h\">", heading,
+                    "</div><div class=\"hi-nl\">",
+                    DescribeNameListHtml(nl, product_mode), "</div>");
+  };
+  if (info.resolved_scan_info.has_value()) {
+    const auto& scan = *info.resolved_scan_info;
+    if (scan.input_name_list != nullptr && scan.output_name_list != nullptr) {
+      absl::StrAppend(
+          &html, "<div class=\"hi-h\">Input / output NameList</div>",
+          "<div class=\"hi-nl\">",
+          reflection::FormatResultTableDiffHtml(
+              scan.input_name_list->Describe(product_mode),
+              scan.output_name_list->Describe(product_mode)),
+          "</div>");
+    } else if (scan.output_name_list != nullptr) {
+      add_single("Output NameList", *scan.output_name_list);
+    } else if (scan.input_name_list != nullptr) {
+      add_single("Input NameList", *scan.input_name_list);
+    }
+  } else if (info.table_scan_info.has_value() &&
+             info.table_scan_info->output_name_list != nullptr) {
+    add_single("Output NameList", *info.table_scan_info->output_name_list);
+  }
+  return html;
+}
+
+// Emits the analyze-mode "query viewer": the box-formatted query with each
+// AST node's resolver info (NameLists) attached as a hover box.
+static absl::Status WriteAnalyzedQueryViewer(absl::string_view sql,
+                                             const ASTNode* ast,
+                                             const AnalyzerOutput& output,
+                                             const ExecuteQueryConfig& config,
+                                             ExecuteQueryWriter& writer) {
+  const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
+  const ProductMode product_mode =
+      config.analyzer_options().language().product_mode();
+  BoxAnnotator annotate = [&info_map, product_mode](const ASTNode* node) {
+    auto it = info_map.find(node);
+    if (it == info_map.end()) return std::string();
+    return ResolvedInfoHoverHtml(it->second, product_mode);
+  };
+  absl::StatusOr<std::string> html = SqlToBoxHtml(
+      sql, ast, config.analyzer_options().language(), /*width=*/80, annotate);
+  if (html.ok()) {
+    GOOGLESQL_RETURN_IF_ERROR(writer.formatted_analyzed_html(*html));
+  }
+  return absl::OkStatus();
 }
 
 static absl::StatusOr<const ResolvedNode*> AnalyzeSql(
@@ -1153,6 +1248,12 @@ static absl::StatusOr<const ResolvedNode*> AnalyzeSql(
                                     /*post_rewrite=*/false));
     pre_rewrite_debug_string =
         (*analyzer_output)->resolved_node()->DebugString();
+    // Query viewer: box-formatted query with resolver info as hover boxes.
+    // (Uses the pre-rewrite output, whose info map is keyed on the parse AST.)
+    if (config.sql_mode() == SqlMode::kQuery) {
+      GOOGLESQL_RETURN_IF_ERROR(WriteAnalyzedQueryViewer(sql, ast, **analyzer_output,
+                                                config, writer));
+    }
   }
 
   // Apply rewrites.
@@ -2203,7 +2304,7 @@ static absl::Status ExecuteScript(absl::string_view script,
 
   if (config.has_tool_mode(ToolMode::kParse) ||
       config.has_tool_mode(ToolMode::kUnparse)) {
-    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, config, writer));
+    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, script, config, writer));
   }
   if (config.has_tool_mode(ToolMode::kExecute)) {
     GOOGLESQL_RETURN_IF_ERROR(ExplainAndOrExecuteSql(nullptr, config, writer, script));
@@ -2262,7 +2363,7 @@ static absl::Status ExecuteOneQuery(absl::string_view script,
 
   if (config.has_tool_mode(ToolMode::kParse) ||
       config.has_tool_mode(ToolMode::kUnparse)) {
-    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, config, writer));
+    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, script, config, writer));
   }
 
   // Macro support is enabled by intercepting `DEFINE MACRO` statements in the

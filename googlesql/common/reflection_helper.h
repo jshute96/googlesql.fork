@@ -30,6 +30,22 @@ namespace reflection {
 std::string FormatResultTable(const reflection::ResultTable& result_table,
                               bool include_table_schema = true);
 
+// Formats a diff between the `input` and `output` ResultTables as HTML, for
+// query visualizer hover boxes.  It walks the two tables in parallel (much like
+// `FormatResultTable`), matching columns by (table alias, name) and table
+// aliases/CTEs by name.  Added items are wrapped in <span class="nl-add">,
+// removed items in <span class="nl-del">.  A column whose type changed is shown
+// once with an inline diff on the type.  Within a matched table alias, the
+// individual added/removed column names are marked.  Reordering is not detected.
+//
+// The output is monospace-preformatted: cells are space-padded for alignment
+// (intended to render under `white-space: pre`) and line breaks are emitted as
+// <br> so the result embeds as a single token.  Cell text is HTML-escaped; the
+// span markup is not.  When the two tables are identical the output has no diff
+// spans (all text renders normally).
+std::string FormatResultTableDiffHtml(const reflection::ResultTable& input,
+                                      const reflection::ResultTable& output);
+
 }  // namespace reflection
 }  // namespace googlesql
 

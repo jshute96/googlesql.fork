@@ -35,7 +35,8 @@ result_analyzed:<span class="ast-node">QueryStmt</span>
     │ └─<span class="ast-col-src"><span class="ast-col dollar_col1_1">$col1#1</span></span> := Literal(type=INT64, value=1)
     └─input_scan=
       └─<span class="ast-node">SingleRowScan</span>
-\
+
+result_formatted_analyzed:<div class="formatted-sql boxed"><div class="ast ast-QueryStatement"><div class="ast ast-Query"><div class="rect q-whole"><div class="ast ast-Select">select <div class="ast ast-SelectList"><div class="ast ast-SelectColumn"><div class="ast ast-IntLiteral">1</div></div></div></div><div class="hover-info"><div class="hi-title">Query</div><div class="hi-h">Output NameList</div><div class="hi-nl">**Columns**:<br>Column Name  Type<br>-----------  -----<br>&lt;unnamed&gt;    INT64<br></div></div></div></div></div></div>
 ==
 
 [mode=unanalyze]
@@ -103,7 +104,9 @@ result_parsed:&lt;span class=&quot;ast-range&quot;&gt;Script [0-28]&lt;&#x2F;spa
         &lt;span class=&quot;ast-range&quot;&gt;PathExpression [10-15]&lt;&#x2F;span&gt;
           &lt;span class=&quot;ast-range&quot;&gt;Identifier(INT64) [10-15]&lt;&#x2F;span&gt;
       &lt;span class=&quot;ast-range&quot;&gt;IntLiteral(100) [24-27]&lt;&#x2F;span&gt;
-\
+
+result_formatted_sql:<div class="formatted-sql"><div class="ast ast-Script"><div class="ast ast-StatementList"><div class="ast ast-VariableDeclaration">DECLARE <div class="ast ast-IdentifierList"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-SimpleType"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">INT64</div></div></div> DEFAULT <div class="ast ast-IntLiteral">100</div></div>;</div></div></div>
+result_formatted_sql_boxed:<div class="formatted-sql boxed"><div class="ast ast-Script"><div class="ast ast-StatementList"><div class="ast ast-VariableDeclaration">DECLARE <div class="ast ast-IdentifierList"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-SimpleType"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">INT64</div></div></div> DEFAULT <div class="ast ast-IntLiteral">100</div></div>;</div></div></div>
 ==
 
 # Parse a procedural script loop
@@ -164,7 +167,17 @@ result_parsed:&lt;span class=&quot;ast-range&quot;&gt;Script [0-109]&lt;&#x2F;sp
             &lt;span class=&quot;ast-range&quot;&gt;PathExpression [92-93]&lt;&#x2F;span&gt;
               &lt;span class=&quot;ast-range&quot;&gt;Identifier(x) [92-93]&lt;&#x2F;span&gt;
             &lt;span class=&quot;ast-range&quot;&gt;IntLiteral(1) [96-97]&lt;&#x2F;span&gt;
-\
+
+result_formatted_sql:<div class="formatted-sql"><div class="ast ast-Script"><div class="ast ast-StatementList"><div class="ast ast-VariableDeclaration">DECLARE <div class="ast ast-IdentifierList"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-SimpleType"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">INT64</div></div></div> DEFAULT <div class="ast ast-IntLiteral">0</div></div>;
+<div class="ast ast-WhileStatement">WHILE <div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> &lt; <div class="ast ast-IntLiteral">3</div></div>
+DO
+  <div class="ast ast-StatementList"><div class="ast ast-QueryStatement"><div class="ast ast-Query"><div class="ast ast-Select">SELECT <div class="ast ast-SelectList"><div class="ast ast-SelectColumn"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-Alias">as <div class="ast ast-Identifier">num</div></div></div>, <div class="ast ast-SelectColumn"><div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> * <div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div></div> <div class="ast ast-Alias">as <div class="ast ast-Identifier">num_square</div></div></div></div></div></div></div>;
+  <div class="ast ast-SingleAssignment">SET <div class="ast ast-Identifier">x</div> = <div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> + <div class="ast ast-IntLiteral">1</div></div></div>;</div>
+END WHILE</div>;</div></div></div>
+result_formatted_sql_boxed:<div class="formatted-sql boxed"><div class="ast ast-Script"><div class="ast ast-StatementList"><div class="ast ast-VariableDeclaration">DECLARE <div class="ast ast-IdentifierList"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-SimpleType"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">INT64</div></div></div> DEFAULT <div class="ast ast-IntLiteral">0</div></div>;
+<div class="ast ast-WhileStatement">WHILE
+  <div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> &lt; <div class="ast ast-IntLiteral">3</div></div> DO <div class="ast ast-StatementList"><div class="ast ast-QueryStatement"><div class="ast ast-Query"><div class="rect q-whole"><div class="ast ast-Select">SELECT <div class="ast ast-SelectList"><div class="ast ast-SelectColumn"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> <div class="ast ast-Alias">as <div class="ast ast-Identifier">num</div></div>,</div> <div class="ast ast-SelectColumn"><div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> * <div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div></div> <div class="ast ast-Alias">as <div class="ast ast-Identifier">num_square</div></div></div></div></div></div></div></div>;
+  <div class="ast ast-SingleAssignment">SET <div class="ast ast-Identifier">x</div> = <div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">x</div></div> + <div class="ast ast-IntLiteral">1</div></div></div>;</div> END WHILE</div>;</div></div></div>
 ==
 
 # Execute a procedural script loop
@@ -472,3 +485,38 @@ target_syntax_mode_standard
 error:INVALID_ARGUMENT: Syntax error: Unexpected identifier &quot;an&quot; [at 1:49]
 select r&quot;&quot;&quot;column abc.<span class="ast-col def_12">def#12</span> and [<span class="ast-col ghi_13">ghi#13</span>]&quot;&quot;&quot; in an error;
                                                 ^
+
+==
+
+[mode=analyze]
+
+FROM KeyValue
+|> WHERE Key > 5
+|> SELECT Value
+--
+query:FROM KeyValue
+|&gt; WHERE Key &gt; 5
+|&gt; SELECT Value
+
+mode_analyze
+sql_mode_query
+target_syntax_mode_standard
+result_analyzed:<span class="ast-node">QueryStmt</span>
+├─output_column_list=
+│ └─KeyValue.<span class="ast-col Value_2">Value#2</span> AS Value [STRING]
+└─query=
+  └─<span class="ast-node">ProjectScan</span>
+    ├─column_list=[KeyValue.<span class="ast-col Value_2">Value#2</span>]
+    └─input_scan=
+      └─<span class="ast-node">FilterScan</span>
+        ├─column_list=KeyValue.[<span class="ast-col Key_1">Key#1</span>, <span class="ast-col Value_2">Value#2</span>]
+        ├─input_scan=
+        │ └─<span class="ast-node">TableScan</span>(column_list=<span class="ast-col-src">KeyValue.[<span class="ast-col Key_1">Key#1</span>, <span class="ast-col Value_2">Value#2</span>], table=KeyValue, column_index_list=[0, 1])</span>
+        └─filter_expr=
+          └─<span class="ast-node">FunctionCall</span>(GoogleSQL:$greater(INT64, INT64) -&gt; BOOL)
+            ├─<span class="ast-node">ColumnRef</span>(type=INT64, column=KeyValue.<span class="ast-col Key_1">Key#1</span>)
+            └─<span class="ast-node">Literal</span>(type=INT64, value=5)
+
+result_formatted_analyzed:<div class="formatted-sql boxed"><div class="ast ast-QueryStatement"><div class="ast ast-Query"><div class="rect seg-grey-b"><div class="ast ast-FromQuery"><div class="ast ast-FromClause">FROM <div class="ast ast-TablePathExpression"><div class="rect table"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">KeyValue</div></div><div class="hover-info"><div class="hi-title">Table KeyValue</div><div class="hi-h">Output NameList</div><div class="hi-nl">**Columns**:<br>Table Alias  Column Name  Type<br>-----------  -----------  ------<br>KeyValue     Key          INT64<br>KeyValue     Value        STRING<br><br>**Table Aliases**:<br>Table Alias  Columns<br>-----------  ----------<br>KeyValue     Key, Value<br></div></div></div></div></div></div><div class="hover-info"><div class="hi-title">FROM query</div><div class="hi-h">Output NameList</div><div class="hi-nl">**Columns**:<br>Table Alias  Column Name  Type<br>-----------  -----------  ------<br>KeyValue     Key          INT64<br>KeyValue     Value        STRING<br><br>**Table Aliases**:<br>Table Alias  Columns<br>-----------  ----------<br>KeyValue     Key, Value<br></div></div></div>
+<div class="rect seg-grey-a"><div class="ast ast-PipeWhere">|&gt; <div class="ast ast-WhereClause">WHERE <div class="ast ast-BinaryExpression"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">Key</div></div> &gt; <div class="ast ast-IntLiteral">5</div></div></div></div><div class="hover-info"><div class="hi-title">|&gt; WHERE</div><div class="hi-h">Input / output NameList</div><div class="hi-nl">**Columns**:<br>Table Alias  Column Name  Type<br>-----------  -----------  ------<br>KeyValue     Key          INT64<br>KeyValue     Value        STRING<br><br>**Table Aliases**:<br>Table Alias  Columns<br>-----------  ----------<br>KeyValue     Key, Value<br></div></div></div>
+<div class="rect seg-grey-b"><div class="ast ast-PipeSelect">|&gt; <div class="ast ast-Select">SELECT <div class="ast ast-SelectList"><div class="ast ast-SelectColumn"><div class="ast ast-PathExpression"><div class="ast ast-Identifier">Value</div></div></div></div></div></div><div class="hover-info"><div class="hi-title">|&gt; SELECT</div><div class="hi-h">Input / output NameList</div><div class="hi-nl">**Columns**:<br>Table Alias  Column Name  Type<br>-----------  -----------  ------<br><span class="nl-del">KeyValue     Key          INT64</span><br><span class="nl-del">KeyValue     Value        STRING</span><br><span class="nl-add">             Value        STRING</span><br><br>**Table Aliases**:<br>Table Alias  Columns<br>-----------  ----------<br><span class="nl-del">KeyValue     Key, Value</span><br></div></div></div></div></div></div>

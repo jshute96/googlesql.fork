@@ -1,4 +1,4 @@
-<html>
+<html data-sql-format="default">
   <head>
   <meta charset="utf-8">
   <title>GoogleSQL Execute Query</title>
@@ -11,5 +11,22 @@
   </head>
   <body>
     {{> body}}
+    <script>
+      // "Formatted SQL" format-mode tabs. Each tab bar sets a global format
+      // mode on <html>; CSS rules scoped by [data-sql-format=...] then restyle
+      // every .formatted-sql block. Uses event delegation so it works for any
+      // number of statements/tab bars.
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('.fmt-tab');
+        if (!btn) return;
+        var fmt = btn.getAttribute('data-format');
+        document.documentElement.setAttribute('data-sql-format', fmt);
+        var tabs = document.querySelectorAll('.fmt-tab');
+        for (var i = 0; i < tabs.length; i++) {
+          tabs[i].classList.toggle(
+              'active', tabs[i].getAttribute('data-format') === fmt);
+        }
+      });
+    </script>
   </body>
 </html>
