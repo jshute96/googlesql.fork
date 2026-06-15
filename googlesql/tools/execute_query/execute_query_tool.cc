@@ -1147,21 +1147,19 @@ static std::string DescribeNameListHtml(const NameList& name_list,
   return absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}});
 }
 
-// Builds the hover-box HTML for an AST node's resolver info: an optional title
-// heading, then the NameList(s).  When both an input and output NameList are
-// present (e.g. a pipe operator), they are shown as a single merged diff under
-// an "Input / output NameList" heading; a pass-through operator like `|> WHERE`
-// then shows no diff markers.  When only one NameList is present (e.g. a query's
-// output or a table scan), it is shown on its own.
+// Builds the info HTML for an AST node's resolver info, as a title heading
+// (`ni-title`) followed by a body (`ni-body`).  The client-side viewer script
+// reads these (one per node in the click's ancestor chain) to populate the
+// info panel.  When both an input and output NameList are present (e.g. a pipe
+// operator), the body shows a single merged diff; a pass-through operator like
+// `|> WHERE` then shows no diff markers.  When only one NameList is present
+// (e.g. a query's output or a table scan), it is shown on its own.  For a
+// function call, the body is the chosen concrete signature.
 static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
                                          ProductMode product_mode) {
-  std::string html;
-  if (!info.node_title.empty()) {
-    absl::StrAppend(&html, "<div class=\"hi-title\">",
-                    EscapeHtmlText(info.node_title), "</div>");
-  }
+  std::string body;
   auto add_single = [&](absl::string_view heading, const NameList& nl) {
-    absl::StrAppend(&html, "<div class=\"hi-h\">", heading,
+    absl::StrAppend(&body, "<div class=\"hi-h\">", heading,
                     "</div><div class=\"hi-nl\">",
                     DescribeNameListHtml(nl, product_mode), "</div>");
   };
@@ -1169,7 +1167,7 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
     const auto& scan = *info.resolved_scan_info;
     if (scan.input_name_list != nullptr && scan.output_name_list != nullptr) {
       absl::StrAppend(
-          &html, "<div class=\"hi-h\">Input / output NameList</div>",
+          &body, "<div class=\"hi-h\">Input / output NameList</div>",
           "<div class=\"hi-nl\">",
           reflection::FormatResultTableDiffHtml(
               scan.input_name_list->Describe(product_mode),
@@ -1183,8 +1181,15 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
   } else if (info.table_scan_info.has_value() &&
              info.table_scan_info->output_name_list != nullptr) {
     add_single("Output NameList", *info.table_scan_info->output_name_list);
+  } else if (info.function_call_info.has_value()) {
+    absl::StrAppend(&body, "<div class=\"hi-h\">Signature</div>",
+                    "<div class=\"hi-nl\">",
+                    EscapeHtmlText(info.function_call_info->signature),
+                    "</div>");
   }
-  return html;
+  return absl::StrCat("<div class=\"ni-title\">",
+                      EscapeHtmlText(info.node_title), "</div>",
+                      "<div class=\"ni-body\">", body, "</div>");
 }
 
 // Emits the analyze-mode "query viewer": the box-formatted query with each

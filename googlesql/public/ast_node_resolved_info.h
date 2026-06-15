@@ -58,6 +58,14 @@ struct ResolvedScanInfo {
   std::shared_ptr<const NameList> input_name_list;
 };
 
+// Extra information the resolver learned about an AST node that resolved to a
+// ResolvedFunctionCall.
+struct FunctionCallInfo {
+  // The chosen concrete function signature, including the return type,
+  // formatted as a string.  E.g. "SUM(INT64) -> INT64".
+  std::string signature;
+};
+
 // Extra information the resolver learned about a particular AST node, beyond
 // what is captured in the resolved AST.  This is intended for query visualizer
 // and similar tooling.  Which fields are populated depends on the kind of node
@@ -73,6 +81,9 @@ struct ASTNodeResolvedInfo {
 
   // Set when this AST node directly corresponds to some ResolvedScan.
   std::optional<ResolvedScanInfo> resolved_scan_info;
+
+  // Set when this AST node resolved to a ResolvedFunctionCall.
+  std::optional<FunctionCallInfo> function_call_info;
 };
 
 // Maps an AST node to the extra resolution information the resolver learned

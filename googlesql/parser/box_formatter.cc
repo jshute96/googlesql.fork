@@ -189,10 +189,11 @@ DocPtr ColorPop() {
 DocPtr Region(absl::string_view cls, DocPtr inner) {
   return Concat({ColorPush(cls), std::move(inner), ColorPop()});
 }
-// A hover box attached inside a region (shown on :hover via CSS). The content
-// is supplied as ready-made HTML and emitted verbatim (zero layout width).
-DocPtr HoverBox(absl::string_view html) {
-  return Concat({Tag("<div class=\"hover-info\">"), Tag(std::string(html)),
+// A hidden data carrier attached inside a region. The content is supplied as
+// ready-made HTML and emitted verbatim (zero layout width, hidden via CSS); the
+// client-side viewer script reads it to build the click-to-open info panel.
+DocPtr NodeInfoBox(absl::string_view html) {
+  return Concat({Tag("<div class=\"node-info\">"), Tag(std::string(html)),
                  Tag("</div>")});
 }
 
@@ -435,7 +436,7 @@ class Builder {
                          DocPtr inner) {
     std::string hover = annotate_ ? annotate_(node) : "";
     if (hover.empty()) return Region(cls, std::move(inner));
-    return Region(cls, Concat({std::move(inner), HoverBox(hover)}));
+    return Region(cls, Concat({std::move(inner), NodeInfoBox(hover)}));
   }
 
   std::vector<Piece> Pieces(const ASTNode* node) {
@@ -734,6 +735,20 @@ class Builder {
   }
 
   DocPtr BuildInner(const ASTNode* node, const std::string& kind, Ctx ctx) {
+    DocPtr inner = BuildLayout(node, kind, ctx);
+    // A resolved function call gets its own clickable region carrying the
+    // function's info. (Only when the annotator has info for it, so parse-mode
+    // rendering -- which has no annotator -- is unaffected.)
+    if (kind == "FunctionCall" && annotate_) {
+      std::string info = annotate_(node);
+      if (!info.empty()) {
+        return Region("func", Concat({std::move(inner), NodeInfoBox(info)}));
+      }
+    }
+    return inner;
+  }
+
+  DocPtr BuildLayout(const ASTNode* node, const std::string& kind, Ctx ctx) {
     std::vector<Piece> ps = Pieces(node);
     switch (ResolveLayout(kind, ps)) {
       case Layout::kVertical:

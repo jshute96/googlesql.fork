@@ -137,7 +137,8 @@ std::string ExecuteQueryWebRequest::DebugString() const {
 bool ExecuteQueryWebHandler::HandleRequest(
     const ExecuteQueryWebRequest &request, const Writer &writer) {
   mstch::map template_params = {{"query", request.query()},
-                                {"css", templates_.GetWebPageCSS()}};
+                                {"css", templates_.GetWebPageCSS()},
+                                {"js", templates_.GetWebPageJS()}};
 
   mstch::array catalogs;
   for (const SelectableCatalogInfo &catalog_info :
