@@ -1716,24 +1716,24 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (p
       IS Person)
-      -[a_3
+      -[a_2
       IS (% | ! %)]->
-      (a_4
+      (a
       IS Account)
     RETURN
-      a_2.name AS a_5,
-      COUNT(DISTINCT a_2.id) AS a_6
-    GROUP BY a_5
+      p.name AS name,
+      COUNT(DISTINCT p.id) AS distinct_ids
+    GROUP BY name
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS a_6,
-     aml_1.a_5 AS a_5
-|> AS projectscan_7
+     aml_1.distinct_ids,
+     aml_1.name
+|> AS projectscan_3
 |> SELECT
-     projectscan_7.a_5 AS name,
-     projectscan_7.a_6 AS distinct_ids;
+     projectscan_3.name,
+     projectscan_3.distinct_ids;
 ==
 
 # SQLBuilder test: more complex example
@@ -1973,42 +1973,42 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (p
       IS Person)
-      -[a_3
+      -[e
       IS (% | ! %)]->
-      (a_4
+      (a
       IS Account)
     RETURN
-      a_2 AS a_5,
-      a_3 AS a_6,
-      a_4 AS a_7
+      p AS p_2,
+      e AS e_2,
+      a AS a_2
     NEXT
     MATCH
-      (a_8
+      (p_3
       IS Person)
-      -[a_9
+      -[e_3
       IS (% | ! %)]->
-      (a_10
+      (a_3
       IS Account)
       WHERE
-        (a_10 = a_7) AND (a_9 = a_6) AND (a_8 = a_5)
+        (a_3 = a_2) AND (e_3 = e_2) AND (p_3 = p_2)
     RETURN DISTINCT
-      a_8.name AS a_11,
-      COUNT(DISTINCT a_8.id
-        HAVING MAX(a_8.id) + 1) AS a_12,
-      ARRAY_AGG(a_10.id)[OFFSET(0)] AS a_13
-    GROUP BY a_8.name
+      p_3.name AS name,
+      COUNT(DISTINCT p_3.id
+        HAVING MAX(p_3.id) + 1) AS distinct_ids,
+      ARRAY_AGG(a_3.id)[OFFSET(0)] AS first_acc_id
+    GROUP BY p_3.name
     NEXT
     RETURN
-      a_11 AS a_14,
-      a_12 AS a_15,
-      a_13 AS a_16
+      name AS name_2,
+      distinct_ids AS distinct_ids_2,
+      first_acc_id AS first_acc_id_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_14 AS name,
-     aml_1.a_15 AS distinct_ids,
-     aml_1.a_16 AS first_acc_id;
+     aml_1.name_2 AS name,
+     aml_1.distinct_ids_2 AS distinct_ids,
+     aml_1.first_acc_id_2 AS first_acc_id;
 ==
 
 # Subquery with struct.*
@@ -2254,19 +2254,19 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (p
       IS Person)
-      -[a_3
+      -[a_2
       IS (% | ! %)]->
-      (a_4
+      (a
       IS Account)
     RETURN DISTINCT
-      a_2.birthday AS a_5,
-      a_4.balance AS a_6
+      p.birthday AS birthday,
+      a.balance AS balance
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS birthday,
-     aml_1.a_6 AS balance;
+     aml_1.birthday,
+     aml_1.balance;
 ==
 
 # Explicit group by
@@ -4749,25 +4749,25 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (p
       IS Person)
-      -[a_3
+      -[a_2
       IS (% | ! %)]->
-      (a_4
+      (a
       IS Account)
     WITH
-      a_2.name AS a_6,
-      COUNT(DISTINCT a_2.id) AS a_5
+      p.name AS name,
+      COUNT(DISTINCT p.id) AS distinct_ids
     WITH
-      a_6,
-      a_5
+      name,
+      distinct_ids
     RETURN
-      a_6 AS a_7,
-      a_5 AS a_8
+      name AS name_2,
+      distinct_ids AS distinct_ids_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS name,
-     aml_1.a_8 AS distinct_ids;
+     aml_1.name_2 AS name,
+     aml_1.distinct_ids_2 AS distinct_ids;
 ==
 
 # SQLBuilder test: more complex example
@@ -5005,48 +5005,48 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (p
       IS Person)
-      -[a_3
+      -[e
       IS (% | ! %)]->
-      (a_4
+      (a
       IS Account)
     WITH
-      a_2 AS a_5,
-      a_3 AS a_6,
-      a_4 AS a_7
+      p AS p_2,
+      e AS e_2,
+      a AS a_2
     MATCH
-      (a_8
+      (p_3
       IS Person)
-      -[a_9
+      -[e_3
       IS (% | ! %)]->
-      (a_10
+      (a_3
       IS Account)
       WHERE
-        (a_10 = a_7) AND (a_9 = a_6) AND (a_8 = a_5)
+        (a_3 = a_2) AND (e_3 = e_2) AND (p_3 = p_2)
     WITH
-      a_8.name AS a_13,
-      COUNT(DISTINCT a_8.id
-        HAVING MAX(a_8.id) + 1) AS a_11,
-      ARRAY_AGG(a_10.id) AS a_12
+      p_3.name AS name,
+      COUNT(DISTINCT p_3.id
+        HAVING MAX(p_3.id) + 1) AS distinct_ids,
+      ARRAY_AGG(a_3.id) AS a_2
     WITH
-      a_13,
-      a_11,
-      a_12,
-      a_12[OFFSET(0)] AS a_14
+      name,
+      distinct_ids,
+      a_2,
+      a_2[OFFSET(0)] AS first_acc_id
     WITH
-      a_13 AS a_15,
-      a_11 AS a_16,
-      a_14 AS a_17
+      name AS name_2,
+      distinct_ids AS distinct_ids_2,
+      first_acc_id AS first_acc_id_2
     RETURN
-      a_15 AS a_18,
-      a_16 AS a_19,
-      a_17 AS a_20
+      name_2 AS name_3,
+      distinct_ids_2 AS distinct_ids_3,
+      first_acc_id_2 AS first_acc_id_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_18 AS name,
-     aml_1.a_19 AS distinct_ids,
-     aml_1.a_20 AS first_acc_id;
+     aml_1.name_3 AS name,
+     aml_1.distinct_ids_3 AS distinct_ids,
+     aml_1.first_acc_id_3 AS first_acc_id;
 ==
 
 # Subquery with struct.*
@@ -5316,28 +5316,28 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (p
       IS Person)
-      -[a_3
+      -[a_2
       IS (% | ! %)]->
-      (a_4
+      (a
       IS Account)
     WITH
+      p,
       a_2,
-      a_3,
-      a_4,
-      a_2.birthday AS a_5,
-      a_4.balance AS a_6
+      a,
+      p.birthday AS birthday,
+      a.balance AS balance
     WITH
-      a_5 AS a_7,
-      a_6 AS a_8
+      birthday AS birthday_2,
+      balance AS balance_2
     RETURN
-      a_7 AS a_9,
-      a_8 AS a_10
+      birthday_2 AS birthday_3,
+      balance_2 AS balance_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_9 AS birthday,
-     aml_1.a_10 AS balance;
+     aml_1.birthday_3 AS birthday,
+     aml_1.balance_3 AS balance;
 ==
 
 # Explicit group by

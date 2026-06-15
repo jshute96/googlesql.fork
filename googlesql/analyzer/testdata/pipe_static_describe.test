@@ -470,12 +470,12 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> SELECT
-     keyvalue_3.a_1 AS Key,
-     keyvalue_3.a_2 AS Value;
+     keyvalue_1.Key,
+     keyvalue_1.Value;
 ==
 
 # Range variable has name `c`, while column name is `a`. STATIC_DESCRIBE should

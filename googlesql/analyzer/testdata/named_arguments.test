@@ -530,8 +530,8 @@ FROM
 FROM
   TVF_NAMED_OPTIONAL_ANY_RELATION_ARG_OPTIONAL_SCALAR_ARG(format_string  => "abc") AS tvfscan_1
 |> SELECT
-     tvfscan_1.column_bool AS column_bool,
-     tvfscan_1.column_bytes AS column_bytes;
+     tvfscan_1.column_bool,
+     tvfscan_1.column_bytes;
 ==
 
 # Valid TVF call with the relation named argument provided and the STRING

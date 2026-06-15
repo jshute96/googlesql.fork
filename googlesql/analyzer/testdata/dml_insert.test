@@ -2350,8 +2350,8 @@ INSERT INTO KeyValue(Key, Value)
 FROM
   AnotherKeyValue
 |> SELECT
-     AnotherKeyValue.Key AS Key,
-     AnotherKeyValue.value AS value;
+     AnotherKeyValue.Key,
+     AnotherKeyValue.value;
 
 ==
 
@@ -2395,5 +2395,5 @@ FROM
 |> WHERE
      (AnotherKeyValue.Key) > 2
 |> SELECT
-     AnotherKeyValue.Key AS Key,
-     AnotherKeyValue.value AS value;
+     AnotherKeyValue.Key,
+     AnotherKeyValue.value;

@@ -27,7 +27,7 @@ WHERE
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS a_2
+         KeyValue.Key
   ))
 ASSERT_ROWS_MODIFIED 1;
 ==
@@ -74,12 +74,8 @@ INSERT INTO KeyValue(Value, Key)
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> SELECT
-     keyvalue_3.a_2 AS Value,
-     keyvalue_3.a_1 AS Key
+     KeyValue.Value,
+     KeyValue.Key
 ASSERT_ROWS_MODIFIED 1;
 ==
 
@@ -120,7 +116,7 @@ INSERT INTO KitchenSinkValueTable(value)
 FROM
   TestTable
 |> SELECT
-     TestTable.KitchenSink AS KitchenSink;
+     TestTable.KitchenSink;
 ==
 
 UPDATE KeyValue SET
@@ -267,7 +263,7 @@ SET
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS Key
+         KeyValue.Key
   ),
   (
     INSERT INTO testtable_1.KitchenSink.repeated_uint32_val

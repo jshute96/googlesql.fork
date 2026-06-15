@@ -86,18 +86,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (! Person & ! Account & %)
       WHERE
         (1 + 2) = 3)
     COLUMNS(
-      1 AS a_3,
-      CONCAT("str", "_suffix") AS a_4
+      1 AS number,
+      CONCAT("str", "_suffix") AS concat_str
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS number,
-     aml_1.a_4 AS concat_str;
+     aml_1.number,
+     aml_1.concat_str;
 ==
 
 # not found in catalog
@@ -193,16 +193,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (! Person |(Account & ! Person) | %))
     COLUMNS(
-      1 AS a_3,
-      CONCAT("str", "_suffix") AS a_4
+      1 AS number,
+      CONCAT("str", "_suffix") AS concat_str
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS number,
-     aml_1.a_4 AS concat_str;
+     aml_1.number,
+     aml_1.concat_str;
 
 ==
 
@@ -287,16 +287,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS ((Account | Person) &(! Person | %)))
     COLUMNS(
-      1 AS a_3,
-      CONCAT("str", "_suffix") AS a_4
+      1 AS number,
+      CONCAT("str", "_suffix") AS concat_str
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS number,
-     aml_1.a_4 AS concat_str;
+     aml_1.number,
+     aml_1.concat_str;
 ==
 
 # NOT operator on a parenthesized expression
@@ -370,16 +370,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS !(Account | Person))
     COLUMNS(
-      1 AS a_3,
-      CONCAT("str", "_suffix") AS a_4
+      1 AS number,
+      CONCAT("str", "_suffix") AS concat_str
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS number,
-     aml_1.a_4 AS concat_str;
+     aml_1.number,
+     aml_1.concat_str;
 
 ==
 
@@ -452,16 +452,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS Account)
     COLUMNS(
-      a_2.balance AS a_3,
-      a_2.id AS a_4
+      n.balance AS balance,
+      n.id AS id
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS balance,
-     aml_1.a_4 AS id;
+     aml_1.balance,
+     aml_1.id;
 ==
 
 # An empty label filter will resolve to the labelexpr % | !%
@@ -603,30 +603,30 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (% | ! %))
     COLUMNS(
-      a_2.age AS a_3,
-      a_2.balance AS a_4,
-      a_2.birthday AS a_5,
-      a_2.data AS a_6,
-      a_2.id AS a_7,
-      a_2.name AS a_8,
-      a_2.syndicateData AS a_9,
-      a_2.syndicateId AS a_10,
-      a_2.syndicateName AS a_11
+      n.age AS age,
+      n.balance AS balance,
+      n.birthday AS birthday,
+      n.data AS data,
+      n.id AS id,
+      n.name AS name,
+      n.syndicateData AS syndicateData,
+      n.syndicateId AS syndicateId,
+      n.syndicateName AS syndicateName
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS age,
-     aml_1.a_4 AS balance,
-     aml_1.a_5 AS birthday,
-     aml_1.a_6 AS data,
-     aml_1.a_7 AS id,
-     aml_1.a_8 AS name,
-     aml_1.a_9 AS syndicateData,
-     aml_1.a_10 AS syndicateId,
-     aml_1.a_11 AS syndicateName;
+     aml_1.age,
+     aml_1.balance,
+     aml_1.birthday,
+     aml_1.data,
+     aml_1.id,
+     aml_1.name,
+     aml_1.syndicateData,
+     aml_1.syndicateId,
+     aml_1.syndicateName;
 ==
 
 # Referring to a node pattern with an edge only label is an error

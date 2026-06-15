@@ -199,23 +199,23 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n
+      IS (% | ! %))
+      -[e
+      IS (% | ! %)]->
       (a_2
       IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
     LET
-      a_5 = AFN_AGG(a_2.age) OVER (PARTITION BY a_2.name
-        ORDER BY a_2.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+      a_3 = AFN_AGG(n.age) OVER (PARTITION BY n.name
+        ORDER BY n.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
     FILTER
       WHERE
-        a_5 > 5
+        a_3 > 5
     RETURN
-      a_2.id AS a_6
+      n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS id;
+     aml_1.id;
 ==
 
 # Analytic functions in FILTER with horizontal agg
@@ -438,29 +438,29 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (% | ! %))
       (
+        (a_2
+        IS (% | ! %))
+        -[e
+        IS (% | ! %)]->
         (a_3
         IS (% | ! %))
-        -[a_4
-        IS (% | ! %)]->
-        (a_5
-        IS (% | ! %))
       ) { 3, 5 }
-      (a_6
+      (a_4
       IS (% | ! %))
     LET
-      a_7 = AFN_AGG(SUM(a_4.amount)) OVER (PARTITION BY a_2.name
-        ORDER BY a_2.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+      a_5 = AFN_AGG(SUM(e.amount)) OVER (PARTITION BY n.name
+        ORDER BY n.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
     FILTER
       WHERE
-        a_7 > 5
+        a_5 > 5
     RETURN
-      a_2.id AS a_8
+      n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.a_8 AS id;
+     aml_1.id;
 ==
 
 
@@ -641,22 +641,22 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n
+      IS (% | ! %))
+      -[e
+      IS (% | ! %)]->
       (a_2
       IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
     LET
-      a_5 = AFN_AGG(a_2.age) OVER (PARTITION BY SOURCE_NODE_ID(a_3)
-        ORDER BY a_2.age RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+      w = AFN_AGG(n.age) OVER (PARTITION BY SOURCE_NODE_ID(e)
+        ORDER BY n.age RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
     RETURN
-      a_2.id AS a_6,
-      a_5 AS a_7
+      n.id AS id,
+      w AS w_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS id,
-     aml_1.a_7 AS w;
+     aml_1.id,
+     aml_1.w_2 AS w;
 ==
 
 # Analytic functions are allowed in LET with horizontal agg
@@ -876,28 +876,28 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (% | ! %))
       (
+        (a_2
+        IS (% | ! %))
+        -[e
+        IS (% | ! %)]->
         (a_3
         IS (% | ! %))
-        -[a_4
-        IS (% | ! %)]->
-        (a_5
-        IS (% | ! %))
       ) { 3, 5 }
-      (a_6
+      (a_4
       IS (% | ! %))
     LET
-      a_7 = AFN_AGG(SUM(a_4.amount)) OVER (PARTITION BY SOURCE_NODE_ID(ARRAY_FIRST(a_4))
-        ORDER BY a_2.age RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+      w = AFN_AGG(SUM(e.amount)) OVER (PARTITION BY SOURCE_NODE_ID(ARRAY_FIRST(e))
+        ORDER BY n.age RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
     RETURN
-      a_2.id AS a_8,
-      a_7 AS a_9
+      n.id AS id,
+      w AS w_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_8 AS id,
-     aml_1.a_9 AS w;
+     aml_1.id,
+     aml_1.w_2 AS w;
 ==
 
 # Analytic functions are in LET still disallow vertical agg
@@ -1094,19 +1094,19 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n
+      IS (% | ! %))
+      -[e
+      IS (% | ! %)]->
       (a_2
       IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
     RETURN
-      AFN_AGG(SUM(CAST(a_2.age AS UINT64))) OVER (PARTITION BY ANY_VALUE(SOURCE_NODE_ID(a_3))
-        ORDER BY MIN(a_2.id) RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_5
-    GROUP BY a_2.name
+      AFN_AGG(SUM(CAST(n.age AS UINT64))) OVER (PARTITION BY ANY_VALUE(SOURCE_NODE_ID(e))
+        ORDER BY MIN(n.id) RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w1
+    GROUP BY n.name
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS w1;
+     aml_1.w1;
 ==
 
 # Regression test where analytic columns referenced on RETURN's ORDER BY  clause
@@ -1287,23 +1287,23 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n
+      IS (% | ! %))
+      -[e
+      IS (% | ! %)]->
       (a_2
       IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
     RETURN
-      AFN_AGG(a_2.age) OVER (PARTITION BY a_2.id
-        ORDER BY a_2.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_5,
-      a_2.id AS a_6,
-      a_2.age AS a_7
-    ORDER BY a_5
+      AFN_AGG(n.age) OVER (PARTITION BY n.id
+        ORDER BY n.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w1,
+      n.id AS id,
+      n.age AS age
+    ORDER BY w1
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS w1,
-     aml_1.a_6 AS id,
-     aml_1.a_7 AS age;
+     aml_1.w1,
+     aml_1.id,
+     aml_1.age;
 ==
 
 # Analytic function in RETURN still disallows horizontal aggregation
@@ -1494,34 +1494,34 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n
+      IS (% | ! %))
+      -[e
+      IS (% | ! %)]->
       (a_2
       IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
     WITH
+      n,
+      e,
       a_2,
-      a_3,
-      a_4,
-      SOURCE_NODE_ID(a_3) AS a_5,
-      a_2.age AS a_6
+      SOURCE_NODE_ID(e) AS a_3,
+      n.age AS age
     WITH
+      n,
+      e,
       a_2,
-      a_3,
-      a_4,
-      AFN_AGG(a_2.age) OVER (PARTITION BY a_5
-        ORDER BY a_6 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_7
+      AFN_AGG(n.age) OVER (PARTITION BY a_3
+        ORDER BY age RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w
     WITH
-      a_2,
-      a_7
+      n,
+      w
     RETURN
-      a_2.id AS a_8,
-      a_7 AS a_9
+      n.id AS id,
+      w AS w_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_8 AS id,
-     aml_1.a_9 AS w;
+     aml_1.id,
+     aml_1.w_2 AS w;
 ==
 
 # Analytic function in WITH with vertical aggregation
@@ -1717,37 +1717,37 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n
+      IS (% | ! %))
+      -[e
+      IS (% | ! %)]->
       (a_2
       IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
     WITH
-      a_3 AS a_8,
-      ANY_VALUE(a_2.age) AS a_5,
-      ANY_VALUE(SOURCE_NODE_ID(a_3)) AS a_6,
-      MAX(a_2.age) AS a_7
+      e AS e_2,
+      ANY_VALUE(n.age) AS a_3,
+      ANY_VALUE(SOURCE_NODE_ID(e)) AS a_4,
+      MAX(n.age) AS a_5
     WITH
-      a_8,
+      e_2,
+      a_3,
+      a_4,
       a_5,
-      a_6,
-      a_7,
-      AFN_AGG(a_5) OVER (PARTITION BY a_6
-        ORDER BY a_7 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_9
+      AFN_AGG(a_3) OVER (PARTITION BY a_4
+        ORDER BY a_5 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w1
     WITH
-      a_8,
-      a_9
+      e_2,
+      w1
     FILTER
       WHERE
-        a_9 < 5
+        w1 < 5
     RETURN
-      a_8.amount AS a_10,
-      a_9 AS a_11
+      e_2.amount AS amount,
+      w1 AS w1_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_10 AS amount,
-     aml_1.a_11 AS w1;
+     aml_1.amount,
+     aml_1.w1_2 AS w1;
 ==
 
 # Analytic function in WITH still disallows horizontal aggregation
@@ -2476,23 +2476,23 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n
+      IS (% | ! %))
+      -[e
+      IS (% | ! %)]->
       (a_2
       IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
     LET
-      a_5 = AFN_AGG(a_2.age) OVER (PARTITION BY a_2
-        ORDER BY a_2.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+      a_3 = AFN_AGG(n.age) OVER (PARTITION BY n
+        ORDER BY n.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
     FILTER
       WHERE
-        a_5 > 5
+        a_3 > 5
     RETURN
-      a_2.id AS a_6
+      n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS id;
+     aml_1.id;
 ==
 
 # PARTITION BY graph path
@@ -2660,23 +2660,23 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (a_3
+      p = (n
       IS (% | ! %))
-      -[a_4
+      -[e
       IS (% | ! %)]->
-      (a_5
+      (a_2
       IS (% | ! %))
     LET
-      a_6 = AFN_AGG(a_3.age) OVER (PARTITION BY a_2
-        ORDER BY a_3.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+      a_3 = AFN_AGG(n.age) OVER (PARTITION BY p
+        ORDER BY n.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
     FILTER
       WHERE
-        a_6 > 5
+        a_3 > 5
     RETURN
-      a_3.id AS a_7
+      n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS id;
+     aml_1.id;
 ==
 
 # Regression test for b/382069429
@@ -2750,14 +2750,14 @@ FROM
   GRAPH_TABLE(
     aml
     LET
-      a_2 = 1,
-      a_3 = 2
+      x = 1,
+      y = 2
     RETURN
-      a_2 + a_3 AS a_4
-    ORDER BY a_2
+      x + y AS z
+    ORDER BY x
   ) AS aml_1
 |> SELECT
-     aml_1.a_4 AS z;
+     aml_1.z;
 ==
 
 # Regression test for b/382069429
@@ -2852,15 +2852,15 @@ FROM
   GRAPH_TABLE(
     aml
     LET
-      a_2 = 1,
-      a_3 = 2
+      x = 1,
+      y = 2
     RETURN
-      SUM(a_2 + a_3) OVER (PARTITION BY a_2
-        ORDER BY a_2 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_4
-    ORDER BY a_2
+      SUM(x + y) OVER (PARTITION BY x
+        ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS z
+    ORDER BY x
   ) AS aml_1
 |> SELECT
-     aml_1.a_4 AS z;
+     aml_1.z;
 ==
 
 # Regression test for b/382069429

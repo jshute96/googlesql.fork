@@ -958,12 +958,8 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.string AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SumOfAggregateArgs(MAX(simpletypes_3.a_1)
-       GROUP BY simpletypes_3.a_2) AS a_4;
+     SumOfAggregateArgs(MAX(SimpleTypes.int64)
+       GROUP BY SimpleTypes.string) AS a_1;
 
 Rewrite ERROR: SQL function inliner cannot inline aggregate function Lazy_resolution_function:SumOfAggregateArgs with GROUP BY modifier

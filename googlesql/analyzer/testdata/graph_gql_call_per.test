@@ -236,21 +236,21 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (x
       IS (% | ! %))
     RETURN
-      (LENGTH(a_2.name)) > 10 AS a_3
+      (LENGTH(x.name)) > 10 AS b
     NEXT
     WITH
-      a_3 AS b
-    CALL PER () TVF_ONE_RELATION_ARG_WITH_FIXED_OUTPUT() @{ hint = 1 } YIELD column_bool AS a_4, column_bytes AS a_5
+      b AS b
+    CALL PER () TVF_ONE_RELATION_ARG_WITH_FIXED_OUTPUT() @{ hint = 1 } YIELD column_bool AS column_bool, column_bytes AS column_bytes
     RETURN
-      a_4 AS a_6,
-      a_5 AS a_7
+      column_bool AS column_bool_2,
+      column_bytes AS column_bytes_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS column_bool,
-     aml_1.a_7 AS column_bytes;
+     aml_1.column_bool_2 AS column_bool,
+     aml_1.column_bytes_2 AS column_bytes;
 ==
 
 # Pass the wrong table type (int instead of bool) to test the error message.

@@ -1252,17 +1252,6 @@ class SQLBuilder : public ResolvedASTVisitor {
           grouping_column_id_map,
       QueryExpression* query_expression);
 
-  // In Pipe syntax mode, if ProcessAggregateScanBase augmented the aggregate's
-  // select list with grouping keys that are not in `output_column_list` (so a
-  // valid pipe AGGREGATE could be formed), appends a `|> SELECT` operator that
-  // projects back to exactly the output columns, dropping the extra grouping
-  // keys that pipe AGGREGATE emits. Returns `query_expression` unchanged when no
-  // projection is needed.
-  absl::StatusOr<std::unique_ptr<QueryExpression>>
-  AppendPipeAggregateOutputProjectionIfNeeded(
-      const ResolvedColumnList& output_column_list,
-      std::unique_ptr<QueryExpression> query_expression);
-
   // Helper function to return corresponding SQL for a list of
   // ResolvedAlterActions.
   absl::StatusOr<std::string> GetAlterActionListSQL(

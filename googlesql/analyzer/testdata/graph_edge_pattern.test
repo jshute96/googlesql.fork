@@ -112,18 +112,18 @@ FROM
     MATCH
       (a_2
       IS (% | ! %))
-      -[a_3
+      -[e
       IS (% | ! %)
       WHERE
-        (a_3.personId) = 1]->
-      (a_4
+        (e.personId) = 1]->
+      (a_3
       IS (% | ! %))
     COLUMNS(
-      a_3.accountId AS a_5
+      e.accountId AS AccountId
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS AccountId;
+     aml_1.AccountId;
 ==
 
 # Full edge pattern.
@@ -229,18 +229,18 @@ FROM
     MATCH
       (a_2
       IS (% | ! %))
-      -[a_3
+      -[e
       IS PersonOwnAccount
       WHERE
-        (a_3.personId) = 1]->
-      (a_4
+        (e.personId) = 1]->
+      (a_3
       IS (% | ! %))
     COLUMNS(
-      a_3.accountId AS a_5
+      e.accountId AS AccountId
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS AccountId;
+     aml_1.AccountId;
 ==
 
 # Empty edge pattern.
@@ -343,11 +343,11 @@ FROM
       (a_4
       IS (% | ! %))
     COLUMNS(
-      1 AS a_5
+      1 AS one
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS one;
+     aml_1.one;
 ==
 
 # Abbreviated edge pattern.
@@ -450,11 +450,11 @@ FROM
       (a_4
       IS (% | ! %))
     COLUMNS(
-      1 AS a_5
+      1 AS one
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS one;
+     aml_1.one;
 ==
 
 # Cannot access node properties in edge pattern.
@@ -579,18 +579,18 @@ FROM
     MATCH
       (a_2
       IS (% | ! %))
-      -[a_3
+      -[e
       IS (% | ! %)
       WHERE
-        (a_3.value) = ""]->
-      (a_4
+        (e.value) = ""]->
+      (a_3
       IS (% | ! %))
     COLUMNS(
-      a_3.value AS a_5
+      e.value AS value
     )
   ) AS aml_multi_1
 |> SELECT
-     aml_multi_1.a_5 AS value;
+     aml_multi_1.value;
 ==
 
 select * from
@@ -684,16 +684,16 @@ FROM
     MATCH
       (a_2
       IS (% | ! %))
-      -[a_3
+      -[e
       IS RelatesTo]->
-      (a_4
+      (a_3
       IS (% | ! %))
     COLUMNS(
-      a_3.value AS a_5
+      e.value AS value
     )
   ) AS aml_composite_key_1
 |> SELECT
-     aml_composite_key_1.a_5 AS value;
+     aml_composite_key_1.value;
 ==
 
 select * from
@@ -787,8 +787,8 @@ FROM
       (a_4
       IS (% | ! %))
     COLUMNS(
-      1 AS a_5
+      1 AS one
     )
   ) AS aml_composite_key_1
 |> SELECT
-     aml_composite_key_1.a_5 AS one;
+     aml_composite_key_1.one;

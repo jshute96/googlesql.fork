@@ -81,16 +81,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (% | ! %)
       WHERE
-        ((a_2.id) + 3) = 2)
+        ((n.id) + 3) = 2)
     COLUMNS(
-      a_2.name AS a_3
+      n.name AS Name
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS Name;
+     aml_1.Name;
 ==
 
 # Correlated columns in node WHERE clause
@@ -205,22 +205,22 @@ FROM
          GRAPH_TABLE(
            aml
            MATCH
-             (a_3
+             (n
              IS (% | ! %)
              WHERE
-               (a_3.name) = (KeyValue.Value))
+               (n.name) = (KeyValue.Value))
            COLUMNS(
-             a_3.id AS a_4
+             n.id AS Id
            )
-         ) AS aml_2
+         ) AS aml_1
        |> SELECT
-            aml_2.a_4 AS a_4
-       |> AS graphtablescan_5
+            aml_1.Id
+       |> AS graphtablescan_2
        |> SELECT
-            1 AS a_6
+            1 AS a_3
      )
 |> SELECT
-     1 AS a_7;
+     1 AS a_4;
 
 ==
 
@@ -292,16 +292,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (Person | Account)
       WHERE
         (1 + 1) = 2)
     COLUMNS(
-      1 AS a_3
+      1 AS One
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS One;
+     aml_1.One;
 ==
 
 select gt.* from
@@ -358,12 +358,12 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS Person)
     COLUMNS(
-      1 AS a_3
+      1 AS One
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS One;
+     aml_1.One;
 

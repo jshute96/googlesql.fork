@@ -200,4 +200,3 @@ ALTERNATION GROUPS:
 ERROR: The allowed_references option can only be the literal string 'GLOBAL' [at 3:11]
   OPTIONS(allowed_references='BUILTIN')
           ^
-==

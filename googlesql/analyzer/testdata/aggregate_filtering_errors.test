@@ -416,15 +416,11 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     ARRAY_AGG(simpletypes_3.a_1
+     ARRAY_AGG(SimpleTypes.int64
        WHERE
-         simpletypes_3.a_2
-       ORDER BY simpletypes_3.a_1) AS a_4;
+         SimpleTypes.bool
+       ORDER BY SimpleTypes.int64) AS a_1;
 
 Rewrite ERROR: generic::unimplemented: Aggregate functions with a WHERE filter modifier are not supported in ORDER_BY_AND_LIMIT_IN_AGGREGATE rewriter
 ==
@@ -476,15 +472,11 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     ARRAY_AGG(simpletypes_3.a_1
+     ARRAY_AGG(SimpleTypes.int64
        WHERE
-         simpletypes_3.a_2
-       LIMIT 1) AS a_4;
+         SimpleTypes.bool
+       LIMIT 1) AS a_1;
 
 Rewrite ERROR: generic::unimplemented: Aggregate functions with a WHERE filter modifier are not supported in ORDER_BY_AND_LIMIT_IN_AGGREGATE rewriter
 ==
@@ -542,14 +534,11 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1
-|> AS simpletypes_2
 |> AGGREGATE
-     ARRAY_AGG(simpletypes_2.a_1
-       GROUP BY simpletypes_2.a_1
-       HAVING(simpletypes_2.a_1) > 1
-       ORDER BY simpletypes_2.a_1) AS a_3;
+     ARRAY_AGG(SimpleTypes.int64
+       GROUP BY SimpleTypes.int64
+       HAVING(SimpleTypes.int64) > 1
+       ORDER BY SimpleTypes.int64) AS a_1;
 
 Rewrite ERROR: generic::unimplemented: Aggregate functions with GROUP BY modifiers are not supported in ORDER_BY_AND_LIMIT_IN_AGGREGATE rewriter
 ==
@@ -605,13 +594,10 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1
-|> AS simpletypes_2
 |> AGGREGATE
-     ARRAY_AGG(simpletypes_2.a_1
-       GROUP BY simpletypes_2.a_1
-       HAVING(simpletypes_2.a_1) > 1
-       LIMIT 1) AS a_3;
+     ARRAY_AGG(SimpleTypes.int64
+       GROUP BY SimpleTypes.int64
+       HAVING(SimpleTypes.int64) > 1
+       LIMIT 1) AS a_1;
 
 Rewrite ERROR: generic::unimplemented: Aggregate functions with GROUP BY modifiers are not supported in ORDER_BY_AND_LIMIT_IN_AGGREGATE rewriter

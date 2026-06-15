@@ -61,10 +61,10 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(ARRAY< INT64 >[10, 20, 30]) AS a_1 WITH OFFSET AS a_2
+  UNNEST(ARRAY< INT64 >[10, 20, 30]) AS numbers WITH OFFSET AS offset
 |> SELECT
-     a_1 AS numbers,
-     a_2 AS offset;
+     numbers,
+     offset;
 ==
 
 # FOR UPDATE is not propagated to expression subquery in UNNEST even though its
@@ -94,10 +94,10 @@ FROM
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS a_1
-  )) AS a_2
+         KeyValue.Key
+  )) AS a_1
 |> SELECT
-     a_2 AS a_2;
+     a_1;
 ==
 
 # FOR UPDATE is not propagated to expression subquery in UNNEST even though its
@@ -140,22 +140,22 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> JOIN
    UNNEST(ARRAY(
      FROM
        TestTable
      |> WHERE
-          (keyvalue_3.a_1) = CAST(TestTable.key AS INT64)
+          (keyvalue_1.Key) = CAST(TestTable.key AS INT64)
      |> SELECT
-          TestTable.key AS a_4
-   )) AS a_5
+          TestTable.key AS key_2
+   )) AS a_2
 |> SELECT
-     keyvalue_3.a_1 AS Key,
-     keyvalue_3.a_2 AS Value,
-     a_5 AS a_5;
+     keyvalue_1.Key,
+     keyvalue_1.Value,
+     a_2;
 ==
 
 # FOR UPDATE with GROUP BY
@@ -182,19 +182,12 @@ GROUP BY 1, 2;
 FROM
   KeyValue
 FOR UPDATE
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_1 AS a_4,
-     keyvalue_3.a_2 AS a_5
 |> AGGREGATE
-   GROUP BY a_4, a_5
-|> AS aggregatescan_6
+   GROUP BY KeyValue.Key AS key_2, KeyValue.Value AS value_2
+|> AS aggregatescan_1
 |> SELECT
-     aggregatescan_6.a_4 AS key,
-     aggregatescan_6.a_5 AS value;
+     aggregatescan_1.key_2 AS key,
+     aggregatescan_1.value_2 AS value;
 ==
 
 # FOR UPDATE with GROUB BY and HAVING
@@ -232,21 +225,14 @@ WHERE
 FROM
   KeyValue
 FOR UPDATE
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_1 AS a_4
 |> AGGREGATE
-     SUM(CAST(keyvalue_3.a_2 AS INT64)) AS a_5
-   GROUP BY a_4
-|> AS aggregatescan_6
+     SUM(CAST(KeyValue.Value AS INT64)) AS values
+   GROUP BY KeyValue.Key AS key_2
 |> WHERE
-     (aggregatescan_6.a_5) > 10
+     values > 10
 |> SELECT
-     aggregatescan_6.a_4 AS key,
-     aggregatescan_6.a_5 AS values;
+     key_2 AS key,
+     values;
 ==
 
 # Comma and non-comma CROSS JOIN with FOR UPDATE in query.
@@ -282,20 +268,20 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS keyvalue_2
+     KeyValue.Key
+|> AS keyvalue_1
 |> CROSS JOIN
    (
      FROM
        KeyValue
      FOR UPDATE
      |> SELECT
-          KeyValue.Key AS a_3
-     |> AS keyvalue_4
+          KeyValue.Key AS Key_2
+     |> AS keyvalue_2
    )
 |> SELECT
-     keyvalue_2.a_1 AS key,
-     keyvalue_4.a_3 AS key;
+     keyvalue_1.Key AS key,
+     keyvalue_2.Key_2 AS key;
 ==
 
 # Joins with condition and FOR UPDATE in query.
@@ -338,20 +324,20 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS keyvalue_2
+     KeyValue.Key
+|> AS keyvalue_1
 |> INNER JOIN
    (
      FROM
        KeyValue
      FOR UPDATE
      |> SELECT
-          KeyValue.Key AS a_3
-     |> AS keyvalue_4
+          KeyValue.Key AS Key_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_2.a_1) = (keyvalue_4.a_3)
+   ON (keyvalue_1.Key) = (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_2.a_1 AS key;
+     keyvalue_1.Key AS key;
 --
 ALTERNATION GROUP: left join
 --
@@ -383,20 +369,20 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS keyvalue_2
+     KeyValue.Key
+|> AS keyvalue_1
 |> LEFT JOIN
    (
      FROM
        KeyValue
      FOR UPDATE
      |> SELECT
-          KeyValue.Key AS a_3
-     |> AS keyvalue_4
+          KeyValue.Key AS Key_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_2.a_1) = (keyvalue_4.a_3)
+   ON (keyvalue_1.Key) = (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_2.a_1 AS key;
+     keyvalue_1.Key AS key;
 --
 ALTERNATION GROUP: right join
 --
@@ -428,20 +414,20 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS keyvalue_2
+     KeyValue.Key
+|> AS keyvalue_1
 |> RIGHT JOIN
    (
      FROM
        KeyValue
      FOR UPDATE
      |> SELECT
-          KeyValue.Key AS a_3
-     |> AS keyvalue_4
+          KeyValue.Key AS Key_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_2.a_1) = (keyvalue_4.a_3)
+   ON (keyvalue_1.Key) = (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_2.a_1 AS key;
+     keyvalue_1.Key AS key;
 --
 ALTERNATION GROUP: full join
 --
@@ -473,20 +459,20 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS keyvalue_2
+     KeyValue.Key
+|> AS keyvalue_1
 |> FULL JOIN
    (
      FROM
        KeyValue
      FOR UPDATE
      |> SELECT
-          KeyValue.Key AS a_3
-     |> AS keyvalue_4
+          KeyValue.Key AS Key_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_2.a_1) = (keyvalue_4.a_3)
+   ON (keyvalue_1.Key) = (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_2.a_1 AS key;
+     keyvalue_1.Key AS key;
 ==
 
 # FOR UPDATE on a query with ORDER BY.
@@ -513,14 +499,10 @@ ORDER BY keyvalue_3.a_1;
 FROM
   KeyValue
 FOR UPDATE
+|> ORDER BY KeyValue.Key
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> ORDER BY keyvalue_3.a_1
-|> SELECT
-     keyvalue_3.a_1 AS key,
-     keyvalue_3.a_2 AS value;
+     KeyValue.Key AS key,
+     KeyValue.Value AS value;
 ==
 
 # FOR UPDATE on a query with LIMIT.
@@ -600,14 +582,10 @@ LIMIT 3 OFFSET 1;
 FROM
   KeyValue
 FOR UPDATE
+|> ORDER BY KeyValue.Key
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> ORDER BY keyvalue_3.a_1
-|> SELECT
-     keyvalue_3.a_1 AS key,
-     keyvalue_3.a_2 AS value
+     KeyValue.Key AS key,
+     KeyValue.Value AS value
 |> LIMIT 3 OFFSET 1;
 ==
 
@@ -642,7 +620,7 @@ FOR UPDATE
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 );
 ==
 
@@ -677,7 +655,7 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 );
 ==
 
@@ -714,7 +692,7 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 );
 ==
 
@@ -753,7 +731,7 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 );
 ==
 
@@ -793,18 +771,17 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
+     KeyValue.Key
 ) UNION ALL(
 FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 )
-|> AS setoperationscan_3
-|> ORDER BY setoperationscan_3.a_1
+|> ORDER BY Key
 |> SELECT
-     setoperationscan_3.a_1 AS key
+     Key AS key
 |> LIMIT 5;
 ==
 
@@ -854,16 +831,16 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 ) UNION ALL(
 FROM
   TestTable
 FOR UPDATE
 |> SELECT
-     TestTable.key AS a_3
-|> AS projectscan_4
+     TestTable.key AS key_3
+|> AS projectscan_1
 |> SELECT
-     CAST(projectscan_4.a_3 AS INT64) AS a_5
+     CAST(projectscan_1.key_3 AS INT64) AS key_4
 );
 ==
 
@@ -915,16 +892,16 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 )) EXCEPT ALL(
 FROM
   TestTable
 FOR UPDATE
 |> SELECT
-     TestTable.key AS a_3
-|> AS projectscan_4
+     TestTable.key AS key_3
+|> AS projectscan_1
 |> SELECT
-     CAST(projectscan_4.a_3 AS INT64) AS a_5
+     CAST(projectscan_1.key_3 AS INT64) AS key_4
 );
 ==
 
@@ -976,15 +953,15 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 )) EXCEPT ALL(
 FROM
   TestTable
 |> SELECT
-     TestTable.key AS a_3
-|> AS projectscan_4
+     TestTable.key AS key_3
+|> AS projectscan_1
 |> SELECT
-     CAST(projectscan_4.a_3 AS INT64) AS a_5
+     CAST(projectscan_1.key_3 AS INT64) AS key_4
 );
 ==
 
@@ -1034,27 +1011,27 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
+     KeyValue.Key
 ) UNION ALL(
 FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
+     KeyValue.Key AS Key_2
 )
-|> AS setoperationscan_3
+|> AS setoperationscan_1
 |> CROSS JOIN
    (
      FROM
        KeyValue
      FOR UPDATE
      |> SELECT
-          KeyValue.Key AS a_4
-     |> AS keyvalue_5
+          KeyValue.Key AS Key_3
+     |> AS keyvalue_2
    )
 |> SELECT
-     keyvalue_5.a_4 AS key,
-     setoperationscan_3.a_1 AS key;
+     keyvalue_2.Key_3 AS key,
+     setoperationscan_1.Key AS key;
 ==
 
 # FOR UPDATE scoped to correlated subquery.
@@ -1093,7 +1070,7 @@ FROM
        |> WHERE
             (KeyValue.Key) = (KeyValue.Key)
        |> SELECT
-            KeyValue.Key AS a_3
+            KeyValue.Key AS Key_2
      )
 |> SELECT
      KeyValue.Key AS key,
@@ -1136,7 +1113,7 @@ FOR UPDATE
        |> WHERE
             (KeyValue.Key) = (KeyValue.Key)
        |> SELECT
-            KeyValue.Key AS a_3
+            KeyValue.Key AS Key_2
      )
 |> SELECT
      KeyValue.Key AS key,
@@ -1169,11 +1146,11 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS projectscan_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS projectscan_1
 |> SELECT
-     projectscan_3.a_1 AS key;
+     projectscan_1.Key AS key;
 ==
 
 # FOR UPDATE scoped to the outer query with a subquery.
@@ -1201,11 +1178,11 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS projectscan_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS projectscan_1
 |> SELECT
-     projectscan_3.a_1 AS key;
+     projectscan_1.Key AS key;
 ==
 
 # FOR UPDATE on the outer query should apply to outer TableScan and
@@ -1248,20 +1225,20 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS projectscan_2
+     KeyValue.Key
+|> AS projectscan_1
 |> CROSS JOIN
    (
      FROM
        KeyValue
      FOR UPDATE
      |> SELECT
-          KeyValue.Key AS a_3
-     |> AS keyvalue_4
+          KeyValue.Key AS Key_2
+     |> AS keyvalue_2
    )
 |> SELECT
-     projectscan_2.a_1 AS key,
-     keyvalue_4.a_3 AS key;
+     projectscan_1.Key AS key,
+     keyvalue_2.Key_2 AS key;
 ==
 
 # FOR UPDATE is scoped to an expression subquery.
@@ -1300,11 +1277,11 @@ FROM
        |> WHERE
             (TestTable.key) > CAST(10 AS INT32)
        |> SELECT
-            TestTable.key AS a_3
+            TestTable.key AS key_2
      ) AS INT64)
 |> SELECT
-     KeyValue.Key AS Key,
-     KeyValue.Value AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 ==
 
 # FOR UPDATE is scoped to the outer query with an expression subquery.
@@ -1345,11 +1322,11 @@ FOR UPDATE
        |> WHERE
             (TestTable.key) > CAST(10 AS INT32)
        |> SELECT
-            TestTable.key AS a_3
+            TestTable.key AS key_2
      ) AS INT64)
 |> SELECT
-     KeyValue.Key AS Key,
-     KeyValue.Value AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 ==
 
 # FOR UPDATE in outer query shouldn't propagate to expression subquery SELECT
@@ -1389,18 +1366,14 @@ FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> SELECT
-     keyvalue_3.a_1 AS key,
+     KeyValue.Key AS key,
      (
        FROM
          TestTable
        |> WHERE
-            CAST(TestTable.key AS INT64) = (keyvalue_3.a_1)
+            CAST(TestTable.key AS INT64) = (KeyValue.Key)
        |> SELECT
-            keyvalue_3.a_2 AS a_6
+            KeyValue.Value AS value_3
      ) AS value;
 ==
 
@@ -1433,12 +1406,12 @@ WITH
       KeyValue
     FOR UPDATE
     |> SELECT
-         KeyValue.Key AS a_1
+         KeyValue.Key
   )
 FROM
-  t AS withrefscan_2
+  t AS withrefscan_1
 |> SELECT
-     withrefscan_2.a_1 AS key;
+     withrefscan_1.Key AS key;
 ==
 
 # FOR UPDATE in the outer query doesn't propagate down to TableScan nodes so
@@ -1471,12 +1444,12 @@ WITH
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS a_1
+         KeyValue.Key
   )
 FROM
-  t AS withrefscan_2
+  t AS withrefscan_1
 |> SELECT
-     withrefscan_2.a_1 AS key;
+     withrefscan_1.Key AS key;
 ==
 
 # FOR UPDATE in the CTE query and outer query is equivalent to not having FOR
@@ -1511,12 +1484,12 @@ WITH
       KeyValue
     FOR UPDATE
     |> SELECT
-         KeyValue.Key AS a_1
+         KeyValue.Key
   )
 FROM
-  t AS withrefscan_2
+  t AS withrefscan_1
 |> SELECT
-     withrefscan_2.a_1 AS key;
+     withrefscan_1.Key AS key;
 ==
 
 # FOR UPDATE should apply to kv2 TableScan but not to the TableScan in the CTE
@@ -1567,25 +1540,25 @@ WITH
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS a_1
+         KeyValue.Key
   )
 FROM
   KeyValue
 FOR UPDATE
 |> SELECT
-     KeyValue.Key AS a_2
-|> AS keyvalue_3
+     KeyValue.Key AS Key_2
+|> AS keyvalue_1
 |> INNER JOIN
    (
      FROM
-       kv1 AS withrefscan_4
+       kv1 AS withrefscan_2
      |> SELECT
-          withrefscan_4.a_1 AS a_1
-     |> AS withrefscan_4
+          withrefscan_2.Key
+     |> AS withrefscan_2
    )
-   ON (withrefscan_4.a_1) = (keyvalue_3.a_2)
+   ON (withrefscan_2.Key) = (keyvalue_1.Key_2)
 |> SELECT
-     withrefscan_4.a_1 AS key;
+     withrefscan_2.Key AS key;
 ==
 
 # FOR UPDATE doesn't need to appear in the unparsed query as it shouldn't
@@ -1621,9 +1594,9 @@ WITH
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS a_1
+         KeyValue.Key
   )
 FROM
-  kv1 AS withrefscan_2
+  kv1 AS withrefscan_1
 |> SELECT
-     withrefscan_2.a_1 AS key;
+     withrefscan_1.Key AS key;

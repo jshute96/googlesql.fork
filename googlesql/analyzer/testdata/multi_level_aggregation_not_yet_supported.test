@@ -97,14 +97,11 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.string AS a_1
-|> AS simpletypes_2
 |> AGGREGATE
-     ARRAY_AGG(simpletypes_2.a_1
-       GROUP BY simpletypes_2.a_1
-       ORDER BY simpletypes_2.a_1
-       LIMIT 1) AS a_3;
+     ARRAY_AGG(SimpleTypes.string
+       GROUP BY SimpleTypes.string
+       ORDER BY SimpleTypes.string
+       LIMIT 1) AS a_1;
 
 Rewrite ERROR: generic::unimplemented: Aggregate functions with GROUP BY modifiers are not supported in ORDER_BY_AND_LIMIT_IN_AGGREGATE rewriter
 ==

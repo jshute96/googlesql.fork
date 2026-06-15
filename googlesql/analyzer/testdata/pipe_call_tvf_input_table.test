@@ -142,20 +142,20 @@ SELECT
   "abc" AS a_1
 |> AS projectscan_2
 |> SELECT
-     a_1 AS a_1
+     a_1
 |> CALL TVF_TWO_RELATION_ARGS_RETURN_PROTO_VALUE_TABLE((
      FROM
        KeyValue
      |> SELECT
-          KeyValue.Key AS a_3,
-          KeyValue.Value AS a_4
-     |> AS keyvalue_5
+          KeyValue.Key,
+          KeyValue.Value
+     |> AS keyvalue_3
      |> SELECT
-          a_3 AS Key,
-          a_4 AS Value
-   )) AS tvfscan_6
+          Key,
+          Value
+   )) AS tvfscan_4
 |> SELECT AS VALUE
-     tvfscan_6 AS a_7;
+     tvfscan_4 AS a_5;
 ==
 
 # The SQLBuilder uses the default pipe CALL form without INPUT TABLE, but the
@@ -223,21 +223,21 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> SELECT
-     a_1 AS Key,
-     a_2 AS Value
+     Key,
+     Value
 |> CALL TVF_TWO_RELATION_ARGS_RETURN_PROTO_VALUE_TABLE((
      SELECT
-       "abc" AS a_4
-     |> AS projectscan_5
+       "abc" AS a_2
+     |> AS projectscan_3
      |> SELECT
-          a_4 AS a_4
-   )) AS tvfscan_6
+          a_2
+   )) AS tvfscan_4
 |> SELECT AS VALUE
-     tvfscan_6 AS a_7;
+     tvfscan_4 AS a_5;
 ==
 
 select "abc"
@@ -344,16 +344,16 @@ FROM
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS a_1,
-         KeyValue.Value AS a_2
-    |> AS keyvalue_3
+         KeyValue.Key,
+         KeyValue.Value
+    |> AS keyvalue_1
     |> SELECT
-         a_1 AS Key,
-         a_2 AS Value
-  )) AS tvfscan_4
+         Key,
+         Value
+  )) AS tvfscan_2
 |> SELECT
-     tvfscan_4.column_bool AS column_bool,
-     tvfscan_4.column_bytes AS column_bytes;
+     tvfscan_2.column_bool,
+     tvfscan_2.column_bytes;
 ==
 
 FROM KeyValue

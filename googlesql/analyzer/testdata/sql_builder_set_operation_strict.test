@@ -84,33 +84,23 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS int32,
-     SimpleTypes.int64 AS int64,
-     SimpleTypes.float AS float
+     SimpleTypes.int32,
+     SimpleTypes.int64,
+     SimpleTypes.float
 ) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_7,
-     SimpleTypes.int64 AS a_8,
-     SimpleTypes.float AS a_9
-|> AS simpletypes_10
-|> SELECT
-     simpletypes_10.a_8 AS int64,
-     simpletypes_10.a_9 AS float,
-     simpletypes_10.a_7 AS int32
+     SimpleTypes.int64,
+     SimpleTypes.float,
+     SimpleTypes.int32
 ) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_11,
-     SimpleTypes.int64 AS a_12,
-     SimpleTypes.float AS a_13
-|> AS simpletypes_14
-|> SELECT
-     simpletypes_14.a_12 AS int64,
-     simpletypes_14.a_11 AS int32,
-     simpletypes_14.a_13 AS float
+     SimpleTypes.int64,
+     SimpleTypes.int32,
+     SimpleTypes.float
 );
 ==
 
@@ -202,31 +192,20 @@ FROM
 (
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_4,
-     SimpleTypes.int64 AS a_5
-|> AS simpletypes_6
-|> EXTEND
-     simpletypes_6.a_4 AS a_7,
-     simpletypes_6.a_5 AS a_8
 |> AGGREGATE
-   GROUP BY a_7, a_8
-|> AS aggregatescan_9
+   GROUP BY SimpleTypes.int32 AS int32_2, SimpleTypes.int64 AS int64_2
+|> AS aggregatescan_4
 |> SELECT
-     CAST(aggregatescan_9.a_7 AS INT64) AS a,
-     aggregatescan_9.a_8 AS int64,
-     aggregatescan_9.a_7 AS b
+     CAST(aggregatescan_4.int32_2 AS INT64) AS a,
+     aggregatescan_4.int64_2 AS int64,
+     aggregatescan_4.int32_2 AS b
 ) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_11,
-     SimpleTypes.int64 AS a_12
-|> AS simpletypes_13
-|> SELECT
-     simpletypes_13.a_11 AS b,
-     simpletypes_13.a_12 AS a,
-     simpletypes_13.a_12 AS int64
+     SimpleTypes.int32 AS b,
+     SimpleTypes.int64 AS a,
+     SimpleTypes.int64
 );
 ==
 
@@ -265,14 +244,14 @@ SELECT
 [SQLBUILDER_OUTPUT]
 (
 SELECT
-  1 AS a_5,
-  2 AS a_6
-|> AS projectscan_7
+  1 AS a,
+  2 AS b
+|> AS projectscan_5
 |> SELECT
-     projectscan_7.a_5 AS col1,
-     projectscan_7.a_5 AS col2,
-     projectscan_7.a_6 AS col3,
-     projectscan_7.a_5 AS col4
+     projectscan_5.a AS col1,
+     projectscan_5.a AS col2,
+     projectscan_5.b AS col3,
+     projectscan_5.a AS col4
 ) UNION ALL STRICT CORRESPONDING(
 SELECT
   1 AS col4,
@@ -316,11 +295,11 @@ SELECT
   2 AS b
 ) UNION ALL STRICT CORRESPONDING(
 SELECT
-  2 AS a_5
-|> AS projectscan_6
+  2 AS col
+|> AS projectscan_3
 |> SELECT
-     projectscan_6.a_5 AS a,
-     projectscan_6.a_5 AS b
+     projectscan_3.col AS a,
+     projectscan_3.col AS b
 );
 ==
 
@@ -407,30 +386,19 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_4,
-     SimpleTypes.int64 AS a_5
-|> AS simpletypes_6
-|> SELECT
-     simpletypes_6.a_5 AS a,
-     simpletypes_6.a_4 AS b,
-     simpletypes_6.a_4 AS c
+     SimpleTypes.int64 AS a,
+     SimpleTypes.int32 AS b,
+     SimpleTypes.int32 AS c
 ) EXCEPT DISTINCT CORRESPONDING(
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_8,
-     SimpleTypes.int64 AS a_9
-|> AS simpletypes_10
-|> EXTEND
-     simpletypes_10.a_9 AS a_11,
-     simpletypes_10.a_8 AS a_12
 |> AGGREGATE
-   GROUP BY a_11, a_12
-|> AS aggregatescan_13
+   GROUP BY SimpleTypes.int64 AS int64_3, SimpleTypes.int32 AS int32_3
+|> AS aggregatescan_5
 |> SELECT
-     aggregatescan_13.a_11 AS a,
-     aggregatescan_13.a_12 AS b,
-     aggregatescan_13.a_12 AS c
+     aggregatescan_5.int64_3 AS a,
+     aggregatescan_5.int32_3 AS b,
+     aggregatescan_5.int32_3 AS c
 );
 ==
 
@@ -476,24 +444,20 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS int32,
-     SimpleTypes.int64 AS int64
+     SimpleTypes.int32,
+     SimpleTypes.int64
 ) UNION ALL((
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_3,
-     SimpleTypes.int64 AS a_4
+     SimpleTypes.int32 AS a_1,
+     SimpleTypes.int64 AS a_2
 ) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_7,
-     SimpleTypes.int64 AS a_8
-|> AS simpletypes_9
-|> SELECT
-     simpletypes_9.a_8 AS a_4,
-     simpletypes_9.a_7 AS a_3
+     SimpleTypes.int64 AS a_2,
+     SimpleTypes.int32 AS a_1
 ));
 ==
 
@@ -553,12 +517,8 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_3,
-     SimpleTypes.int64 AS a_4
-|> AS simpletypes_5
-|> SELECT
-     simpletypes_5.a_4 AS a_1,
-     simpletypes_5.a_3 AS a_2
+     SimpleTypes.int64 AS a_1,
+     SimpleTypes.int32 AS a_2
 ) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
@@ -566,20 +526,20 @@ FROM
      SimpleTypes.int32 AS a_2,
      SimpleTypes.int64 AS a_1
 )
-|> AS setoperationscan_8
+|> AS setoperationscan_3
 |> SELECT
-     setoperationscan_8.a_1 AS int64,
-     CAST(setoperationscan_8.a_2 AS INT64) AS int32
+     setoperationscan_3.a_1 AS int64,
+     CAST(setoperationscan_3.a_2 AS INT64) AS int32
 ) UNION ALL(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_10,
-     SimpleTypes.int64 AS a_11
-|> AS projectscan_12
+     SimpleTypes.int32 AS int32_4,
+     SimpleTypes.int64 AS int64_3
+|> AS projectscan_4
 |> SELECT
-     CAST(projectscan_12.a_10 AS INT64) AS a_13,
-     projectscan_12.a_11 AS a_11
+     CAST(projectscan_4.int32_4 AS INT64) AS int32_5,
+     projectscan_4.int64_3
 );
 ==
 
@@ -624,23 +584,19 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS int32
+     SimpleTypes.int32
 ) UNION ALL CORRESPONDING((
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS int32,
-     SimpleTypes.int64 AS a_4
+     SimpleTypes.int32,
+     SimpleTypes.int64 AS a_3
 ) UNION ALL CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_7,
-     SimpleTypes.int64 AS a_8
-|> AS simpletypes_9
-|> SELECT
-     simpletypes_9.a_8 AS a_4,
-     simpletypes_9.a_7 AS int32
+     SimpleTypes.int64 AS a_3,
+     SimpleTypes.int32
 ));
 ==
 
@@ -688,24 +644,20 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS int32,
-     SimpleTypes.int64 AS int64
+     SimpleTypes.int32,
+     SimpleTypes.int64
 ) UNION ALL CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_7,
-     SimpleTypes.int64 AS a_8
-|> AS simpletypes_9
-|> SELECT
-     simpletypes_9.a_8 AS int64,
-     simpletypes_9.a_7 AS int32
+     SimpleTypes.int64,
+     SimpleTypes.int32
 )) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS int32,
-     SimpleTypes.int64 AS int64
+     SimpleTypes.int32,
+     SimpleTypes.int64
 );
 ==
 
@@ -777,40 +729,32 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_3,
-     SimpleTypes.int64 AS a_4
-|> AS projectscan_5
+     SimpleTypes.int32,
+     SimpleTypes.int64
+|> AS projectscan_3
 |> SELECT
-     CAST(projectscan_5.a_3 AS INT64) AS int32,
-     projectscan_5.a_4 AS int64
+     CAST(projectscan_3.int32 AS INT64) AS int32,
+     projectscan_3.int64
 ) UNION ALL(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_7,
-     SimpleTypes.int64 AS a_8
-|> AS simpletypes_9
+     SimpleTypes.int64 AS int64_2,
+     SimpleTypes.int32 AS int32_3
+|> AS projectscan_4
 |> SELECT
-     simpletypes_9.a_8 AS a_8,
-     simpletypes_9.a_7 AS a_7
-|> AS projectscan_10
-|> SELECT
-     projectscan_10.a_8 AS a_8,
-     CAST(projectscan_10.a_7 AS INT64) AS a_11
+     projectscan_4.int64_2,
+     CAST(projectscan_4.int32_3 AS INT64) AS int32_4
 )) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_12,
-     SimpleTypes.int64 AS a_13
-|> AS simpletypes_14
+     SimpleTypes.int64 AS int64_3,
+     SimpleTypes.int32 AS int32_5
+|> AS projectscan_5
 |> SELECT
-     simpletypes_14.a_13 AS a_13,
-     simpletypes_14.a_12 AS a_12
-|> AS projectscan_15
-|> SELECT
-     projectscan_15.a_13 AS int64,
-     CAST(projectscan_15.a_12 AS INT64) AS int32
+     projectscan_5.int64_3 AS int64,
+     CAST(projectscan_5.int32_5 AS INT64) AS int32
 );
 ==
 
@@ -881,40 +825,32 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_3,
-     SimpleTypes.int64 AS a_4
-|> AS simpletypes_5
+     SimpleTypes.int64,
+     SimpleTypes.int32
+|> AS projectscan_3
 |> SELECT
-     simpletypes_5.a_4 AS a_4,
-     simpletypes_5.a_3 AS a_3
-|> AS projectscan_6
-|> SELECT
-     projectscan_6.a_4 AS int64,
-     CAST(projectscan_6.a_3 AS INT64) AS int32
+     projectscan_3.int64,
+     CAST(projectscan_3.int32 AS INT64) AS int32
 ) UNION ALL STRICT CORRESPONDING((
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_8,
-     SimpleTypes.int64 AS a_9
-|> AS projectscan_10
+     SimpleTypes.int32 AS int32_3,
+     SimpleTypes.int64 AS int64_2
+|> AS projectscan_4
 |> SELECT
-     CAST(projectscan_10.a_8 AS INT64) AS int32,
-     projectscan_10.a_9 AS int64
+     CAST(projectscan_4.int32_3 AS INT64) AS int32,
+     projectscan_4.int64_2 AS int64
 ) UNION ALL(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_12,
-     SimpleTypes.int64 AS a_13
-|> AS simpletypes_14
+     SimpleTypes.int64 AS int64_3,
+     SimpleTypes.int32 AS int32_5
+|> AS projectscan_5
 |> SELECT
-     simpletypes_14.a_13 AS a_13,
-     simpletypes_14.a_12 AS a_12
-|> AS projectscan_15
-|> SELECT
-     projectscan_15.a_13 AS a_13,
-     CAST(projectscan_15.a_12 AS INT64) AS a_16
+     projectscan_5.int64_3,
+     CAST(projectscan_5.int32_5 AS INT64) AS int32_6
 ));
 ==
 
@@ -1012,27 +948,20 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
+     SimpleTypes.int64,
      SimpleTypes.int64 AS a_3
-|> AS simpletypes_4
+|> AS projectscan_4
 |> SELECT
-     simpletypes_4.a_3 AS a_3,
-     simpletypes_4.a_3 AS a_5
-|> AS projectscan_6
-|> SELECT
-     projectscan_6.a_3 AS a,
-     CAST(projectscan_6.a_3 AS DOUBLE) AS b
+     projectscan_4.int64 AS a,
+     CAST(projectscan_4.int64 AS DOUBLE) AS b
 ) UNION ALL STRICT CORRESPONDING(
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_8,
-     SimpleTypes.double AS a_9
-|> AS simpletypes_10
+     SimpleTypes.double,
+     SimpleTypes.int32
+|> AS projectscan_5
 |> SELECT
-     simpletypes_10.a_9 AS a_9,
-     simpletypes_10.a_8 AS a_8
-|> AS projectscan_11
-|> SELECT
-     projectscan_11.a_9 AS b,
-     CAST(projectscan_11.a_8 AS INT64) AS a
+     projectscan_5.double AS b,
+     CAST(projectscan_5.int32 AS INT64) AS a
 );

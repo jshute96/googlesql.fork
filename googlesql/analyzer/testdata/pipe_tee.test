@@ -370,23 +370,19 @@ GeneralizedQueryStmt
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
 |> TEE (
      |> SELECT
-          keyvalue_3.a_1 AS a_1
+          KeyValue.Key AS Key
    ), (
      |> SELECT
-          keyvalue_3.a_2 AS a_2
+          KeyValue.Value AS Value
    ), (
      |> WHERE
-          (keyvalue_3.a_1) = 0
+          (KeyValue.Key) = 0
      |> SELECT
-          keyvalue_3.a_1 AS a_1,
-          keyvalue_3.a_2 AS a_2,
-          (keyvalue_3.a_1) * 1000 AS a_4
+          KeyValue.Key AS Key,
+          KeyValue.Value AS Value,
+          (KeyValue.Key) * 1000 AS k1000
    );
 
 [SQLBUILDER_RESOLVED_AST_SHAPE]
@@ -397,16 +393,13 @@ GeneralizedQueryStmt
 +-output_schema=
 | +-OutputSchema
 |   +-output_column_list=
-|     +-KeyValue.Key#1 AS a_1 [INT64]
-|     +-KeyValue.Value#2 AS a_2 [STRING]
+|     +-KeyValue.Key#1 AS Key [INT64]
+|     +-KeyValue.Value#2 AS Value [STRING]
 +-query=
   +-PipeTeeScan
     +-column_list=KeyValue.[Key#1, Value#2]
     +-input_scan=
-    | +-ProjectScan
-    |   +-column_list=KeyValue.[Key#1, Value#2]
-    |   +-input_scan=
-    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
     +-subpipeline_list=
       +-GeneralizedQuerySubpipeline
       | +-subpipeline=
@@ -419,7 +412,7 @@ GeneralizedQueryStmt
       | +-output_schema=
       |   +-OutputSchema
       |     +-output_column_list=
-      |       +-KeyValue.Key#1 AS a_1 [INT64]
+      |       +-KeyValue.Key#1 AS Key [INT64]
       +-GeneralizedQuerySubpipeline
       | +-subpipeline=
       | | +-Subpipeline
@@ -431,15 +424,15 @@ GeneralizedQueryStmt
       | +-output_schema=
       |   +-OutputSchema
       |     +-output_column_list=
-      |       +-KeyValue.Value#2 AS a_2 [STRING]
+      |       +-KeyValue.Value#2 AS Value [STRING]
       +-GeneralizedQuerySubpipeline
         +-subpipeline=
         | +-Subpipeline
         |   +-scan=
         |     +-ProjectScan
-        |       +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.a_4#3]
+        |       +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.k1000#3]
         |       +-expr_list=
-        |       | +-a_4#3 :=
+        |       | +-k1000#3 :=
         |       |   +-FunctionCall(GoogleSQL:$multiply(INT64, INT64) -> INT64)
         |       |     +-ColumnRef(type=INT64, column=KeyValue.Key#1)
         |       |     +-Literal(type=INT64, value=1000)
@@ -455,9 +448,9 @@ GeneralizedQueryStmt
         +-output_schema=
           +-OutputSchema
             +-output_column_list=
-              +-KeyValue.Key#1 AS a_1 [INT64]
-              +-KeyValue.Value#2 AS a_2 [STRING]
-              +-$pipe_select.a_4#3 AS a_4 [INT64]
+              +-KeyValue.Key#1 AS Key [INT64]
+              +-KeyValue.Value#2 AS Value [STRING]
+              +-$pipe_select.k1000#3 AS k1000 [INT64]
 
 [REWRITTEN AST]
 MultiStmt
@@ -558,16 +551,10 @@ GeneralizedQueryStmt
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
 |> TEE (
-     |> EXTEND
-          keyvalue_3.a_1 AS a_4
      |> AGGREGATE
-          COUNT(*) AS a_5
-        GROUP BY a_4
+          COUNT(*) AS n
+        GROUP BY KeyValue.Key AS key_2
    );
 
 [SQLBUILDER_RESOLVED_AST_SHAPE]
@@ -578,34 +565,31 @@ GeneralizedQueryStmt
 +-output_schema=
 | +-OutputSchema
 |   +-output_column_list=
-|     +-KeyValue.Key#1 AS a_1 [INT64]
-|     +-KeyValue.Value#2 AS a_2 [STRING]
+|     +-KeyValue.Key#1 AS Key [INT64]
+|     +-KeyValue.Value#2 AS Value [STRING]
 +-query=
   +-PipeTeeScan
     +-column_list=KeyValue.[Key#1, Value#2]
     +-input_scan=
-    | +-ProjectScan
-    |   +-column_list=KeyValue.[Key#1, Value#2]
-    |   +-input_scan=
-    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
     +-subpipeline_list=
       +-GeneralizedQuerySubpipeline
         +-subpipeline=
         | +-Subpipeline
         |   +-scan=
         |     +-AggregateScan
-        |       +-column_list=[$groupby.a_4#4, $aggregate.a_5#3]
+        |       +-column_list=[$groupby.key_2#4, $aggregate.n#3]
         |       +-input_scan=
         |       | +-SubpipelineInputScan(column_list=KeyValue.[Key#1, Value#2])
         |       +-group_by_list=
-        |       | +-a_4#4 := ColumnRef(type=INT64, column=KeyValue.Key#1)
+        |       | +-key_2#4 := ColumnRef(type=INT64, column=KeyValue.Key#1)
         |       +-aggregate_list=
-        |         +-a_5#3 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+        |         +-n#3 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
         +-output_schema=
           +-OutputSchema
             +-output_column_list=
-              +-$groupby.a_4#4 AS a_4 [INT64]
-              +-$aggregate.a_5#3 AS a_5 [INT64]
+              +-$groupby.key_2#4 AS key_2 [INT64]
+              +-$aggregate.n#3 AS n [INT64]
 
 [REWRITTEN AST]
 MultiStmt

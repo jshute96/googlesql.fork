@@ -35,7 +35,7 @@ SELECT
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 SELECT
-  WITH(a_2 AS 2, a_3 AS 3 * 4, a_2 + a_3) AS a_1;
+  WITH(a AS 2, b AS 3 * 4, a + b) AS a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -98,14 +98,14 @@ SELECT
 SELECT
   (
     SELECT
-      2 AS a_2
+      2 AS a
+    |> AS projectscan_2
+    |> SELECT
+         projectscan_2.a,
+         3 * 4 AS b
     |> AS projectscan_3
     |> SELECT
-         projectscan_3.a_2 AS a_2,
-         3 * 4 AS a_4
-    |> AS projectscan_5
-    |> SELECT
-         (projectscan_5.a_2) + (projectscan_5.a_4) AS a_6
+         (projectscan_3.a) + (projectscan_3.b) AS injected
   ) AS a_1;
 ==
 
@@ -154,11 +154,7 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> SELECT
-     WITH(a_5 AS 2, ((keyvalue_3.a_1) + a_5) + (LENGTH(keyvalue_3.a_2))) AS a_4;
+     WITH(value_2 AS 2, ((KeyValue.Key) + value_2) + (LENGTH(KeyValue.Value))) AS a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -221,17 +217,13 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> SELECT
      (
        SELECT
-         2 AS a_5
-       |> AS projectscan_6
+         2 AS value_2
+       |> AS projectscan_2
        |> SELECT
-            ((keyvalue_3.a_1) + (projectscan_6.a_5)) + (LENGTH(keyvalue_3.a_2)) AS a_7
-     ) AS a_4;
+            ((KeyValue.Key) + (projectscan_2.value_2)) + (LENGTH(KeyValue.Value)) AS injected
+     ) AS a_1;
 ==
 
 # We can reference expressions computed in one stage of a WITH expression
@@ -279,7 +271,7 @@ SELECT
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 SELECT
-  WITH(a_2 AS 1, a_5 AS a_2 + 2, a_3 AS a_5 + 3, a_4 AS a_2 * 2, (a_2 + a_3) + a_4) AS a_1;
+  WITH(a AS 1, b AS a + 2, c AS b + 3, d AS a * 2, (a + c) + d) AS a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -375,25 +367,25 @@ SELECT
 SELECT
   (
     SELECT
-      1 AS a_2
+      1 AS a
+    |> AS projectscan_2
+    |> SELECT
+         projectscan_2.a,
+         (projectscan_2.a) + 2 AS b
     |> AS projectscan_3
     |> SELECT
-         projectscan_3.a_2 AS a_2,
-         (projectscan_3.a_2) + 2 AS a_4
+         projectscan_3.a,
+         projectscan_3.b,
+         (projectscan_3.b) + 3 AS c
+    |> AS projectscan_4
+    |> SELECT
+         projectscan_4.a,
+         projectscan_4.b,
+         projectscan_4.c,
+         (projectscan_4.a) * 2 AS d
     |> AS projectscan_5
     |> SELECT
-         projectscan_5.a_2 AS a_2,
-         projectscan_5.a_4 AS a_4,
-         (projectscan_5.a_4) + 3 AS a_6
-    |> AS projectscan_7
-    |> SELECT
-         projectscan_7.a_2 AS a_2,
-         projectscan_7.a_4 AS a_4,
-         projectscan_7.a_6 AS a_6,
-         (projectscan_7.a_2) * 2 AS a_8
-    |> AS projectscan_9
-    |> SELECT
-         ((projectscan_9.a_2) + (projectscan_9.a_6)) + (projectscan_9.a_8) AS a_10
+         ((projectscan_5.a) + (projectscan_5.c)) + (projectscan_5.d) AS injected
   ) AS a_1;
 ==
 
@@ -437,7 +429,7 @@ SELECT
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 SELECT
-  WITH(a_2 AS "abc", a_3 AS WITH(a_4 AS "def", a_5 AS "ghi", CONCAT(a_4, a_5)), CONCAT(a_2, a_3)) AS a_1;
+  WITH(a AS "abc", b AS WITH(a_2 AS "def", b_2 AS "ghi", CONCAT(a_2, b_2)), CONCAT(a, b)) AS a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -534,24 +526,24 @@ SELECT
 SELECT
   (
     SELECT
-      "abc" AS a_2
-    |> AS projectscan_3
+      "abc" AS a
+    |> AS projectscan_2
     |> SELECT
-         projectscan_3.a_2 AS a_2,
+         projectscan_2.a,
          (
            SELECT
-             "def" AS a_5
-           |> AS projectscan_6
+             "def" AS a_2
+           |> AS projectscan_3
            |> SELECT
-                projectscan_6.a_5 AS a_5,
-                "ghi" AS a_7
-           |> AS projectscan_8
+                projectscan_3.a_2,
+                "ghi" AS b_2
+           |> AS projectscan_4
            |> SELECT
-                CONCAT(projectscan_8.a_5, projectscan_8.a_7) AS a_9
-         ) AS a_4
-    |> AS projectscan_10
+                CONCAT(projectscan_4.a_2, projectscan_4.b_2) AS injected
+         ) AS b
+    |> AS projectscan_5
     |> SELECT
-         CONCAT(projectscan_10.a_2, projectscan_10.a_4) AS a_11
+         CONCAT(projectscan_5.a, projectscan_5.b) AS injected_2
   ) AS a_1;
 ==
 
@@ -624,18 +616,12 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_4
 |> AGGREGATE
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_4
-|> AS aggregatescan_6
+     SUM(KeyValue.Key) AS a_1
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_2
 |> SELECT
-     WITH(a_8 AS LENGTH(aggregatescan_6.a_4), a_9 AS aggregatescan_6.a_5, a_8 * a_9) AS a_7;
+     WITH(len AS LENGTH(aggregatescan_2.value_2), sumk AS aggregatescan_2.a_1, len * sumk) AS a_3;
 
 [REWRITTEN AST]
 QueryStmt
@@ -723,28 +709,22 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_4
 |> AGGREGATE
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_4
-|> AS aggregatescan_6
+     SUM(KeyValue.Key) AS a_1
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_2
 |> SELECT
      (
        SELECT
-         LENGTH(aggregatescan_6.a_4) AS a_8
-       |> AS projectscan_9
+         LENGTH(aggregatescan_2.value_2) AS len
+       |> AS projectscan_4
        |> SELECT
-            projectscan_9.a_8 AS a_8,
-            aggregatescan_6.a_5 AS a_10
-       |> AS projectscan_11
+            projectscan_4.len,
+            aggregatescan_2.a_1 AS sumk
+       |> AS projectscan_5
        |> SELECT
-            (projectscan_11.a_8) * (projectscan_11.a_10) AS a_12
-     ) AS a_7;
+            (projectscan_5.len) * (projectscan_5.sumk) AS injected
+     ) AS a_3;
 ==
 
 [language_features=NONE,+ANALYTIC_FUNCTIONS,+WITH_EXPRESSION]
@@ -837,21 +817,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_6
 |> AGGREGATE
-     COUNT(keyvalue_3.a_1) AS a_4,
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_6
+     COUNT(KeyValue.Key) AS a_1,
+     SUM(KeyValue.Key) AS a_2
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_3
 |> SELECT
-     a_4,
-     a_5
-|> SELECT
-     WITH(a_9 AS a_4, a_8 AS a_5, CAST(a_8 AS DOUBLE) / CAST(a_9 AS DOUBLE)) AS a_7;
+     WITH(thecount AS aggregatescan_3.a_1, thesum AS aggregatescan_3.a_2, CAST(thesum AS DOUBLE) / CAST(thecount AS DOUBLE)) AS a_4;
 
 [REWRITTEN AST]
 QueryStmt
@@ -942,31 +914,23 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_6
 |> AGGREGATE
-     COUNT(keyvalue_3.a_1) AS a_4,
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_6
-|> SELECT
-     a_4,
-     a_5
+     COUNT(KeyValue.Key) AS a_1,
+     SUM(KeyValue.Key) AS a_2
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_3
 |> SELECT
      (
        SELECT
-         a_4 AS a_8
-       |> AS projectscan_9
+         aggregatescan_3.a_1 AS thecount
+       |> AS projectscan_5
        |> SELECT
-            projectscan_9.a_8 AS a_8,
-            a_5 AS a_10
-       |> AS projectscan_11
+            projectscan_5.thecount,
+            aggregatescan_3.a_2 AS thesum
+       |> AS projectscan_6
        |> SELECT
-            CAST(projectscan_11.a_10 AS DOUBLE) / CAST(projectscan_11.a_8 AS DOUBLE) AS a_12
-     ) AS a_7;
+            CAST(projectscan_6.thesum AS DOUBLE) / CAST(projectscan_6.thecount AS DOUBLE) AS injected
+     ) AS a_4;
 ==
 
 SELECT WITH(sumk AS SUM(KeyValue.key),
@@ -1037,18 +1001,12 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_4
 |> AGGREGATE
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_4
-|> AS aggregatescan_6
+     SUM(KeyValue.Key) AS a_1
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_2
 |> SELECT
-     WITH(a_8 AS LENGTH(aggregatescan_6.a_4), a_8 * (aggregatescan_6.a_5)) AS a_7;
+     WITH(len AS LENGTH(aggregatescan_2.value_2), len * (aggregatescan_2.a_1)) AS a_3;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1125,24 +1083,18 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_4
 |> AGGREGATE
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_4
-|> AS aggregatescan_6
+     SUM(KeyValue.Key) AS a_1
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_2
 |> SELECT
      (
        SELECT
-         LENGTH(aggregatescan_6.a_4) AS a_8
-       |> AS projectscan_9
+         LENGTH(aggregatescan_2.value_2) AS len
+       |> AS projectscan_4
        |> SELECT
-            (projectscan_9.a_8) * (aggregatescan_6.a_5) AS a_10
-     ) AS a_7;
+            (projectscan_4.len) * (aggregatescan_2.a_1) AS injected
+     ) AS a_3;
 
 ==
 
@@ -1227,21 +1179,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_6
 |> AGGREGATE
-     COUNT(keyvalue_3.a_1) AS a_4,
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_6
+     COUNT(KeyValue.Key) AS a_1,
+     SUM(KeyValue.Key) AS a_2
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_3
 |> SELECT
-     a_4,
-     a_5
-|> SELECT
-     WITH(a_8 AS a_4, CAST(a_5 AS DOUBLE) / CAST(a_8 AS DOUBLE)) AS a_7;
+     WITH(thecount AS aggregatescan_3.a_1, CAST(aggregatescan_3.a_2 AS DOUBLE) / CAST(thecount AS DOUBLE)) AS a_4;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1321,27 +1265,19 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> EXTEND
-     keyvalue_3.a_2 AS a_6
 |> AGGREGATE
-     COUNT(keyvalue_3.a_1) AS a_4,
-     SUM(keyvalue_3.a_1) AS a_5
-   GROUP BY a_6
-|> SELECT
-     a_4,
-     a_5
+     COUNT(KeyValue.Key) AS a_1,
+     SUM(KeyValue.Key) AS a_2
+   GROUP BY KeyValue.Value AS value_2
+|> AS aggregatescan_3
 |> SELECT
      (
        SELECT
-         a_4 AS a_8
-       |> AS projectscan_9
+         aggregatescan_3.a_1 AS thecount
+       |> AS projectscan_5
        |> SELECT
-            CAST(a_5 AS DOUBLE) / CAST(projectscan_9.a_8 AS DOUBLE) AS a_10
-     ) AS a_7;
+            CAST(aggregatescan_3.a_2 AS DOUBLE) / CAST(projectscan_5.thecount AS DOUBLE) AS injected
+     ) AS a_4;
 ==
 
 SELECT WITH(sumk AS SUM(KeyValue.key),
@@ -1423,13 +1359,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 SELECT
   ARRAY< INT64 >[1, 2, 3] AS a_1
-|> AS projectscan_2
+|> AS projectscan_1
 |> SELECT
      ARRAY(
        FROM
-         UNNEST(WITH(a_4 AS projectscan_2.a_1, a_4) AS a_5)
+         UNNEST(WITH(a_6 AS projectscan_1.a_1, a_6) AS a_2)
        |> SELECT
-            a_5 AS a_5
+            a_2
      ) AS unnest_scan2;
 
 [REWRITTEN AST]
@@ -1502,17 +1438,17 @@ FROM
 [SQLBUILDER_OUTPUT]
 SELECT
   ARRAY< INT64 >[1, 2, 3] AS a_1
-|> AS projectscan_2
+|> AS projectscan_1
 |> SELECT
      ARRAY(
        FROM
          UNNEST((
            SELECT
-             projectscan_2.a_1 AS a_4
-           |> AS projectscan_5
+             projectscan_1.a_1 AS a_6
+           |> AS projectscan_2
            |> SELECT
-                projectscan_5.a_4 AS a_6
-         ) AS a_7)
+                projectscan_2.a_6 AS injected
+         ) AS a_3)
        |> SELECT
-            a_7 AS a_7
+            a_3
      ) AS unnest_scan2;

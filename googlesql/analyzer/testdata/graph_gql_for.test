@@ -700,13 +700,13 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (% | ! %))
-    FOR a_3 IN ARRAY< INT64 >[1, 2, 3] WITH OFFSET AS a_4
+    FOR x IN ARRAY< INT64 >[1, 2, 3] WITH OFFSET AS offset
     RETURN
-      a_3 AS a_5,
-      a_4 AS a_6
+      x AS x_2,
+      offset AS offset_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS x,
-     aml_1.a_6 AS offset;
+     aml_1.x_2 AS x,
+     aml_1.offset_2 AS offset;
