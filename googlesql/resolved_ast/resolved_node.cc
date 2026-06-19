@@ -115,10 +115,33 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
                                    const DebugStringConfig& config,
                                    absl::string_view prefix1,
                                    absl::string_view prefix2,
-                                   std::string* output) {
+                                   std::string* output,
+                                   const ResolvedNode* pipe_input_to_elide) {
 
   const BoxGlyphs& glyphs =
       config.use_box_glyphs ? kUnicodeBoxGlyphs : kAsciiBoxGlyphs;
+
+  // In linear_mode, render a scan and its "pipe input" spine flattened: print
+  // the pipe input first (so the deepest source ends up on top), then this
+  // scan stacked below with a "|> " prefix at the same indent level. Within
+  // this scan's own fields, the consumed pipe input is shown inline as
+  // "<pipe_input>" (see `elide` below) rather than recursed into.
+  const ResolvedNode* elide = pipe_input_to_elide;
+  std::string name_prefix(prefix2);
+  std::string field_prefix(prefix1);
+  if (config.linear_mode && node != nullptr && node->IsScan()) {
+    const ResolvedScan* pipe_input =
+        node->GetAs<ResolvedScan>()->GetPipeInputScan();
+    if (pipe_input != nullptr) {
+      DebugStringImpl(pipe_input, config, prefix1, prefix2, output,
+                      /*pipe_input_to_elide=*/nullptr);
+      // This scan becomes a "|> " operator line; its fields line up three
+      // spaces in, under the operator name.
+      name_prefix = absl::StrCat(prefix1, "|> ");
+      field_prefix = absl::StrCat(prefix1, "   ");
+      elide = pipe_input;
+    }
+  }
 
   std::vector<DebugStringField> fields;
 
@@ -127,6 +150,18 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
   // tree, as this makes debugging easier.
   if (node != nullptr) {
     node->CollectDebugStringFields(&fields);
+  }
+
+  // In linear_mode, replace the pipe-input scan field (which may be nested,
+  // e.g. the `scan` of a ResolvedSetOperationItem) with an inline
+  // "<pipe_input>" placeholder wherever it appears among the descendants.
+  if (elide != nullptr) {
+    for (DebugStringField& field : fields) {
+      if (field.nodes.size() == 1 && field.nodes[0] == elide) {
+        field.value = "<pipe_input>";
+        field.nodes.clear();
+      }
+    }
   }
 
   bool multiline = false;
@@ -138,9 +173,9 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
   }
 
   if (node != nullptr) {
-    absl::StrAppend(output, prefix2, node->GetNameForDebugString(config));
+    absl::StrAppend(output, name_prefix, node->GetNameForDebugString(config));
   } else {
-    absl::StrAppend(output, prefix2, "<nullptr AST node>");
+    absl::StrAppend(output, name_prefix, "<nullptr AST node>");
   }
 
   if (fields.empty()) {
@@ -167,45 +202,45 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
           config.print_accessed ? field.accessed ? "{*}" : "{ }" : "";
 
       if (print_field_name) {
-        absl::StrAppend(output, prefix1, field_connector, field.name,
+        absl::StrAppend(output, field_prefix, field_connector, field.name,
                         column_created_string, accessed_string, "=");
         if (print_one_line) {
           absl::StrAppend(output, field.value);
         }
         absl::StrAppend(output, "\n");
       } else if (print_one_line) {
-        absl::StrAppend(output, prefix1, field_connector, field.value,
+        absl::StrAppend(output, field_prefix, field_connector, field.value,
                         column_created_string, accessed_string, "\n");
       }
 
       if (!print_one_line) {
         if (value_has_newlines) {
-          absl::StrAppend(output, prefix1, field_indent, "  \"\"\"\n");
+          absl::StrAppend(output, field_prefix, field_indent, "  \"\"\"\n");
           for (auto line : absl::StrSplit(field.value, '\n')) {
             std::string line_content = absl::StrCat(field_indent, "  ", line);
-            absl::StrAppend(output, prefix1,
+            absl::StrAppend(output, field_prefix,
                             absl::StripTrailingAsciiWhitespace(line_content),
                             "\n");
           }
-          absl::StrAppend(output, prefix1, field_indent, "  \"\"\"\n");
+          absl::StrAppend(output, field_prefix, field_indent, "  \"\"\"\n");
         }
 
-        for (const ResolvedNode* node : field.nodes) {
-          bool is_last_node = (node == field.nodes.back());
+        for (const ResolvedNode* child : field.nodes) {
+          bool is_last_node = (child == field.nodes.back());
           const absl::string_view field_name_indent =
               print_field_name ? field_indent : "";
           const absl::string_view field_value_indent =
               (!is_last_node || (!print_field_name && !is_last_field)
                    ? glyphs.tree_vertical
                    : glyphs.tree_space);
-      absl::string_view node_connector =
-          is_last_node ? glyphs.tree_last : glyphs.tree_branch;
+          absl::string_view node_connector =
+              is_last_node ? glyphs.tree_last : glyphs.tree_branch;
 
           DebugStringImpl(
-              node, config,
-              absl::StrCat(prefix1, field_name_indent, field_value_indent),
-              absl::StrCat(prefix1, field_name_indent, node_connector),
-              output);
+              child, config,
+              absl::StrCat(field_prefix, field_name_indent, field_value_indent),
+              absl::StrCat(field_prefix, field_name_indent, node_connector),
+              output, elide);
         }
       }
     }

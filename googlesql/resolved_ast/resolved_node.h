@@ -183,6 +183,13 @@ class ResolvedNode {
     // If set to true, the debug string will use box glyphs like "├─",  instead
     // of ASCII characters like "+-".
     bool use_box_glyphs = false;
+
+    // If set to true, sequences of scans are rendered linearly, like pipe
+    // syntax, instead of as a nested tree. Each scan's "pipe input" (see
+    // ResolvedScan::GetPipeInputScan) is printed first, then the scan itself
+    // is stacked below it at the same indent level with a "|> " prefix, and
+    // the consumed input scan field is shown inline as "<pipe_input>".
+    bool linear_mode = false;
   };
 
   // Returns a string representation of this tree and all descendants, for
@@ -439,10 +446,14 @@ class ResolvedNode {
   // annotations specifies additional annotations to display for specific nodes
   // prefix1 is the indentation to attach to child nodes.
   // prefix2 is the indentation to attach to the root of this tree.
+  // `pipe_input_to_elide`, when non-null (used in linear_mode), is a descendant
+  // scan that is the current scan's pipe input; wherever it would be printed as
+  // a child node it is instead rendered inline as "<pipe_input>".
   static void DebugStringImpl(const ResolvedNode* node,
                               const DebugStringConfig& config,
                               absl::string_view prefix1,
-                              absl::string_view prefix2, std::string* output);
+                              absl::string_view prefix2, std::string* output,
+                              const ResolvedNode* pipe_input_to_elide = nullptr);
 
   static void AppendAnnotations(const ResolvedNode* node,
                                 absl::Span<const NodeAnnotation> annotations,

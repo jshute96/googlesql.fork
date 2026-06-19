@@ -440,6 +440,7 @@ def Field(
     comment = None,
     propagate_order = False,
     override_virtual_getter = False,
+    is_pipe_input_scan = False,
 ):
   """Make a field to put in a node class.
 
@@ -472,6 +473,12 @@ def Field(
     override_virtual_getter: If true, the getter is marked with `override`. Used
       for cases where the parent class declares a virtual method interface for
       this getter, so this getter needs an 'override'.
+    is_pipe_input_scan: If true, this field (which must be a single
+      ResolvedScan-typed node pointer on a ResolvedScan subclass) is the scan
+      that acts as the "pipe input" / spine for linear-mode DebugString
+      rendering. Only needed when the field has an unusual name; fields named
+      `input_scan` or `scan` are detected automatically. See
+      ResolvedScan::GetPipeInputScan.
 
   Returns:
     The newly created field.
@@ -695,6 +702,7 @@ def Field(
       'java_to_string_method': java_to_string_method,
       'propagate_order': propagate_order,
       'not_serialize_if_default': not_serialize_if_default,
+      'is_pipe_input_scan': is_pipe_input_scan,
   }
 
 
@@ -832,6 +840,50 @@ class TreeGenerator():
         for field in fields + inherited_fields
     )
 
+    # Determine the "pipe input" scan field for linear-mode DebugString (the
+    # scan that acts as this scan's spine). Only meaningful on ResolvedScan
+    # subclasses, and computed from this node's own fields so an inherited
+    # spine field (e.g. ResolvedAggregateScanBase.input_scan) emits the
+    # GetPipeInputScan override exactly once. Nodes whose spine is nested inside
+    # a vector/argument (ResolvedSetOperationScan, ResolvedRecursiveScan) match
+    # nothing here and provide a hand-written override via extra_defs_node_only.
+    def IsScanSubclass(parent_name):
+      ancestor = parent_name
+      while ancestor != ROOT_NODE_NAME:
+        if ancestor == 'ResolvedScan':
+          return True
+        ancestor = self.node_map[ancestor]['parent']
+      return False
+
+    pipe_input_scan_getter = ''
+    if IsScanSubclass(parent):
+      marked_fields = [f for f in fields if f['is_pipe_input_scan']]
+      assert len(marked_fields) <= 1, (
+          'At most one field may be marked is_pipe_input_scan: %s' % name
+      )
+      if marked_fields:
+        spine_field = marked_fields[0]
+      else:
+        default_fields = [
+            f
+            for f in fields
+            if f['is_node_ptr']
+            and f['ctype'] == 'ResolvedScan'
+            and f['name'] in ('input_scan', 'scan')
+        ]
+        assert len(default_fields) <= 1, (
+            'Multiple default pipe-input scan fields on %s' % name
+        )
+        spine_field = default_fields[0] if default_fields else None
+      if spine_field is not None:
+        assert (
+            spine_field['is_node_ptr'] and spine_field['ctype'] == 'ResolvedScan'
+        ), (
+            'pipe-input scan field must be a single ResolvedScan pointer: %s.%s'
+            % (name, spine_field['name'])
+        )
+        pipe_input_scan_getter = spine_field['name']
+
     def JoinSections(a, b):
       separator = ''
       if a and b:
@@ -874,6 +926,7 @@ class TreeGenerator():
         'use_custom_debug_string': use_custom_debug_string,
         'use_custom_columns_created': use_custom_columns_created,
         'column_list_is_created_columns': column_list_is_created_columns,
+        'pipe_input_scan_getter': pipe_input_scan_getter,
         'subclasses': [],
         'superclasses': [],
     }
@@ -2821,6 +2874,12 @@ value.
         // If false, columns in `column_list` were created previously (or by
         // this node, as specified by other fields) and are being referenced.
         virtual bool ColumnListIsCreatedColumns() const { return false; }
+
+        // Returns the input scan that acts as this scan's "pipe spine" for
+        // linear-mode DebugString rendering (ResolvedNode::DebugStringConfig::
+        // linear_mode), or nullptr if there is none (leaf scans like
+        // ResolvedTableScan). For most scans this is `input_scan`.
+        virtual const ResolvedScan* GetPipeInputScan() const { return nullptr; }
       """,
   )
 
@@ -3092,7 +3151,8 @@ value.
               tag_id=2,
               ignorable=IGNORABLE_DEFAULT,
           ),
-          Field('left_scan', 'ResolvedScan', tag_id=3),
+          Field('left_scan', 'ResolvedScan', tag_id=3,
+                is_pipe_input_scan=True),
           Field('right_scan', 'ResolvedScan', tag_id=4),
           Field(
               'join_expr', 'ResolvedExpr', tag_id=5, ignorable=IGNORABLE_DEFAULT
@@ -3794,6 +3854,13 @@ value.
               ignorable=IGNORABLE,
           ),
       ],
+      extra_defs_node_only="""
+        // The pipe spine is the first input item's scan.
+        const ResolvedScan* GetPipeInputScan() const override {
+          return input_item_list_.empty() ? nullptr
+                                           : input_item_list_[0]->scan();
+        }
+      """,
   )
 
   gen.AddNode(
@@ -6533,6 +6600,13 @@ value.
               ignorable=IGNORABLE_DEFAULT,
           ),
       ],
+      extra_defs_node_only="""
+        // The pipe spine is the non-recursive term's scan.
+        const ResolvedScan* GetPipeInputScan() const override {
+          return non_recursive_term_ == nullptr ? nullptr
+                                                 : non_recursive_term_->scan();
+        }
+      """,
   )
 
   gen.AddNode(
@@ -6595,7 +6669,8 @@ value.
               """,
       fields=[
           Field('with_entry_list', 'ResolvedWithEntry', tag_id=2, vector=True),
-          Field('query', 'ResolvedScan', tag_id=3, propagate_order=True),
+          Field('query', 'ResolvedScan', tag_id=3, propagate_order=True,
+                is_pipe_input_scan=True),
           Field(
               'recursive',
               SCALAR_BOOL,

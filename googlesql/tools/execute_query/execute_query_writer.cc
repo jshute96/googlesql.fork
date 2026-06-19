@@ -87,18 +87,33 @@ absl::Status PrintResults(std::unique_ptr<EvaluatorTableIterator> iter,
   return absl::OkStatus();
 }
 
-ExecuteQueryStreamWriter::ExecuteQueryStreamWriter(std::ostream& out,
-                                                   bool use_box_glyphs)
-    : stream_{out}, use_box_glyphs_(use_box_glyphs) {}
+ExecuteQueryStreamWriter::ExecuteQueryStreamWriter(
+    std::ostream& out, bool use_box_glyphs, bool linear_resolved_ast,
+    bool linear_and_tree_resolved_ast)
+    : stream_{out},
+      use_box_glyphs_(use_box_glyphs),
+      linear_resolved_ast_(linear_resolved_ast),
+      linear_and_tree_resolved_ast_(linear_and_tree_resolved_ast) {}
 
 absl::Status ExecuteQueryStreamWriter::resolved(const ResolvedNode& ast,
                                                 bool post_rewrite) {
   if (post_rewrite) {
     stream_ << "\nResolved AST rewritten to:\n";
   }
-  stream_ << ast.DebugString(ResolvedNode::DebugStringConfig{
-                 .use_box_glyphs = use_box_glyphs_})
-          << '\n';
+  if (linear_and_tree_resolved_ast_) {
+    // Print both renderings: the nested tree first, then the linear version.
+    stream_ << ast.DebugString(ResolvedNode::DebugStringConfig{
+                   .use_box_glyphs = use_box_glyphs_})
+            << "\nLinear:\n"
+            << ast.DebugString(ResolvedNode::DebugStringConfig{
+                   .use_box_glyphs = use_box_glyphs_, .linear_mode = true})
+            << '\n';
+  } else {
+    stream_ << ast.DebugString(ResolvedNode::DebugStringConfig{
+                   .use_box_glyphs = use_box_glyphs_,
+                   .linear_mode = linear_resolved_ast_})
+            << '\n';
+  }
   return absl::OkStatus();
 }
 
