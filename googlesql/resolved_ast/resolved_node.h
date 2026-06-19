@@ -455,6 +455,18 @@ class ResolvedNode {
                               absl::string_view prefix2, std::string* output,
                               const ResolvedNode* pipe_input_to_elide = nullptr);
 
+  // Renders a single node's name line and fields. `name_prefix` is printed
+  // before the node name; `field_prefix` is the base indentation for the node's
+  // fields/child nodes. In non-linear mode these are prefix2/prefix1; in
+  // linear_mode they are computed by DebugStringImpl to lay out the "|>" pipe
+  // chain. `pipe_input_to_elide` behaves as in DebugStringImpl.
+  static void DebugStringBody(const ResolvedNode* node,
+                              const DebugStringConfig& config,
+                              absl::string_view name_prefix,
+                              absl::string_view field_prefix,
+                              std::string* output,
+                              const ResolvedNode* pipe_input_to_elide);
+
   static void AppendAnnotations(const ResolvedNode* node,
                                 absl::Span<const NodeAnnotation> annotations,
                                 std::string* output);

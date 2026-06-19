@@ -117,31 +117,72 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
                                    absl::string_view prefix2,
                                    std::string* output,
                                    const ResolvedNode* pipe_input_to_elide) {
+  // In linear_mode, render a scan and its "pipe input" spine flattened like
+  // pipe syntax. The source (deepest input) scan is printed first, then each
+  // downstream scan is stacked below it as a "|> <Scan>" operator. A vertical
+  // bar connects the operators down the left edge, aligned under the source
+  // scan's connector, so the chain still reads as one tree branch. Within each
+  // scan's own fields, the consumed pipe input is shown inline as "<pipe_input>"
+  // (see `pipe_input_to_elide`) rather than recursed into.
+  if (config.linear_mode && node != nullptr && node->IsScan() &&
+      node->GetAs<ResolvedScan>()->GetPipeInputScan() != nullptr) {
+    const BoxGlyphs& glyphs =
+        config.use_box_glyphs ? kUnicodeBoxGlyphs : kAsciiBoxGlyphs;
 
+    // Collect the pipe spine: spine[0] is this scan (the top of the chain) and
+    // spine.back() is the source scan (whose pipe input is null).
+    std::vector<const ResolvedScan*> spine;
+    for (const ResolvedScan* scan = node->GetAs<ResolvedScan>();
+         scan != nullptr; scan = scan->GetPipeInputScan()) {
+      spine.push_back(scan);
+    }
+
+    // `stem` is `prefix2` minus its trailing tree connector ("+-"/"├─"/"└─").
+    // The connector's corner sits at column width(stem); the vertical bar and
+    // the "|" of each "|>" are drawn in that same column.
+    absl::string_view connector =
+        absl::EndsWith(prefix2, glyphs.tree_last)       ? glyphs.tree_last
+        : absl::EndsWith(prefix2, glyphs.tree_branch)   ? glyphs.tree_branch
+                                                        : absl::string_view{};
+    absl::string_view stem = prefix2;
+    stem.remove_suffix(connector.size());
+
+    // Source scan: extend its connector by one horizontal glyph ("+-" -> "+--")
+    // so its name lines up with the operator names, and continue the bar below.
+    DebugStringBody(spine.back(), config,
+                    /*name_prefix=*/absl::StrCat(prefix2, glyphs.horizontal),
+                    /*field_prefix=*/absl::StrCat(stem, glyphs.vertical, "  "),
+                    output, /*pipe_input_to_elide=*/nullptr);
+
+    // Operators, from just above the source up to the top. The top (spine[0])
+    // is printed last and ends the bar (its fields get no trailing "|").
+    for (int i = static_cast<int>(spine.size()) - 2; i >= 0; --i) {
+      const bool is_last = (i == 0);
+      DebugStringBody(
+          spine[i], config,
+          /*name_prefix=*/absl::StrCat(stem, glyphs.vertical, "> "),
+          /*field_prefix=*/
+          is_last ? absl::StrCat(stem, "   ")
+                  : absl::StrCat(stem, glyphs.vertical, "  "),
+          output, /*pipe_input_to_elide=*/spine[i]->GetPipeInputScan());
+    }
+    return;
+  }
+
+  DebugStringBody(node, config, /*name_prefix=*/prefix2,
+                  /*field_prefix=*/prefix1, output, pipe_input_to_elide);
+}
+
+void ResolvedNode::DebugStringBody(const ResolvedNode* node,
+                                   const DebugStringConfig& config,
+                                   absl::string_view name_prefix,
+                                   absl::string_view field_prefix,
+                                   std::string* output,
+                                   const ResolvedNode* pipe_input_to_elide) {
   const BoxGlyphs& glyphs =
       config.use_box_glyphs ? kUnicodeBoxGlyphs : kAsciiBoxGlyphs;
 
-  // In linear_mode, render a scan and its "pipe input" spine flattened: print
-  // the pipe input first (so the deepest source ends up on top), then this
-  // scan stacked below with a "|> " prefix at the same indent level. Within
-  // this scan's own fields, the consumed pipe input is shown inline as
-  // "<pipe_input>" (see `elide` below) rather than recursed into.
   const ResolvedNode* elide = pipe_input_to_elide;
-  std::string name_prefix(prefix2);
-  std::string field_prefix(prefix1);
-  if (config.linear_mode && node != nullptr && node->IsScan()) {
-    const ResolvedScan* pipe_input =
-        node->GetAs<ResolvedScan>()->GetPipeInputScan();
-    if (pipe_input != nullptr) {
-      DebugStringImpl(pipe_input, config, prefix1, prefix2, output,
-                      /*pipe_input_to_elide=*/nullptr);
-      // This scan becomes a "|> " operator line; its fields line up three
-      // spaces in, under the operator name.
-      name_prefix = absl::StrCat(prefix1, "|> ");
-      field_prefix = absl::StrCat(prefix1, "   ");
-      elide = pipe_input;
-    }
-  }
 
   std::vector<DebugStringField> fields;
 

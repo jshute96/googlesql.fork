@@ -297,50 +297,52 @@ TEST_F(ResolvedASTTest, DebugStringLinearMode) {
       options, &catalog, &factory, &output));
   const ResolvedStatement* query_stmt = output->resolved_statement();
 
-  // In linear mode the scan chain is flattened with "|>" operators and the
-  // consumed pipe input is shown inline as "<pipe_input>". The set operation's
-  // first input is its spine (elided even though nested in a SetOperationItem),
-  // while the second input remains a nested subtree.
+  // In linear mode the scan chain is flattened with "|>" operators connected by
+  // a vertical bar down the left edge (aligned under the source scan's "+--"
+  // connector), and the consumed pipe input is shown inline as "<pipe_input>".
+  // The set operation's first input is its spine (elided even though nested in a
+  // SetOperationItem), while the second input remains a nested subtree (which
+  // itself renders as a "|>" chain).
   EXPECT_EQ(query_stmt->DebugString({.linear_mode = true}),
             R"(QueryStmt
 +-output_column_list=
 | +-$query.y#4 AS y [INT64]
 +-query=
-  +-SingleRowScan
-    |> ProjectScan
-       +-column_list=[$union_all1.x#1]
-       +-expr_list=
-       | +-x#1 := Literal(type=INT64, value=1)
-       +-input_scan=<pipe_input>
-    |> SetOperationScan
-       +-column_list=[$union_all.x#3]
-       +-op_type=UNION_ALL
-       +-input_item_list=
-         +-SetOperationItem(scan=<pipe_input>, output_column_list=[$union_all1.x#1])
-         +-SetOperationItem
-           +-scan=
-           | +-SingleRowScan
-           |   |> ProjectScan
-           |      +-column_list=[$union_all2.$col1#2]
-           |      +-expr_list=
-           |      | +-$col1#2 := Literal(type=INT64, value=2)
-           |      +-input_scan=<pipe_input>
-           +-output_column_list=[$union_all2.$col1#2]
-    |> FilterScan
-       +-column_list=[$union_all.x#3]
-       +-input_scan=<pipe_input>
-       +-filter_expr=
-         +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
-           +-ColumnRef(type=INT64, column=$union_all.x#3)
-           +-Literal(type=INT64, value=0)
-    |> ProjectScan
-       +-column_list=[$union_all.x#3, $query.y#4]
-       +-expr_list=
-       | +-y#4 :=
-       |   +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
-       |     +-ColumnRef(type=INT64, column=$union_all.x#3)
-       |     +-Literal(type=INT64, value=1)
-       +-input_scan=<pipe_input>
+  +--SingleRowScan
+  |> ProjectScan
+  |  +-column_list=[$union_all1.x#1]
+  |  +-expr_list=
+  |  | +-x#1 := Literal(type=INT64, value=1)
+  |  +-input_scan=<pipe_input>
+  |> SetOperationScan
+  |  +-column_list=[$union_all.x#3]
+  |  +-op_type=UNION_ALL
+  |  +-input_item_list=
+  |    +-SetOperationItem(scan=<pipe_input>, output_column_list=[$union_all1.x#1])
+  |    +-SetOperationItem
+  |      +-scan=
+  |      | +--SingleRowScan
+  |      | |> ProjectScan
+  |      |    +-column_list=[$union_all2.$col1#2]
+  |      |    +-expr_list=
+  |      |    | +-$col1#2 := Literal(type=INT64, value=2)
+  |      |    +-input_scan=<pipe_input>
+  |      +-output_column_list=[$union_all2.$col1#2]
+  |> FilterScan
+  |  +-column_list=[$union_all.x#3]
+  |  +-input_scan=<pipe_input>
+  |  +-filter_expr=
+  |    +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
+  |      +-ColumnRef(type=INT64, column=$union_all.x#3)
+  |      +-Literal(type=INT64, value=0)
+  |> ProjectScan
+     +-column_list=[$query.y#4]
+     +-expr_list=
+     | +-y#4 :=
+     |   +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
+     |     +-ColumnRef(type=INT64, column=$union_all.x#3)
+     |     +-Literal(type=INT64, value=1)
+     +-input_scan=<pipe_input>
 )");
 }
 
