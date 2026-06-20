@@ -509,6 +509,9 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
   background: #ece1f7;
   border: 1px solid #b497d6;
 }
+.rect.stmt {
+  border: 1px solid #8a8a8a;
+}
 
 /* Query-viewer info panel (analyze mode). Regions are clickable: clicking one
    opens a panel showing the info for that node and its enclosing nodes (see

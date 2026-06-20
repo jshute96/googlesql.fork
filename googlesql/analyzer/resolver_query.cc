@@ -1012,10 +1012,14 @@ absl::Status Resolver::ResolveQuery(
     ASTNodeResolvedInfo& query_info = ast_node_resolved_info_map_[query];
     if (!options.node_title_hint.empty()) {
       query_info.node_title = options.node_title_hint;
-    } else if (options.is_outer_query) {
-      query_info.node_title = "Query";
     } else if (options.is_expr_subquery) {
       query_info.node_title = "Expression subquery";
+    } else if (!query->pipe_operator_list().empty()) {
+      // A query with pipe operators; this node is the parent of both the
+      // initial query (FROM/SELECT) and the pipe operators that follow it.
+      query_info.node_title = "Query with pipe operators";
+    } else if (options.is_outer_query) {
+      query_info.node_title = "Query";
     } else {
       query_info.node_title = "Query fragment";
     }

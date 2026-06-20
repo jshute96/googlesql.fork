@@ -736,13 +736,15 @@ class Builder {
 
   DocPtr BuildInner(const ASTNode* node, const std::string& kind, Ctx ctx) {
     DocPtr inner = BuildLayout(node, kind, ctx);
-    // A resolved function call gets its own clickable region carrying the
-    // function's info. (Only when the annotator has info for it, so parse-mode
+    // A resolved function call or a statement gets its own clickable region
+    // carrying its info. (Only when the annotator has info for it, so parse-mode
     // rendering -- which has no annotator -- is unaffected.)
-    if (kind == "FunctionCall" && annotate_) {
+    if (annotate_ &&
+        (kind == "FunctionCall" || absl::EndsWith(kind, "Statement"))) {
       std::string info = annotate_(node);
       if (!info.empty()) {
-        return Region("func", Concat({std::move(inner), NodeInfoBox(info)}));
+        absl::string_view cls = kind == "FunctionCall" ? "func" : "stmt";
+        return Region(cls, Concat({std::move(inner), NodeInfoBox(info)}));
       }
     }
     return inner;
@@ -1121,9 +1123,12 @@ class Builder {
     // the whole query is inline or broken (so a subquery is either fully on one
     // line or fully indented -- never half-broken).
     DocPtr body = Concat(std::move(parts));
-    // A standard (non-pipe) top-level query is one solid colour. Nested queries
-    // are coloured by their enclosing subquery wrapper instead.
-    if (!has_pipe && !ctx.flatten_query && ctx.subquery_depth == 0) {
+    // The top-level query gets its own region (the parent of all its clauses /
+    // pipe segments). A standard query is one solid grey block; a pipe query's
+    // segments fill it, so it groups the whole pipe chain into one clickable
+    // node ("Query with pipe operators"). Nested queries are wrapped by their
+    // enclosing subquery instead (see BuildParen/BuildParenQuery).
+    if (!ctx.flatten_query && ctx.subquery_depth == 0) {
       body = RegionAnnotated("q-whole", node, body);
     }
     return body;

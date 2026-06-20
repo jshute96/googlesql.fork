@@ -1186,6 +1186,30 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
                     "<div class=\"hi-nl\">",
                     EscapeHtmlText(info.function_call_info->signature),
                     "</div>");
+  } else if (info.statement_info.has_value()) {
+    const auto& st = *info.statement_info;
+    if (st.is_value_table) {
+      absl::StrAppend(
+          &body, "<div class=\"hi-h\">Output</div><div class=\"hi-nl\">",
+          EscapeHtmlText(absl::StrCat("Output is a value table with type ",
+                                      st.value_table_type)),
+          "</div>");
+    } else if (!st.output_columns.empty()) {
+      // Aligned "name  type" listing.
+      size_t name_width = 0;
+      for (const auto& col : st.output_columns) {
+        name_width = std::max(name_width, col.first.size());
+      }
+      std::string text;
+      for (const auto& col : st.output_columns) {
+        absl::StrAppend(&text, col.first,
+                        std::string(name_width - col.first.size() + 2, ' '),
+                        col.second, "\n");
+      }
+      absl::StrAppend(
+          &body, "<div class=\"hi-h\">Output columns</div><div class=\"hi-nl\">",
+          absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}}), "</div>");
+    }
   }
   return absl::StrCat("<div class=\"ni-title\">",
                       EscapeHtmlText(info.node_title), "</div>",
