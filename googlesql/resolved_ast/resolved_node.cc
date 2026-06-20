@@ -147,15 +147,19 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
     absl::string_view stem = prefix2;
     stem.remove_suffix(connector.size());
 
+    // The continuation bar that connects the operators is drawn with a faint
+    // "." (rather than the "|" of "|>") so it reads as a light outline.
+    constexpr absl::string_view kPipeBar = ".";
+
     // Source scan: extend its connector by one horizontal glyph ("+-" -> "+--")
     // so its name lines up with the operator names, and continue the bar below.
     DebugStringBody(spine.back(), config,
                     /*name_prefix=*/absl::StrCat(prefix2, glyphs.horizontal),
-                    /*field_prefix=*/absl::StrCat(stem, glyphs.vertical, "  "),
+                    /*field_prefix=*/absl::StrCat(stem, kPipeBar, "  "),
                     output, /*pipe_input_to_elide=*/nullptr);
 
     // Operators, from just above the source up to the top. The top (spine[0])
-    // is printed last and ends the bar (its fields get no trailing "|").
+    // is printed last and ends the bar (its fields get no trailing bar).
     for (int i = static_cast<int>(spine.size()) - 2; i >= 0; --i) {
       const bool is_last = (i == 0);
       DebugStringBody(
@@ -163,7 +167,7 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
           /*name_prefix=*/absl::StrCat(stem, glyphs.vertical, "> "),
           /*field_prefix=*/
           is_last ? absl::StrCat(stem, "   ")
-                  : absl::StrCat(stem, glyphs.vertical, "  "),
+                  : absl::StrCat(stem, kPipeBar, "  "),
           output, /*pipe_input_to_elide=*/spine[i]->GetPipeInputScan());
     }
     return;
@@ -193,14 +197,23 @@ void ResolvedNode::DebugStringBody(const ResolvedNode* node,
     node->CollectDebugStringFields(&fields);
   }
 
-  // In linear_mode, replace the pipe-input scan field (which may be nested,
-  // e.g. the `scan` of a ResolvedSetOperationItem) with an inline
-  // "<pipe_input>" placeholder wherever it appears among the descendants.
+  // In linear_mode, the scan field consumed as the pipe input (which may be
+  // nested, e.g. the `scan` of a ResolvedSetOperationItem) is either omitted
+  // entirely (default) or shown inline as an "<pipe_input>" placeholder,
+  // wherever it appears among the descendants.
   if (elide != nullptr) {
-    for (DebugStringField& field : fields) {
-      if (field.nodes.size() == 1 && field.nodes[0] == elide) {
-        field.value = "<pipe_input>";
-        field.nodes.clear();
+    auto is_pipe_input = [elide](const DebugStringField& field) {
+      return field.nodes.size() == 1 && field.nodes[0] == elide;
+    };
+    if (config.omit_pipe_input_scan_field) {
+      fields.erase(std::remove_if(fields.begin(), fields.end(), is_pipe_input),
+                   fields.end());
+    } else {
+      for (DebugStringField& field : fields) {
+        if (is_pipe_input(field)) {
+          field.value = "<pipe_input>";
+          field.nodes.clear();
+        }
       }
     }
   }

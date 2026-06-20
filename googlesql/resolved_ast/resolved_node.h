@@ -187,9 +187,13 @@ class ResolvedNode {
     // If set to true, sequences of scans are rendered linearly, like pipe
     // syntax, instead of as a nested tree. Each scan's "pipe input" (see
     // ResolvedScan::GetPipeInputScan) is printed first, then the scan itself
-    // is stacked below it at the same indent level with a "|> " prefix, and
-    // the consumed input scan field is shown inline as "<pipe_input>".
+    // is stacked below it at the same indent level with a "|> " prefix.
     bool linear_mode = false;
+
+    // Only relevant in linear_mode. If true (the default), the scan field that
+    // was consumed as the pipe input is omitted from the operator's fields. If
+    // false, it is shown inline as e.g. "input_scan=<pipe_input>".
+    bool omit_pipe_input_scan_field = true;
   };
 
   // Returns a string representation of this tree and all descendants, for

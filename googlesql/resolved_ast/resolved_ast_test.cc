@@ -298,9 +298,9 @@ TEST_F(ResolvedASTTest, DebugStringLinearMode) {
   const ResolvedStatement* query_stmt = output->resolved_statement();
 
   // In linear mode the scan chain is flattened with "|>" operators connected by
-  // a vertical bar down the left edge (aligned under the source scan's "+--"
-  // connector), and the consumed pipe input is shown inline as "<pipe_input>".
-  // The set operation's first input is its spine (elided even though nested in a
+  // a faint "." outline down the left edge (aligned under the source scan's
+  // "+--" connector). By default the consumed pipe input field is omitted. The
+  // set operation's first input is its spine (consumed even though nested in a
   // SetOperationItem), while the second input remains a nested subtree (which
   // itself renders as a "|>" chain).
   EXPECT_EQ(query_stmt->DebugString({.linear_mode = true}),
@@ -310,40 +310,41 @@ TEST_F(ResolvedASTTest, DebugStringLinearMode) {
 +-query=
   +--SingleRowScan
   |> ProjectScan
-  |  +-column_list=[$union_all1.x#1]
-  |  +-expr_list=
-  |  | +-x#1 := Literal(type=INT64, value=1)
-  |  +-input_scan=<pipe_input>
+  .  +-column_list=[$union_all1.x#1]
+  .  +-expr_list=
+  .    +-x#1 := Literal(type=INT64, value=1)
   |> SetOperationScan
-  |  +-column_list=[$union_all.x#3]
-  |  +-op_type=UNION_ALL
-  |  +-input_item_list=
-  |    +-SetOperationItem(scan=<pipe_input>, output_column_list=[$union_all1.x#1])
-  |    +-SetOperationItem
-  |      +-scan=
-  |      | +--SingleRowScan
-  |      | |> ProjectScan
-  |      |    +-column_list=[$union_all2.$col1#2]
-  |      |    +-expr_list=
-  |      |    | +-$col1#2 := Literal(type=INT64, value=2)
-  |      |    +-input_scan=<pipe_input>
-  |      +-output_column_list=[$union_all2.$col1#2]
+  .  +-column_list=[$union_all.x#3]
+  .  +-op_type=UNION_ALL
+  .  +-input_item_list=
+  .    +-SetOperationItem(output_column_list=[$union_all1.x#1])
+  .    +-SetOperationItem
+  .      +-scan=
+  .      | +--SingleRowScan
+  .      | |> ProjectScan
+  .      |    +-column_list=[$union_all2.$col1#2]
+  .      |    +-expr_list=
+  .      |      +-$col1#2 := Literal(type=INT64, value=2)
+  .      +-output_column_list=[$union_all2.$col1#2]
   |> FilterScan
-  |  +-column_list=[$union_all.x#3]
-  |  +-input_scan=<pipe_input>
-  |  +-filter_expr=
-  |    +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
-  |      +-ColumnRef(type=INT64, column=$union_all.x#3)
-  |      +-Literal(type=INT64, value=0)
+  .  +-column_list=[$union_all.x#3]
+  .  +-filter_expr=
+  .    +-FunctionCall(GoogleSQL:$greater(INT64, INT64) -> BOOL)
+  .      +-ColumnRef(type=INT64, column=$union_all.x#3)
+  .      +-Literal(type=INT64, value=0)
   |> ProjectScan
      +-column_list=[$query.y#4]
      +-expr_list=
-     | +-y#4 :=
-     |   +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
-     |     +-ColumnRef(type=INT64, column=$union_all.x#3)
-     |     +-Literal(type=INT64, value=1)
-     +-input_scan=<pipe_input>
+       +-y#4 :=
+         +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
+           +-ColumnRef(type=INT64, column=$union_all.x#3)
+           +-Literal(type=INT64, value=1)
 )");
+
+  // With omit_pipe_input_scan_field=false, the consumed input is shown inline.
+  EXPECT_THAT(query_stmt->DebugString(
+                  {.linear_mode = true, .omit_pipe_input_scan_field = false}),
+              HasSubstr("input_scan=<pipe_input>"));
 }
 
 TEST_F(ResolvedASTTest, DebugStringPrintColumnHolderAsCreated) {
