@@ -258,19 +258,22 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeScript) {
       ExecuteQueryWebRequest(
           {"visualize"}, ExecuteQueryConfig::SqlMode::kScript,
           SQLBuilder::TargetSyntaxMode::kStandard,
-          "SELECT 1 AS x; SELECT 2 AS y;", "none", "MAXIMUM", "ALL_MINUS_DEV"),
+          "SELECT 111 AS aaa; SELECT 222 AS bbb;", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
                             "{{#statements}}{{#result_visualized}}"
-                            "[V]{{{viz_resolved_ast_html}}}"
+                            "[V]{{{viz_input_sql_html}}}"
                             "{{/result_visualized}}{{/statements}}"),
       result));
-  // Each top-level statement of the script is visualized as its own block.
-  int count = 0;
-  for (size_t pos = 0; (pos = result.find("[V]", pos)) != std::string::npos;
-       pos += 3) {
-    ++count;
-  }
-  EXPECT_EQ(count, 2);
+  // Each top-level statement of the script is visualized as its own block,
+  // scoped to its OWN text: the first block's Input SQL pane shows aaa/111 and
+  // not the second statement's bbb/222, and vice versa (not the whole script).
+  std::vector<std::string> blocks = absl::StrSplit(result, "[V]");
+  ASSERT_EQ(blocks.size(), 3u);  // leading "" + one block per statement
+  EXPECT_THAT(blocks[1], HasSubstr("aaa"));
+  EXPECT_EQ(blocks[1].find("bbb"), std::string::npos);
+  EXPECT_THAT(blocks[2], HasSubstr("bbb"));
+  EXPECT_EQ(blocks[2].find("aaa"), std::string::npos);
 }
 
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {

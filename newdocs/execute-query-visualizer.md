@@ -355,12 +355,28 @@ noted but not initially built).
       bogus top-level segments. (Rendering nested operators as their own boxes,
       and exact correspondence for ops nested in expressions, await the
       structured model.)
+- [ ] Robust SQLBuilder-pane segmentation: `SegmentPipeSqlToHtml` currently
+      re-lexes the formatted SQL with a hand-rolled quote/paren/escape scanner
+      to find top-level `|>`, and zips the i-th textual `|>` to the i-th scan in
+      `pipe_operator_scan_order()`. Both are approximations: the ad-hoc scanner
+      can mis-split on lexer corners (comments, raw/triple-quoted strings,
+      backtick-identifier escapes), and the positional zip mislabels operators
+      whose SQLBuilder emission order differs from their textual order (ops
+      nested in expressions). A robust fix re-segments using the real tokenizer
+      (`GetParseTokens`) and carries each operator's scan id structurally rather
+      than by position — which the structured SQLBuilder model in the next phase
+      provides. (Note: `LenientFormatSql` re-flows the text, so boundary offsets
+      can't simply be recorded at emission time and reused.)
 - [x] Non-query statements: any statement is visualized like a query (the gate
       now skips only non-statement roots such as bare expressions in expression
       mode). Scripts get best-effort per-statement visualization — each
-      top-level statement is framed as its own block and visualized, skipping
-      any that don't analyze standalone (e.g. ones that reference script
-      variables, or control-flow constructs).
+      top-level statement is framed as its own block and visualized against its
+      OWN source text (re-parsed standalone from its byte range, so its panes
+      show just that statement, not the whole script; statements that can't be
+      isolated — e.g. they use a macro defined earlier in the script — fall back
+      to the full-script text). Statements that don't analyze standalone (e.g.
+      ones that reference script variables, or control-flow constructs) are
+      skipped.
 - [ ] Full-fidelity script visualization via script-executor integration
       (analyze each statement in its run-time variable context, rather than the
       current best-effort standalone analysis).

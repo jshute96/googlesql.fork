@@ -2610,6 +2610,28 @@ static absl::Status ExecuteScript(absl::string_view script,
       for (const ASTStatement* stmt : script_node->statement_list()) {
         GOOGLESQL_RETURN_IF_ERROR(writer.StartStatement(is_first));
         is_first = false;
+        // Visualize each statement against its OWN source text so its panes
+        // show just that statement, not the whole script.  The statement AST
+        // carries byte offsets into the whole script, so re-parse the
+        // statement's text standalone to get an AST whose locations line up
+        // with the per-statement input pane.  If it can't be isolated on its
+        // own (e.g. it uses a macro defined earlier in the script), fall back
+        // to visualizing against the full script text.
+        const auto& range = stmt->location();
+        const absl::string_view stmt_sql = script.substr(
+            range.start().GetByteOffset(),
+            range.end().GetByteOffset() - range.start().GetByteOffset());
+        std::unique_ptr<ParserOutput> stmt_output;
+        if (ParseStatement(
+                stmt_sql,
+                ParserOptions(config.analyzer_options().language(),
+                              kMacroExpansionMode, &config.macro_catalog()),
+                &stmt_output)
+                .ok()) {
+          VisualizeQuery(stmt_sql, stmt_output->statement(), config, writer)
+              .IgnoreError();
+          continue;
+        }
         VisualizeQuery(script, stmt, config, writer).IgnoreError();
       }
     }
