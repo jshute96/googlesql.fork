@@ -361,8 +361,14 @@ noted but not initially built).
 - [ ] Full-fidelity script visualization via script-executor integration
       (analyze each statement in its run-time variable context, rather than the
       current best-effort standalone analysis).
-- [ ] Revisit rewriter handling: visualization currently disables rewriters; a
-      toggle may be wanted.
+- [ ] Rewriter toggle: visualization force-disables rewriters to keep the
+      Resolved AST close to the input and preserve the input↔resolved
+      correspondence (keyed on *pre-rewrite* `ResolvedScan*`). An opt-in "apply
+      rewriters" control would need a request param + config field + web
+      checkbox + form parsing, and would *degrade* the input↔resolved
+      correspondence (post-rewrite scans don't match the pre-rewrite
+      `ASTNodeResolvedInfoMap`; resolved↔SQLBuilder would still work). Deferred
+      pending a decision on whether that tradeoff is wanted.
 
 ### Next phase — graphical tree / graph view (`visual-graph` branch, child PR)
 
