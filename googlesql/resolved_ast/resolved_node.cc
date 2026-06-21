@@ -114,38 +114,43 @@ std::string HtmlEscape(absl::string_view s) {
 }
 }  // namespace
 
-std::string ResolvedNode::DebugStringHtml() const {
+std::string ResolvedNode::DebugStringHtml(
+    std::vector<const ResolvedScan*>* scan_order) const {
   DebugStringConfig config;
   config.linear_mode = true;
   int scan_counter = 0;
   std::string output;
-  EmitNodeHtml(this, config, &scan_counter, &output);
+  EmitNodeHtml(this, config, &scan_counter, scan_order, &output);
   return output;
 }
 
 void ResolvedNode::EmitNodeHtml(const ResolvedNode* node,
                                 const DebugStringConfig& config,
-                                int* scan_counter, std::string* output) {
+                                int* scan_counter,
+                                std::vector<const ResolvedScan*>* scan_order,
+                                std::string* output) {
   if (node == nullptr) {
     absl::StrAppend(output, "<div class=\"rscan-stmt\">&lt;nullptr&gt;</div>");
     return;
   }
   if (node->IsScan()) {
     EmitScanChainHtml(node->GetAs<ResolvedScan>(), config, scan_counter,
-                      output);
+                      scan_order, output);
     return;
   }
   // A non-scan node (typically the statement): render as a labeled block whose
   // scan fields become nested query boxes.
   absl::StrAppend(output, "<div class=\"rscan-stmt\"><div class=\"rscan-head\">",
                   HtmlEscape(node->node_kind_string()), "</div>");
-  EmitScanFieldsHtml(node, config, /*elide=*/nullptr, scan_counter, output);
+  EmitScanFieldsHtml(node, config, /*elide=*/nullptr, scan_counter, scan_order,
+                     output);
   absl::StrAppend(output, "</div>");
 }
 
-void ResolvedNode::EmitScanChainHtml(const ResolvedScan* scan,
-                                     const DebugStringConfig& config,
-                                     int* scan_counter, std::string* output) {
+void ResolvedNode::EmitScanChainHtml(
+    const ResolvedScan* scan, const DebugStringConfig& config,
+    int* scan_counter, std::vector<const ResolvedScan*>* scan_order,
+    std::string* output) {
   // Collect the pipe spine: spine.back() is the source (leaf) scan, spine[0]
   // is the top of the chain.  A leaf scan with no pipe input is a one-element
   // spine.
@@ -158,6 +163,7 @@ void ResolvedNode::EmitScanChainHtml(const ResolvedScan* scan,
     const ResolvedScan* s = spine[i];
     const bool is_operator = (i != static_cast<int>(spine.size()) - 1);
     const int id = (*scan_counter)++;
+    if (scan_order != nullptr) scan_order->push_back(s);
     absl::StrAppend(output, "<div class=\"rscan ",
                     (id % 2 == 0 ? "scan-a" : "scan-b"),
                     "\" data-scan-id=\"", id, "\"><div class=\"rscan-head\">",
@@ -165,15 +171,15 @@ void ResolvedNode::EmitScanChainHtml(const ResolvedScan* scan,
                     HtmlEscape(s->node_kind_string()), "</div>");
     EmitScanFieldsHtml(s, config,
                        /*elide=*/is_operator ? s->GetPipeInputScan() : nullptr,
-                       scan_counter, output);
+                       scan_counter, scan_order, output);
     absl::StrAppend(output, "</div>");
   }
 }
 
-void ResolvedNode::EmitScanFieldsHtml(const ResolvedNode* scan,
-                                      const DebugStringConfig& config,
-                                      const ResolvedNode* elide,
-                                      int* scan_counter, std::string* output) {
+void ResolvedNode::EmitScanFieldsHtml(
+    const ResolvedNode* scan, const DebugStringConfig& config,
+    const ResolvedNode* elide, int* scan_counter,
+    std::vector<const ResolvedScan*>* scan_order, std::string* output) {
   std::vector<DebugStringField> fields;
   scan->CollectDebugStringFields(&fields);
 
@@ -206,7 +212,7 @@ void ResolvedNode::EmitScanFieldsHtml(const ResolvedNode* scan,
         }
         absl::StrAppend(output, "<div class=\"rscan-query\">");
         EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,
-                          output);
+                          scan_order, output);
         absl::StrAppend(output, "</div></div>");
       } else {
         absl::StrAppend(output, "<div class=\"rscan-field\">");

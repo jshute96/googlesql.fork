@@ -200,6 +200,31 @@ TEST(ExecuteQueryWebHandlerTest, TestQueryResultPresent) {
   EXPECT_THAT(result, Eq("true-"));
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeScanIds) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "FROM (SELECT 1 AS x) |> WHERE x > 0 |> SELECT x", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}"
+                            "[AST]{{{viz_resolved_ast_html}}}"
+                            "[IN]{{{viz_input_sql_html}}}"
+                            "[SB]{{{viz_sqlbuilder_sql_html}}}"
+                            "{{/result_visualized}}{{/statements}}"),
+      result));
+  // The Resolved AST pane emits one box per scan with a data-scan-id.
+  EXPECT_THAT(result, HasSubstr("class=\"rscan "));
+  EXPECT_THAT(result, HasSubstr("data-scan-id=\"0\""));
+  // The input pane carries hidden scan-id markers correlating its boxes to the
+  // same scans (input SQL <-> Resolved AST correspondence).
+  EXPECT_THAT(result, HasSubstr("ni-scan-id"));
+  // The SQLBuilder pane is rendered too.
+  EXPECT_THAT(result, HasSubstr("[SB]"));
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestQueryExecutedSimpleResult) {
   std::string result;
   EXPECT_TRUE(HandleRequest(

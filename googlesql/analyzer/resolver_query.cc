@@ -1393,6 +1393,7 @@ absl::Status Resolver::ResolvePipeOperatorList(
         .is_pipe_operator = true,
         .output_name_list = *current_name_list,
         .input_name_list = std::move(input_name_list),
+        .scan = current_scan->get(),
     };
   }
 
@@ -17771,6 +17772,7 @@ absl::Status Resolver::MakeScanForTable(
   resolved_info.table_scan_info = TableScanInfo{
       .table = table,
       .output_name_list = name_list,
+      .scan = table_scan.get(),
   };
 
   *output_table_scan = std::move(table_scan);

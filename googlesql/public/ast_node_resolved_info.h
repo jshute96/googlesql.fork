@@ -29,6 +29,7 @@ namespace googlesql {
 
 class ASTNode;
 class NameList;
+class ResolvedScan;
 class Table;
 
 // Extra information the resolver learned about an AST node that resolved to a
@@ -40,6 +41,12 @@ struct TableScanInfo {
   // The NameList describing the names (columns and range variables) produced
   // by the table scan.  May be null if it wasn't captured.
   std::shared_ptr<const NameList> output_name_list;
+
+  // The ResolvedScan produced for this AST node (a ResolvedTableScan), or null
+  // if it wasn't captured.  Owned by the resolver/AnalyzerOutput; valid for the
+  // lifetime of the AnalyzerOutput.  Used by the visualizer to correlate an
+  // input-SQL node with its box in the Resolved AST pane.
+  const ResolvedScan* scan = nullptr;
 };
 
 // Extra information the resolver learned about an AST node that directly
@@ -58,6 +65,12 @@ struct ResolvedScanInfo {
   // to) this scan, where applicable.  May be null when there is no meaningful
   // input.
   std::shared_ptr<const NameList> input_name_list;
+
+  // The ResolvedScan this AST node produced, or null if it wasn't captured.
+  // Owned by the resolver/AnalyzerOutput; valid for the lifetime of the
+  // AnalyzerOutput.  Used by the visualizer to correlate an input-SQL node with
+  // its box in the Resolved AST pane.
+  const ResolvedScan* scan = nullptr;
 };
 
 // Extra information the resolver learned about an AST node that resolved to a

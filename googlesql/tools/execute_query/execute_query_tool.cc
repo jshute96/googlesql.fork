@@ -1238,14 +1238,36 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
 // Shared by the analyze-mode query viewer and the visualizer panes.
 static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
     absl::string_view sql, const ASTNode* ast, const AnalyzerOutput& output,
-    const ExecuteQueryConfig& config) {
+    const ExecuteQueryConfig& config,
+    const absl::flat_hash_map<const ResolvedScan*, int>* scan_ids = nullptr) {
   const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
   const ProductMode product_mode =
       config.analyzer_options().language().product_mode();
-  BoxAnnotator annotate = [&info_map, product_mode](const ASTNode* node) {
+  BoxAnnotator annotate =
+      [&info_map, product_mode, scan_ids](const ASTNode* node) -> std::string {
     auto it = info_map.find(node);
     if (it == info_map.end()) return std::string();
-    return ResolvedInfoHoverHtml(it->second, product_mode);
+    std::string html = ResolvedInfoHoverHtml(it->second, product_mode);
+    // For the visualizer: tag this node's box with the scan-id of the
+    // ResolvedScan it produced, so the panes can be correlated.  Carried in a
+    // hidden marker inside the node-info (the box itself is wrapped by the box
+    // formatter, so we cannot set an attribute on it directly).
+    if (scan_ids != nullptr) {
+      const ResolvedScan* scan = nullptr;
+      if (it->second.resolved_scan_info.has_value()) {
+        scan = it->second.resolved_scan_info->scan;
+      } else if (it->second.table_scan_info.has_value()) {
+        scan = it->second.table_scan_info->scan;
+      }
+      if (scan != nullptr) {
+        auto sid = scan_ids->find(scan);
+        if (sid != scan_ids->end()) {
+          html = absl::StrCat("<span class=\"ni-scan-id\" data-scan-id=\"",
+                              sid->second, "\"></span>", html);
+        }
+      }
+    }
+    return html;
   };
   return SqlToBoxHtml(sql, ast, config.analyzer_options().language(),
                       /*width=*/80, annotate);
@@ -1392,20 +1414,25 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   VisualizationData data;
   data.input_sql = std::string(sql);
 
-  // --- Input SQL pane: box HTML with node info. ---
-  absl::StatusOr<std::string> input_html =
-      RenderBoxHtmlWithNodeInfo(sql, ast, *analyzer_output, config);
-  if (input_html.ok()) {
-    data.input_sql_html = *input_html;
-  }
-
-  // --- Resolved AST pane: linear (pipe-style) DebugString. ---
+  // --- Resolved AST pane: structured linear emitter (one box per
+  // ResolvedScan, alternating colors, nested query blocks, data-scan-id).  Also
+  // collect the scans in scan-id order so we can tag the other panes. ---
   ResolvedNode::DebugStringConfig debug_config;
   debug_config.linear_mode = true;
   data.resolved_ast_text = resolved->DebugString(debug_config);
-  // Structured linear emitter: one box per ResolvedScan, alternating colors,
-  // nested query blocks, data-scan-id (for correspondence highlighting).
-  data.resolved_ast_html = resolved->DebugStringHtml();
+  std::vector<const ResolvedScan*> scan_order;
+  data.resolved_ast_html = resolved->DebugStringHtml(&scan_order);
+  absl::flat_hash_map<const ResolvedScan*, int> scan_ids;
+  for (int i = 0; i < static_cast<int>(scan_order.size()); ++i) {
+    scan_ids[scan_order[i]] = i;
+  }
+
+  // --- Input SQL pane: box HTML with node info, tagged with scan-ids. ---
+  absl::StatusOr<std::string> input_html =
+      RenderBoxHtmlWithNodeInfo(sql, ast, *analyzer_output, config, &scan_ids);
+  if (input_html.ok()) {
+    data.input_sql_html = *input_html;
+  }
 
   // --- SQLBuilder pane: regenerate SQL in pipe syntax. ---
   SQLBuilder::SQLBuilderOptions sql_builder_options;

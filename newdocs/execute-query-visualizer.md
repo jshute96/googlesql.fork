@@ -45,9 +45,12 @@ formatters, #8 AST-node resolution info, #10 linear Resolved AST DebugString).
 2. **Input pane**: `RenderBoxHtmlWithNodeInfo` runs `SqlToBoxHtml` over the input
    SQL with a `BoxAnnotator` that pulls each AST node's resolver info
    (`ASTNodeResolvedInfoMap`) into a hidden `.node-info` box (NameLists, titles).
-3. **Resolved AST pane**: `ResolvedNode::DebugString` with `linear_mode = true`.
-   *(Currently rendered as escaped `<pre>` — a structured per-scan emitter is
-   pending; see TODOs.)*
+3. **Resolved AST pane**: `ResolvedNode::DebugStringHtml()` — a structured
+   linear emitter that produces one `.rscan` box per `ResolvedScan` (alternating
+   `scan-a`/`scan-b` shading), nested `.rscan-query` blocks for non-pipe-input
+   scan fields (subqueries, set-operation inputs), an enclosing `.rscan-stmt`
+   block for the statement, and a `data-scan-id` per scan box. Scalar fields and
+   non-scan children render as escaped text in their box.
 4. **SQLBuilder pane**: run `SQLBuilder` in `TargetSyntaxMode::kPipe` on the
    Resolved AST, lenient-format the result, then **re-parse and re-analyze** it
    so its NameLists are available, and render it with the same box formatter.
@@ -107,9 +110,8 @@ query block. Hidden panes are skipped (except transitively through the AST).
 - [x] Milestone 1: `Visualize` tool mode; text output; web 3-pane scaffold.
 - [x] Milestone 3 (UI mechanics): single-column layout, hide/re-add, draggable
       dividers + details resizer, linked state, click→details box.
-- [ ] Milestone 2: structured linear Resolved AST emitter (one `.rscan` box per
-      `ResolvedScan`, alternating colors, query/statement nesting,
-      `data-scan-id`) replacing the `<pre>` placeholder.
+- [x] Milestone 2: structured linear Resolved AST emitter
+      (`ResolvedNode::DebugStringHtml`).
 - [ ] Milestone 4: correspondence data + cross-pane highlighting.
   - [ ] Extend `ResolvedScanInfo`/`TableScanInfo` with `const ResolvedScan*`.
   - [ ] Instrument `SQLBuilder` (pipe mode) to emit per-scan output ranges.

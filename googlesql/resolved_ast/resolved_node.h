@@ -214,7 +214,12 @@ class ResolvedNode {
   // input), and an enclosing `rscan-stmt` box for the statement.  Each scan box
   // carries `data-scan-id` so client-side code can correlate it with the SQL
   // panes.  Per-node fields are rendered as escaped text inside their box.
-  std::string DebugStringHtml() const;
+  //
+  // If `scan_order` is non-null, it is filled with the scans in scan-id order
+  // (i.e. `scan_order[i]` is the scan whose box has `data-scan-id="i"`), so the
+  // caller can build a scan->id map to correlate the other panes.
+  std::string DebugStringHtml(
+      std::vector<const ResolvedScan*>* scan_order = nullptr) const;
 
   // Check if any semantically meaningful fields have not been accessed in
   // this node or its children. If so, return a descriptive error indicating
@@ -492,16 +497,20 @@ class ResolvedNode {
   // `EmitScanChainHtml` flattens a scan's pipe spine into a column of boxes.
   static void EmitNodeHtml(const ResolvedNode* node,
                            const DebugStringConfig& config, int* scan_counter,
+                           std::vector<const ResolvedScan*>* scan_order,
                            std::string* output);
   static void EmitScanChainHtml(const ResolvedScan* scan,
                                 const DebugStringConfig& config,
-                                int* scan_counter, std::string* output);
+                                int* scan_counter,
+                                std::vector<const ResolvedScan*>* scan_order,
+                                std::string* output);
   // Renders a single scan box's own fields: scalar fields and non-scan child
   // nodes become escaped text; scan child nodes become nested query boxes.
   // `elide` is the pipe-input scan to skip (already shown as the box above).
   static void EmitScanFieldsHtml(const ResolvedNode* scan,
                                  const DebugStringConfig& config,
                                  const ResolvedNode* elide, int* scan_counter,
+                                 std::vector<const ResolvedScan*>* scan_order,
                                  std::string* output);
 
   // DebugString on these call protected methods.

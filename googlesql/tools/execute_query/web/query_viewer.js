@@ -345,7 +345,7 @@
       e.stopPropagation();
       return;
     }
-    // Node click -> details box.
+    // Node click -> details box + cross-pane correspondence highlight.
     var pane = e.target.closest && e.target.closest('.viz-pane');
     if (pane) { handleNodeClick(pane, e); }
   });
@@ -377,15 +377,10 @@
     return items;
   }
 
-  function handleNodeClick(pane, e) {
-    var viz = pane.closest('.viz');
+  function renderDetails(viz, items) {
     var infoEl = viz ? viz.querySelector('.viz-info') : null;
     if (!infoEl) return;
-    var rect = e.target.closest('.rect');
-    if (!rect || !pane.contains(rect)) return;
-    var items = collectNodeInfo(rect, pane);
-    if (items.length === 0) return;
-
+    if (!items || items.length === 0) return;
     // Heading stack (innermost first, outer ones prefixed "in") + body of the
     // selected (innermost) node.
     var html = '<div class="np-body-stack">';
@@ -397,6 +392,69 @@
     html += '</div><div class="np-hr"></div><div class="np-body">' +
         items[0].body + '</div>';
     infoEl.innerHTML = html;
+  }
+
+  // The scan-id (correspondence key) for an input/SQLBuilder box: the innermost
+  // enclosing `.rect` whose `.node-info` carries a `.ni-scan-id` marker.
+  function scanIdForRect(rect, root) {
+    var el = rect;
+    while (el && root.contains(el)) {
+      if (el.classList && el.classList.contains('rect')) {
+        for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
+          if (c.classList && c.classList.contains('node-info')) {
+            var marker = c.querySelector('.ni-scan-id');
+            if (marker) return marker.getAttribute('data-scan-id');
+            break;
+          }
+        }
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  function clearHighlights(viz) {
+    var marked = viz.querySelectorAll('.viz-selected, .viz-corresp');
+    for (var i = 0; i < marked.length; i++) {
+      marked[i].classList.remove('viz-selected', 'viz-corresp');
+    }
+  }
+
+  // Highlights `selectedEl` prominently and every element in the *other* panes
+  // that corresponds to the same scan-id.
+  function applyCorrespondence(viz, selectedEl, scanId) {
+    clearHighlights(viz);
+    selectedEl.classList.add('viz-selected');
+    if (scanId == null) return;
+    // Resolved AST boxes carry data-scan-id directly.
+    var asts = viz.querySelectorAll('.rscan[data-scan-id="' + scanId + '"]');
+    for (var i = 0; i < asts.length; i++) {
+      if (asts[i] !== selectedEl) asts[i].classList.add('viz-corresp');
+    }
+    // Input / SQLBuilder boxes carry the scan-id in a hidden .ni-scan-id marker.
+    var markers = viz.querySelectorAll('.ni-scan-id[data-scan-id="' + scanId +
+        '"]');
+    for (var j = 0; j < markers.length; j++) {
+      var rect = markers[j].closest('.rect');
+      if (rect && rect !== selectedEl) rect.classList.add('viz-corresp');
+    }
+  }
+
+  function handleNodeClick(pane, e) {
+    var viz = pane.closest('.viz');
+    if (!viz) return;
+    // Resolved AST box: drives correspondence (details for AST nodes are TBD).
+    var rscan = e.target.closest('.rscan');
+    if (rscan && pane.contains(rscan)) {
+      applyCorrespondence(viz, rscan, rscan.getAttribute('data-scan-id'));
+      return;
+    }
+    // Input / SQLBuilder box: show details and drive correspondence.
+    var rect = e.target.closest('.rect');
+    if (!rect || !pane.contains(rect)) return;
+    var items = collectNodeInfo(rect, pane);
+    if (items.length > 0) renderDetails(viz, items);
+    applyCorrespondence(viz, rect, scanIdForRect(rect, pane));
   }
 
   // --- Window resize: columns scale proportionally via flex automatically.
