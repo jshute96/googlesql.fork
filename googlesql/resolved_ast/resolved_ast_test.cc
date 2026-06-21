@@ -350,7 +350,7 @@ TEST_F(ResolvedASTTest, DebugStringLinearMode) {
   // a statement block, with nested query blocks for non-pipe-input scans.
   const std::string html = query_stmt->DebugStringHtml();
   EXPECT_THAT(html, HasSubstr("rscan-stmt"));
-  EXPECT_THAT(html, HasSubstr("data-scan-id=\"0\""));
+  EXPECT_THAT(html, HasSubstr("data-node-id=\"r0\""));
   EXPECT_THAT(html, HasSubstr("class=\"rscan scan-a\""));
   EXPECT_THAT(html, HasSubstr("class=\"rscan scan-b\""));
   EXPECT_THAT(html, HasSubstr("rscan-query"));

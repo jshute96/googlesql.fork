@@ -166,7 +166,7 @@ void ResolvedNode::EmitScanChainHtml(
     if (scan_order != nullptr) scan_order->push_back(s);
     absl::StrAppend(output, "<div class=\"rscan ",
                     (id % 2 == 0 ? "scan-a" : "scan-b"),
-                    "\" data-scan-id=\"", id, "\"><div class=\"rscan-head\">",
+                    "\" data-node-id=\"r", id, "\"><div class=\"rscan-head\">",
                     (is_operator ? "|&gt; " : ""),
                     HtmlEscape(s->node_kind_string()), "</div>");
     EmitScanFieldsHtml(s, config,

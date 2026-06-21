@@ -1243,15 +1243,19 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
   const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
   const ProductMode product_mode =
       config.analyzer_options().language().product_mode();
+  // Counter for assigning input-pane nodes their own ids (a0, a1, ...).
+  int input_node_counter = 0;
   BoxAnnotator annotate =
-      [&info_map, product_mode, scan_ids](const ASTNode* node) -> std::string {
+      [&info_map, product_mode, scan_ids,
+       &input_node_counter](const ASTNode* node) -> std::string {
     auto it = info_map.find(node);
     if (it == info_map.end()) return std::string();
     std::string html = ResolvedInfoHoverHtml(it->second, product_mode);
-    // For the visualizer: tag this node's box with the scan-id of the
-    // ResolvedScan it produced, so the panes can be correlated.  Carried in a
-    // hidden marker inside the node-info (the box itself is wrapped by the box
-    // formatter, so we cannot set an attribute on it directly).
+    // For the visualizer: give this node its own id (a0, a1, ...) and a
+    // cross-reference to the id of the ResolvedScan it produced (r<id>), so the
+    // panes can be correlated.  Carried in a hidden `.ni-ref` marker inside the
+    // node-info (the box itself is wrapped by the box formatter, so we cannot
+    // set an attribute on it directly).
     if (scan_ids != nullptr) {
       const ResolvedScan* scan = nullptr;
       if (it->second.resolved_scan_info.has_value()) {
@@ -1262,7 +1266,8 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
       if (scan != nullptr) {
         auto sid = scan_ids->find(scan);
         if (sid != scan_ids->end()) {
-          html = absl::StrCat("<span class=\"ni-scan-id\" data-scan-id=\"",
+          html = absl::StrCat("<span class=\"ni-ref\" data-node-id=\"a",
+                              input_node_counter++, "\" data-corresp=\"r",
                               sid->second, "\"></span>", html);
         }
       }
@@ -1384,13 +1389,14 @@ static std::string PreBlockHtml(absl::string_view text) {
 
 // Renders the SQLBuilder pane: splits the formatted pipe SQL at each "|>" and
 // wraps each segment in a `.rscan` box (the same markup the Resolved AST pane
-// uses) tagged with the `data-scan-id` of the ResolvedScan that produced it, so
-// the panes line up and the client-side correspondence highlighting (keyed on
-// `.rscan[data-scan-id]`) lights up across all three panes.  The leading
-// segment (the FROM source, before the first "|>") is tagged with
-// `source_scan_id`; the segment introduced by the (k+1)-th "|>" is tagged with
-// `op_scan_ids[k]` (the SQLBuilder records one scan per emitted "|>", in output
-// order).  A box is shaded to match its scan-id's parity in the AST pane.
+// uses).  Each segment gets its own id (s0, s1, ...) and a `data-corresp`
+// cross-reference (r<id>) to the ResolvedScan that produced it, so the panes
+// line up and the client-side correspondence highlighting lights up across all
+// three panes.  The leading segment (the FROM source, before the first "|>") is
+// cross-referenced to `source_scan_id`; the segment introduced by the (k+1)-th
+// "|>" is cross-referenced to `op_scan_ids[k]` (the SQLBuilder records one scan
+// per emitted "|>", in output order).  A box is shaded to match its scan's
+// parity in the AST pane.
 static std::string SegmentPipeSqlToHtml(absl::string_view sql,
                                         int source_scan_id,
                                         const std::vector<int>& op_scan_ids) {
@@ -1418,9 +1424,10 @@ static std::string SegmentPipeSqlToHtml(absl::string_view sql,
                         ? op_scan_ids[i - 1]
                         : -1);
     const char* cls = (scan_id >= 0 && scan_id % 2 == 1) ? "scan-b" : "scan-a";
-    absl::StrAppend(&html, "<div class=\"rscan ", cls, "\"");
+    absl::StrAppend(&html, "<div class=\"rscan ", cls, "\" data-node-id=\"s", i,
+                    "\"");
     if (scan_id >= 0) {
-      absl::StrAppend(&html, " data-scan-id=\"", scan_id, "\"");
+      absl::StrAppend(&html, " data-corresp=\"r", scan_id, "\"");
     }
     absl::StrAppend(
         &html, ">",

@@ -200,7 +200,7 @@ TEST(ExecuteQueryWebHandlerTest, TestQueryResultPresent) {
   EXPECT_THAT(result, Eq("true-"));
 }
 
-TEST(ExecuteQueryWebHandlerTest, TestVisualizeScanIds) {
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeCrossRefs) {
   std::string result;
   EXPECT_TRUE(HandleRequest(
       ExecuteQueryWebRequest(
@@ -215,18 +215,21 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeScanIds) {
                             "[SB]{{{viz_sqlbuilder_sql_html}}}"
                             "{{/result_visualized}}{{/statements}}"),
       result));
-  // The Resolved AST pane emits one box per scan with a data-scan-id.
+  // The Resolved AST pane emits one box per scan, each with a stable id.
   EXPECT_THAT(result, HasSubstr("class=\"rscan "));
-  EXPECT_THAT(result, HasSubstr("data-scan-id=\"0\""));
-  // The input pane carries hidden scan-id markers correlating its boxes to the
-  // same scans (input SQL <-> Resolved AST correspondence).
-  EXPECT_THAT(result, HasSubstr("ni-scan-id"));
-  // The SQLBuilder pane is rendered as scan-tagged .rscan segment boxes too, so
-  // the regenerated pipe operators correspond to the same scans.
+  EXPECT_THAT(result, HasSubstr("data-node-id=\"r0\""));
+  // The input pane carries hidden `.ni-ref` markers cross-referencing its boxes
+  // to the scans they produced (input SQL <-> Resolved AST correspondence).
+  EXPECT_THAT(result, HasSubstr("ni-ref"));
+  EXPECT_THAT(result, HasSubstr("data-corresp=\"r"));
+  // The SQLBuilder pane is rendered as `.rscan` segment boxes too, each with its
+  // own id and a cross-reference to the scan that produced it, so the
+  // regenerated pipe operators correspond to the same scans.
   EXPECT_THAT(result, HasSubstr("[SB]"));
   std::string sb = result.substr(result.find("[SB]"));
   EXPECT_THAT(sb, HasSubstr("class=\"rscan "));
-  EXPECT_THAT(sb, HasSubstr("data-scan-id="));
+  EXPECT_THAT(sb, HasSubstr("data-node-id=\"s"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r"));
   EXPECT_THAT(sb, HasSubstr("|&gt; WHERE"));
 }
 

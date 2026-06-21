@@ -394,23 +394,76 @@
     infoEl.innerHTML = html;
   }
 
-  // The scan-id (correspondence key) for an input/SQLBuilder box: the innermost
-  // enclosing `.rect` whose `.node-info` carries a `.ni-scan-id` marker.
-  function scanIdForRect(rect, root) {
-    var el = rect;
-    while (el && root.contains(el)) {
-      if (el.classList && el.classList.contains('rect')) {
-        for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
-          if (c.classList && c.classList.contains('node-info')) {
-            var marker = c.querySelector('.ni-scan-id');
-            if (marker) return marker.getAttribute('data-scan-id');
-            break;
-          }
-        }
+  // --- Cross-reference correspondence model ------------------------------
+  // Every correspondence node carries a stable id in `data-node-id`: Resolved
+  // AST and SQLBuilder boxes on the `.rscan` element itself; input boxes on a
+  // hidden `.ni-ref` marker inside the box's own `.node-info` (the box formatter
+  // owns the `.rect`, so we cannot set an attribute on it directly).  A node's
+  // `data-corresp` lists the ids it links to directly (one hop) in the same or
+  // an adjacent pane; transitive links (e.g. input -> SQLBuilder via the
+  // Resolved AST) are resolved on the fly by walking these edges as undirected.
+
+  // The `.ni-ref` marker carried by an input box's own `.node-info`, if any.
+  function markerOfRect(rect) {
+    if (!rect || !rect.classList || !rect.classList.contains('rect')) return null;
+    for (var c = rect.firstElementChild; c; c = c.nextElementSibling) {
+      if (c.classList && c.classList.contains('node-info')) {
+        return c.querySelector('.ni-ref');
       }
-      el = el.parentElement;
     }
     return null;
+  }
+
+  // Indexes every correspondence node in `viz` by id:
+  // { id, el (highlight target), pane, corresp:[ids] }.
+  function collectNodes(viz) {
+    var byId = {};
+    function add(id, el, corresp) {
+      if (!id || byId[id]) return;
+      byId[id] = {
+        id: id, el: el, pane: el.closest('.viz-pane'),
+        corresp: corresp ? corresp.split(/\s+/).filter(Boolean) : []
+      };
+    }
+    var boxes = viz.querySelectorAll('.rscan[data-node-id]');
+    for (var i = 0; i < boxes.length; i++) {
+      add(boxes[i].getAttribute('data-node-id'), boxes[i],
+          boxes[i].getAttribute('data-corresp'));
+    }
+    var markers = viz.querySelectorAll('.ni-ref[data-node-id]');
+    for (var j = 0; j < markers.length; j++) {
+      var rect = markers[j].closest('.rect');
+      if (rect) {
+        add(markers[j].getAttribute('data-node-id'), rect,
+            markers[j].getAttribute('data-corresp'));
+      }
+    }
+    return byId;
+  }
+
+  // Undirected adjacency over the `data-corresp` edges.
+  function buildAdj(byId) {
+    var adj = {};
+    function link(a, b) { (adj[a] = adj[a] || []).push(b); }
+    Object.keys(byId).forEach(function (id) {
+      byId[id].corresp.forEach(function (c) { link(id, c); link(c, id); });
+    });
+    return adj;
+  }
+
+  // Ids reachable from startId (excluding startId).
+  function reachableIds(adj, startId) {
+    var seen = {}, stack = [startId], out = [];
+    seen[startId] = true;
+    while (stack.length) {
+      var ns = adj[stack.pop()] || [];
+      for (var i = 0; i < ns.length; i++) {
+        if (!seen[ns[i]]) {
+          seen[ns[i]] = true; out.push(ns[i]); stack.push(ns[i]);
+        }
+      }
+    }
+    return out;
   }
 
   function clearHighlights(viz) {
@@ -420,41 +473,50 @@
     }
   }
 
-  // Highlights `selectedEl` prominently and every element in the *other* panes
-  // that corresponds to the same scan-id.
-  function applyCorrespondence(viz, selectedEl, scanId) {
+  // Marks `clickedEl` as the primary selection and every node corresponding to
+  // `startId` in the *other* panes as secondary.  Nodes reached back in the
+  // clicked node's own pane are the "reflective" (tertiary) set and are left
+  // un-highlighted for now (see the visualizer doc).
+  function applyCorrespondence(viz, clickedEl, startId) {
     clearHighlights(viz);
-    selectedEl.classList.add('viz-selected');
-    if (scanId == null) return;
-    // Resolved AST boxes carry data-scan-id directly.
-    var asts = viz.querySelectorAll('.rscan[data-scan-id="' + scanId + '"]');
-    for (var i = 0; i < asts.length; i++) {
-      if (asts[i] !== selectedEl) asts[i].classList.add('viz-corresp');
-    }
-    // Input / SQLBuilder boxes carry the scan-id in a hidden .ni-scan-id marker.
-    var markers = viz.querySelectorAll('.ni-scan-id[data-scan-id="' + scanId +
-        '"]');
-    for (var j = 0; j < markers.length; j++) {
-      var rect = markers[j].closest('.rect');
-      if (rect && rect !== selectedEl) rect.classList.add('viz-corresp');
-    }
+    clickedEl.classList.add('viz-selected');
+    if (startId == null) return;
+    var byId = collectNodes(viz);
+    var primaryPane = byId[startId] ? byId[startId].pane :
+        (clickedEl.closest ? clickedEl.closest('.viz-pane') : null);
+    reachableIds(buildAdj(byId), startId).forEach(function (id) {
+      var rec = byId[id];
+      if (!rec || rec.el === clickedEl) return;
+      if (rec.pane && rec.pane === primaryPane) return;  // reflective: defer
+      rec.el.classList.add('viz-corresp');
+    });
   }
 
   function handleNodeClick(pane, e) {
     var viz = pane.closest('.viz');
     if (!viz) return;
-    // Resolved AST box: drives correspondence (details for AST nodes are TBD).
+    // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.  (Details for
+    // these panes are TBD.)
     var rscan = e.target.closest('.rscan');
     if (rscan && pane.contains(rscan)) {
-      applyCorrespondence(viz, rscan, rscan.getAttribute('data-scan-id'));
+      applyCorrespondence(viz, rscan, rscan.getAttribute('data-node-id'));
       return;
     }
-    // Input / SQLBuilder box: show details and drive correspondence.
+    // Input box: show details, and drive correspondence from the innermost
+    // enclosing `.rect` that carries a `.ni-ref` marker.
     var rect = e.target.closest('.rect');
     if (!rect || !pane.contains(rect)) return;
     var items = collectNodeInfo(rect, pane);
     if (items.length > 0) renderDetails(viz, items);
-    applyCorrespondence(viz, rect, scanIdForRect(rect, pane));
+    var idRect = rect, id = null;
+    while (idRect && pane.contains(idRect)) {
+      if (idRect.classList && idRect.classList.contains('rect')) {
+        var m = markerOfRect(idRect);
+        if (m) { id = m.getAttribute('data-node-id'); break; }
+      }
+      idRect = idRect.parentElement;
+    }
+    applyCorrespondence(viz, (id != null ? idRect : rect), id);
   }
 
   // --- Window resize: columns scale proportionally via flex automatically.

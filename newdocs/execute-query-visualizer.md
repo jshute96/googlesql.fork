@@ -49,7 +49,7 @@ formatters, #8 AST-node resolution info, #10 linear Resolved AST DebugString).
    linear emitter that produces one `.rscan` box per `ResolvedScan` (alternating
    `scan-a`/`scan-b` shading), nested `.rscan-query` blocks for non-pipe-input
    scan fields (subqueries, set-operation inputs), an enclosing `.rscan-stmt`
-   block for the statement, and a `data-scan-id` per scan box. Scalar fields and
+   block for the statement, and a `data-node-id` (`r<n>`) per scan box. Scalar fields and
    non-scan children render as escaped text in their box.
 4. **SQLBuilder pane**: run `SQLBuilder` in `TargetSyntaxMode::kPipe` on the
    Resolved AST and lenient-format the result. The SQLBuilder records, as a
@@ -57,11 +57,10 @@ formatters, #8 AST-node resolution info, #10 linear Resolved AST DebugString).
    `ResolvedScan` responsible for each emitted `|>` (in output order).
    `SegmentPipeSqlToHtml` then splits the formatted SQL at each `|>` and wraps
    each segment in a `.rscan` box — the *same* markup the Resolved AST pane uses
-   — tagged with that scan's `data-scan-id`. So the SQLBuilder pane lines up
-   visually with the AST pane and the existing correspondence highlighting
-   (keyed on `.rscan[data-scan-id]`) works across all three panes with no extra
-   client code. The leading (FROM/source) segment is tagged with the source
-   scan-id (0).
+   — with its own `data-node-id` (`s<n>`) and a `data-corresp` cross-reference to
+   that scan's `r<n>`. So the SQLBuilder pane lines up visually with the AST pane
+   and the correspondence highlighting works across all three panes. The leading
+   (FROM/source) segment is cross-referenced to the source scan `r0`.
 5. Hand a `VisualizationData` to the writer. Text writers print three labeled
    sections; the web writer fills `viz_*_html` template params.
 
@@ -93,66 +92,63 @@ proportionally automatically (flex weights); the details box shrinks
 proportionally when the window shrinks but is not grown past ~10 lines by
 window growth alone (manual drag may exceed that, up to half the viewport).
 
-## Correspondence model (current: scan-id keying)
+## Correspondence model (ids + cross-references)
 
-The `ResolvedScan` (a linear pipe operator) is the correspondence hub:
+Every correspondence node carries a stable id in `data-node-id`, and a node that
+*references* another carries a `data-corresp` list of the ids it links to
+directly (one hop). Ids are namespaced per pane: `r<n>` for Resolved AST scan
+boxes, `s<n>` for SQLBuilder segments, `a<n>` for input-pane nodes. The
+`ResolvedScan` (a linear pipe operator) is still the natural hub, and ids are
+computed from it via pointer-keyed maps over the single shared analysis.
 
-- **Input SQL ↔ Resolved AST**: PR #8's `ASTNodeResolvedInfoMap` keys input
-  pipe-operator / table AST nodes to scan info; this will be extended to carry
-  the `const ResolvedScan*` so the link is exact. Parse-location byte ranges are
-  the fallback.
+- **Resolved AST pane**: each `.rscan` box has `data-node-id="r<n>"` (emission
+  order; the deepest source scan is `r0`).
+- **Input SQL ↔ Resolved AST**: PR #8's `ASTNodeResolvedInfoMap` gives each input
+  AST node the `const ResolvedScan*` it produced; the input box gets a hidden
+  `.ni-ref` marker with its own `data-node-id="a<n>"` and `data-corresp="r<n>"`.
 - **Resolved AST ↔ SQLBuilder SQL**: the `SQLBuilder` (pipe mode) records the
   original `ResolvedScan` for each emitted `|>` in output order
-  (`pipe_operator_scan_order()`); `SegmentPipeSqlToHtml` tags each output
-  segment's `.rscan` box with that scan's id. Since both the AST and SQLBuilder
-  panes use `.rscan[data-scan-id]`, correspondence is automatic. A scan that
-  emits two `|>`s maps both segments to the same id.
+  (`pipe_operator_scan_order()`); `SegmentPipeSqlToHtml` gives each segment box
+  `data-node-id="s<n>"` and `data-corresp="r<n>"`. A scan that emits two `|>`s
+  cross-references both segments to the same `r<n>`.
 
-Clicking selects the item (`.viz-selected`) and highlights the matching
-`data-scan-id` boxes/markers in the other panes (`.viz-corresp`). Hidden panes
-are simply not visible; the highlight classes are still applied so they show on
+Clicking a node marks it `.viz-selected` (primary) and walks the `data-corresp`
+edges (treated as undirected) to find the corresponding set; nodes reached in
+*other* panes are marked `.viz-corresp` (secondary). Transitive links (input →
+SQLBuilder, two hops through the Resolved AST) fall out of the walk. Nodes
+reached back in the clicked node's *own* pane are the "reflective" (tertiary)
+set and are deliberately left un-highlighted for now (see Highlight states).
+Hidden panes are not visible; the classes are still applied so they show on
 re-add.
 
 ### Known limitations of the segment approach
 
 - Segments are split at every `|>` in the formatted text, regardless of paren
   nesting, so a nested subquery's operators are split at the top level rather
-  than rendered as a nested block. The `data-scan-id` per operator is still
+  than rendered as a nested block. The `data-corresp` per operator is still
   correct (emission order matches textual `|>` order); only the visual grouping
   is flat.
-- The leading source segment is always tagged scan-id 0 (the deepest source);
-  for queries whose top-level FROM is a subquery this is approximate.
+- The leading source segment is always cross-referenced to the source scan `r0`
+  (the deepest source); for queries whose top-level FROM is a subquery this is
+  approximate.
 - The SQLBuilder pane no longer carries NameLists, so it has no click-details
   (only correspondence highlighting). Re-adding details would require
   re-analyzing the regenerated SQL (as an earlier iteration did).
 
-### Evolution: structured ids + cross-reference lists (decided — building now)
+### Structured ids + cross-references (implemented)
 
-**Decision (agreed):** introduce the structured correspondence substrate now,
-because it helps the correspondence even in the first textual version (and is
-the foundation the graph phase needs):
-
-- Every emitted **AST node and Resolved AST node** (and each SQLBuilder output
-  segment) gets a **stable hierarchical id** (e.g. a path like `r.0.2.1`),
-  carried in the emitted output.
-- Each node carries **lists of directly cross-referenced ids** — corresponding
-  nodes in the *same* tree (e.g. a placeholder → its target; a reference → its
-  definition) or in an *adjacent* tree (input AST ↔ Resolved AST,
-  Resolved AST ↔ SQLBuilder). Only **direct (one-hop)** links are stored.
-- **Transitive** correspondences (e.g. input AST → SQLBuilder, two hops through
-  the Resolved AST) are **computed on the fly** at click time by walking the
-  cross-ref graph — we deliberately do *not* materialize them.
-
-This replaces the single-integer `data-scan-id` keying (which was really "the
-Resolved AST scan node's id") with the general id + cross-ref model. The
-`ResolvedScan*` remains the natural hub for *computing* the inter-tree links
-(single shared analysis → pointers match), but the client keys on the node ids
-and their cross-ref lists.
+The id + cross-reference model in "Correspondence model" above is implemented,
+replacing the original single-integer `data-scan-id` keying. Recap of the agreed
+design now in place: direct one-hop cross-ref lists per node (intra- or
+inter-tree); transitive links computed on the fly; ids assigned at emission time
+via pointer-keyed maps keyed on the shared `ResolvedScan*`.
 
 Still deferred (heavier, graph-phase): having the SQLBuilder build a true
 **structured list/tree of output elements** instead of a flat string segmented
 at `|>` (a `QueryExpression`-level refactor that would make the SQLBuilder pane
 respect nesting), and shifting the panes to client-side rendering from the model.
+Full path-hierarchy ids (e.g. `r.0.2.1`) and per-(non-scan)-node coverage also
+land with that structured model; the current ids are flat-namespaced per pane.
 
 ### Where the ids live: emission-time, via pointer-keyed maps
 
@@ -318,8 +314,8 @@ refactor twice):
 3. **Correspondence is a set, not a single id** — *decided, now.* A selection
    maps to one **primary** id plus a **set** of corresponding ids (a query-mode
    node aggregates several scans; an N-operator highlight spans several boxes).
-   The JS engine is being generalized to "primary + corresponding set" so the
-   graph phase is a drop-in.
+   The JS engine is generalized to "primary + corresponding set" so the graph
+   phase is a drop-in.
 
 Still TBD: shifting the panes to **client-side** rendering from a JSON model
 (graph-phase); the **tertiary "reflective"** highlight (see Highlight states —
@@ -334,15 +330,19 @@ noted but not initially built).
       (`ResolvedNode::DebugStringHtml`).
 - [x] Milestone 4a: input SQL ↔ Resolved AST correspondence
       (`ResolvedScanInfo`/`TableScanInfo` carry `const ResolvedScan*`; input
-      boxes tagged via `.ni-scan-id`; JS correspondence engine).
+      boxes tagged via `.ni-ref` markers; JS correspondence engine).
 - [x] Milestone 4b: Resolved AST ↔ SQLBuilder SQL correspondence via passive
       emission-order instrumentation + `.rscan` segment divs.
-- [ ] **(now)** Stable hierarchical ids on every AST / Resolved AST node + each
-      SQLBuilder segment, via pointer-keyed maps; emit as `data-node-id`.
-- [ ] **(now)** Direct cross-reference id lists per node (intra- and inter-tree),
-      emitted as `data-corresp`; transitive resolved on the fly in JS.
-- [ ] **(now)** Generalize the JS correspondence engine from a single
-      `data-scan-id` to "primary id + corresponding set" keyed on the above.
+- [x] Milestone 5: stable per-pane ids (`r<n>`/`s<n>`/`a<n>`) on Resolved AST
+      scan boxes, SQLBuilder segments, and input markers, via pointer-keyed maps,
+      emitted as `data-node-id`. (Full path-hierarchy ids and per-non-scan-node
+      coverage are deferred to the structured JSON model.)
+- [x] Milestone 5: direct cross-reference lists (`data-corresp`) linking input /
+      SQLBuilder nodes to the scan they correspond to; transitive links resolved
+      on the fly in JS.
+- [x] Milestone 5: JS correspondence engine generalized to "primary +
+      corresponding set" via an undirected `data-corresp` walk; the same-pane
+      "reflective" set is deferred (tertiary highlight).
 - [ ] Resolved AST / SQLBuilder pane details content (deferred by design).
 - [ ] Nested-subquery-aware segmentation in the SQLBuilder pane.
 - [ ] Handle non-query statements and scripts (currently query-only).
