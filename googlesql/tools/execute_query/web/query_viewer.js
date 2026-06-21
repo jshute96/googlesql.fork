@@ -454,21 +454,42 @@
     return null;
   }
 
+  function isVisible(el) {
+    return !!(el && (el.offsetWidth || el.offsetHeight ||
+                     el.getClientRects().length));
+  }
+
   // Indexes every correspondence node in `viz` by id:
-  // { id, el (highlight target), pane, corresp:[ids] }.
+  // { id, el (highlight target), pane, corresp:[ids] }.  The same id can have
+  // two elements when the Resolved AST column is in graph mode (the hidden text
+  // box and the visible graph node); we highlight the visible one but keep the
+  // `data-corresp` edges from whichever element carries them (the text box).
   function collectNodes(viz) {
     var byId = {};
     function add(id, el, corresp) {
-      if (!id || byId[id]) return;
-      byId[id] = {
-        id: id, el: el, pane: el.closest('.viz-pane'),
-        corresp: corresp ? corresp.split(/\s+/).filter(Boolean) : []
-      };
+      if (!id) return;
+      var edges = corresp ? corresp.split(/\s+/).filter(Boolean) : [];
+      var rec = byId[id];
+      if (rec) {
+        if (!isVisible(rec.el) && isVisible(el)) {
+          rec.el = el;
+          rec.pane = el.closest('.viz-pane');
+        }
+        if (rec.corresp.length === 0 && edges.length > 0) rec.corresp = edges;
+        return;
+      }
+      byId[id] = {id: id, el: el, pane: el.closest('.viz-pane'),
+                  corresp: edges};
     }
     var boxes = viz.querySelectorAll('.rscan[data-node-id]');
     for (var i = 0; i < boxes.length; i++) {
       add(boxes[i].getAttribute('data-node-id'), boxes[i],
           boxes[i].getAttribute('data-corresp'));
+    }
+    var gnodes = viz.querySelectorAll('.viz-gnode[data-node-id]');
+    for (var k = 0; k < gnodes.length; k++) {
+      add(gnodes[k].getAttribute('data-node-id'), gnodes[k],
+          gnodes[k].getAttribute('data-corresp'));
     }
     var markers = viz.querySelectorAll('.ni-ref[data-node-id]');
     for (var j = 0; j < markers.length; j++) {
@@ -540,12 +561,13 @@
     // highlighting is a planned follow-up.)
     var gnode = e.target.closest('.viz-gnode');
     if (gnode && pane.contains(gnode)) {
-      var box = viz.querySelector(
-          '.rscan[data-node-id="' + gnode.getAttribute('data-gnode') + '"]');
+      var gid = gnode.getAttribute('data-node-id');
+      var box = viz.querySelector('.rscan[data-node-id="' + gid + '"]');
       if (box) {
         var gitems = collectScanHierarchy(box, viz);
         if (gitems.length > 0) renderDetails(viz, gitems);
       }
+      applyCorrespondence(viz, gnode, gid);
       return;
     }
     // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.
@@ -698,7 +720,7 @@
       if (lay.colOf[n.id] == null) return;
       var d = document.createElement('div');
       d.className = 'viz-gnode';
-      d.setAttribute('data-gnode', n.id);
+      d.setAttribute('data-node-id', n.id);
       d.style.left = left(n.id) + 'px';
       d.style.top = top(n.id) + 'px';
       d.style.width = GNODE_W + 'px';

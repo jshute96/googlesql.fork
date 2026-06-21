@@ -446,8 +446,14 @@ consuming field name in `label`); data flows `from`→`to`, drawn downward.
       extending the selector to the other columns once they get tree views.
 - [ ] Out-of-line subqueries with placeholders (`<table:…>`, `<cte:…>`,
       `<subquery:N>`, `<subpipeline:N>`); CTE reference edges and stacking.
-- [ ] Cross-view correspondence: N-operator dashed grouping box,
+- [~] Cross-view correspondence: N-operator dashed grouping box,
       placeholder ↔ target highlight, scroll-into-view with vertical alignment.
+      *Done:* the correspondence engine is view-aware — graph nodes share the
+      `r<n>` ids, and `collectNodes` highlights the *visible* element per id, so
+      clicking a graph node highlights its corresponding input/SQLBuilder nodes
+      (and vice-versa) in operator-graph mode just as in text mode. *Pending:*
+      the N-operator dashed grouping box, placeholder ↔ target highlight, and
+      scroll-into-view with vertical alignment.
 - [ ] SQL AST graph view (syntactic containment; split only FROM tables /
       subqueries and pipe operators).
 - [ ] (If useful) tertiary "reflective" highlight (deferred; see Highlight
