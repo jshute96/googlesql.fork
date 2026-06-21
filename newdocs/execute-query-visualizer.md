@@ -93,7 +93,7 @@ proportionally automatically (flex weights); the details box shrinks
 proportionally when the window shrinks but is not grown past ~10 lines by
 window growth alone (manual drag may exceed that, up to half the viewport).
 
-## Correspondence model (planned — Milestone 4)
+## Correspondence model (current: scan-id keying)
 
 The `ResolvedScan` (a linear pipe operator) is the correspondence hub:
 
@@ -126,31 +126,47 @@ re-add.
   (only correspondence highlighting). Re-adding details would require
   re-analyzing the regenerated SQL (as an earlier iteration did).
 
-### Planned evolution: structured output instead of segmented text
+### Evolution: structured ids + cross-reference lists (decided — building now)
 
-The current SQLBuilder correspondence is a passive side-channel
-(`pipe_operator_scan_order()`) plus after-the-fact text segmentation at `|>`.
-The more robust design (discussed during development) is for the SQLBuilder to
-stop emitting a flat string with separate pointers into it, and instead build a
-**structured list/tree of output elements** (sequential and nested), each
-carrying a reference to the `ResolvedScan` it came from — or, if we emit HTML
-`<div>`s with hierarchical IDs during generation, the divs' IDs *are* the
-references. Correspondence then needs no re-segmentation and naturally respects
-nesting (fixing the limitations above). This is a `QueryExpression`-level
-refactor and is deliberately out of scope for this prework.
+**Decision (agreed):** introduce the structured correspondence substrate now,
+because it helps the correspondence even in the first textual version (and is
+the foundation the graph phase needs):
 
-### Where the scan-id lives: external map vs. node field
+- Every emitted **AST node and Resolved AST node** (and each SQLBuilder output
+  segment) gets a **stable hierarchical id** (e.g. a path like `r.0.2.1`),
+  carried in the emitted output.
+- Each node carries **lists of directly cross-referenced ids** — corresponding
+  nodes in the *same* tree (e.g. a placeholder → its target; a reference → its
+  definition) or in an *adjacent* tree (input AST ↔ Resolved AST,
+  Resolved AST ↔ SQLBuilder). Only **direct (one-hop)** links are stored.
+- **Transitive** correspondences (e.g. input AST → SQLBuilder, two hops through
+  the Resolved AST) are **computed on the fly** at click time by walking the
+  cross-ref graph — we deliberately do *not* materialize them.
 
-Today the scan-id is held in an **external** `flat_hash_map<const ResolvedScan*,
-int>` built from `DebugStringHtml`'s emission order, and shared across panes;
-this works because the visualizer analyzes once and hands the *same* Resolved
-AST to both the HTML emitter and the SQLBuilder, so the `ResolvedScan*` pointers
-match. An alternative is to **store the id on the node** (a field on
-`ResolvedNode`/`ASTNode`, filled by a pass). That would be worth doing if the id
-ever needs to persist *inside* the tree — e.g. if the SQLBuilder had to emit an
-inline id reference during generation, or to keep ids stable across a rewriter
-pass that reorders scans. Not needed yet (rewriters are disabled for
-visualization), so we keep the external map.
+This replaces the single-integer `data-scan-id` keying (which was really "the
+Resolved AST scan node's id") with the general id + cross-ref model. The
+`ResolvedScan*` remains the natural hub for *computing* the inter-tree links
+(single shared analysis → pointers match), but the client keys on the node ids
+and their cross-ref lists.
+
+Still deferred (heavier, graph-phase): having the SQLBuilder build a true
+**structured list/tree of output elements** instead of a flat string segmented
+at `|>` (a `QueryExpression`-level refactor that would make the SQLBuilder pane
+respect nesting), and shifting the panes to client-side rendering from the model.
+
+### Where the ids live: emission-time, via pointer-keyed maps
+
+**Decision:** ids are **hierarchical** and assigned during emission, carried in
+the emitted output (data attributes today; a JSON model later). They are
+computed via **external pointer-keyed maps** (`flat_hash_map<const ResolvedScan*
+/ const ResolvedNode* / const ASTNode*, id>`) rather than fields on the C++
+nodes — this works because the visualizer analyzes once and hands the *same*
+Resolved AST to the HTML emitter and the SQLBuilder, so the pointers match, and
+it keeps the id machinery out of the core IR. Storing the id *on* the node
+(a `ResolvedNode`/`ASTNode` field, filled by a pass) only becomes worthwhile if
+an id must persist *inside* the tree — e.g. the SQLBuilder emitting an inline id
+reference during generation, or keeping ids stable across a rewriter pass that
+reorders scans. Not needed yet (rewriters are disabled for visualization).
 
 ## Next phase: graphical tree / graph view (`visual-graph` branch)
 
@@ -242,10 +258,14 @@ tree flow.
 2. **Secondary / corresponding** — one or more items corresponding to the
    primary, in other columns or the same column (e.g. SQL reference/content
    highlights).
-
-(The brief named *three* states; the third is TBD — likely the default
-unselected baseline, or a distinct placeholder-vs-target shade. Resolve when we
-build it.)
+3. **Tertiary "reflective"** — *noted but not initially built.* When the primary
+   X maps to a corresponding set {Y₁,Y₂} in another column, those Y's reflect
+   back to a set {X₁,X₂,X₃} in X's own column that is *larger* than X. The extra
+   reflected nodes could be shown with a fainter tertiary highlight. Deferred
+   because (a) its value is unclear and (b) the reflection can recurse —
+   expanding back and forth across columns over multiple hops — so its scope
+   needs bounding. The on-the-fly transitive walk (above) is the same machinery,
+   so this is cheap to add later if it proves useful.
 
 ### Rendering approach — library study
 
@@ -272,10 +292,10 @@ offline static-asset web tool):
 | **Cytoscape.js / AntV G6** | Rich graph interaction + state APIs; layout via dagre/elk extensions. | Canvas-first; nested clickable HTML box content only via extensions and awkwardly. | Strong for big network graphs, poor fit for our HTML nested-box nodes. |
 | **Graphviz wasm** (`@hpcc-js/wasm`) | `dot` engine gives excellent layered layout; **clusters** map naturally to "query box" grouping; ports + arrowheads; SVG output. | Layout **and** render are a black box; HTML-like labels can't hold our interactive nested boxes; retrofitting click-to-select on sub-elements + dynamic re-highlight means parsing/patching the generated SVG. | Great for *static* diagrams; awkward for our interactivity. |
 
-**Plan**: start with **elkjs** for geometry + our HTML nodes + an SVG edge
-overlay. Keep dagre in mind as a simpler fallback if ELK's constraint config is
-too fiddly for v1. Re-evaluate React Flow only if we ever decide to move the web
-tool to a component framework.
+**Decided:** **elkjs** is the chosen layout engine (geometry only) + our own
+HTML nodes + an SVG edge overlay. Keep dagre in mind as a simpler fallback if
+ELK's constraint config proves too fiddly for v1. Re-evaluate React Flow only if
+we ever decide to move the web tool to a component framework.
 
 References: [elkjs](https://github.com/kieler/elkjs) ·
 [ELK Layered](https://eclipse.dev/elk/reference/algorithms/org-eclipse-elk-layered.html) ·
@@ -287,30 +307,23 @@ References: [elkjs](https://github.com/kieler/elkjs) ·
 
 ### How this steers the *current* (textual) phase
 
-Three decisions are worth making now so we don't refactor twice:
+These were resolved with the maintainer and are being **built now** (so we don't
+refactor twice):
 
-1. **A structured node/edge model is the shared substrate.** The graph view
-   consumes a machine-readable description of the query — nodes (id, kind,
-   scan-id, container/parent id, the box's field model or inner HTML,
-   placeholder references to other node ids) and edges (source, target,
-   kind = primary input / secondary input / CTE reference) — *not* pre-rendered
-   HTML. This is the same "structured output instead of segmented text"
-   evolution already noted above; shape it now with the graph view in mind so
-   both the textual box view and the graph view read from one model.
-2. **Stable, hierarchical node ids.** Edges and placeholders reference nodes by
-   id, which strengthens the case (raised earlier re: div-id-on-node vs.
-   external map) for assigning every emitted node a stable hierarchical id.
-   Whether that id lives on `ResolvedNode`/`ASTNode` or in an external map, it
-   should be consistent across the text and graph emitters.
-3. **Generalize correspondence to id *sets*.** Today a selection maps to a
-   single `data-scan-id`. The graph view needs a selection to map to a *set* of
-   node ids (a query-mode node aggregates several scans; an N-operator highlight
-   spans several boxes), with one marked primary. Evolving the current JS
-   correspondence engine toward "primary + set of corresponding ids" now makes
-   the graph phase a drop-in.
+1. **Stable hierarchical ids + cross-ref lists** — *decided, now.* See
+   "Evolution: structured ids + cross-reference lists" above. This is the shared
+   substrate the graph view will also consume.
+2. **Ids computed via pointer-keyed maps at emission time** — *decided.* See
+   "Where the ids live" above (not stored on the C++ nodes yet).
+3. **Correspondence is a set, not a single id** — *decided, now.* A selection
+   maps to one **primary** id plus a **set** of corresponding ids (a query-mode
+   node aggregates several scans; an N-operator highlight spans several boxes).
+   The JS engine is being generalized to "primary + corresponding set" so the
+   graph phase is a drop-in.
 
-(Also TBD: shifting the AST/graph panes to **client-side** rendering from the
-structured model; and pinning down the third highlight state.)
+Still TBD: shifting the panes to **client-side** rendering from a JSON model
+(graph-phase); the **tertiary "reflective"** highlight (see Highlight states —
+noted but not initially built).
 
 ## Status / TODOs
 
@@ -324,6 +337,12 @@ structured model; and pinning down the third highlight state.)
       boxes tagged via `.ni-scan-id`; JS correspondence engine).
 - [x] Milestone 4b: Resolved AST ↔ SQLBuilder SQL correspondence via passive
       emission-order instrumentation + `.rscan` segment divs.
+- [ ] **(now)** Stable hierarchical ids on every AST / Resolved AST node + each
+      SQLBuilder segment, via pointer-keyed maps; emit as `data-node-id`.
+- [ ] **(now)** Direct cross-reference id lists per node (intra- and inter-tree),
+      emitted as `data-corresp`; transitive resolved on the fly in JS.
+- [ ] **(now)** Generalize the JS correspondence engine from a single
+      `data-scan-id` to "primary id + corresponding set" keyed on the above.
 - [ ] Resolved AST / SQLBuilder pane details content (deferred by design).
 - [ ] Nested-subquery-aware segmentation in the SQLBuilder pane.
 - [ ] Handle non-query statements and scripts (currently query-only).
@@ -334,10 +353,9 @@ structured model; and pinning down the third highlight state.)
 
 Coarse breakdown; see the **"Next phase"** section above for full requirements.
 
-- [ ] Structured node/edge/containment model with stable hierarchical ids,
-      shared by the textual and graph views (the structured-output evolution).
-- [ ] Generalize the JS correspondence engine from a single `data-scan-id` to a
-      "primary + set of corresponding ids" model.
+- [ ] Full structured node/edge/containment **JSON model** + client-side
+      rendering (builds on the ids + cross-refs landing now in the textual
+      phase); SQLBuilder emits a structured tree instead of segmented text.
 - [ ] Graph/tree view via **elkjs** geometry + our HTML nodes + SVG edge
       overlay (arrowheads, downward dataflow); query mode and operator mode.
 - [ ] View-mode selector in column tabs (text / query graph / operator graph),
@@ -348,4 +366,5 @@ Coarse breakdown; see the **"Next phase"** section above for full requirements.
       placeholder ↔ target highlight, scroll-into-view with vertical alignment.
 - [ ] SQL AST graph view (syntactic containment; split only FROM tables /
       subqueries and pipe operators).
-- [ ] Pin down the third highlight state; decide client-side rendering shift.
+- [ ] (If useful) tertiary "reflective" highlight (deferred; see Highlight
+      states). Client-side rendering shift decided at graph-phase start.
