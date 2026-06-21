@@ -67,92 +67,82 @@ operators, even though the input had several.
 | # | Case | Where | Why |
 |---|------|-------|-----|
 | A1 | **Query has SELECT hints** | `CanFormPipeSQLQuery()` `query_expression.cc:692` | Pipe syntax has no place for `SELECT @{hint}`. |
-| A4 | **Scan kind unsupported in pipe syntax** | `IsScanUnsupportedInPipeSyntax()` `sql_builder.cc:367`; wrapped at `:3288`, `:3806` | `ResolvedAnonymizedAggregateScan` and `ResolvedAggregationThresholdAggregateScan` have no pipe spelling; the consumer wraps them as a parenthesized standard subquery via `WrapForPipeSyntaxMode`. |
+| A2 | **Scan kind unsupported in pipe syntax** | `IsScanUnsupportedInPipeSyntax()` `sql_builder.cc:367`; wrapped at `:3288`, `:3806` | `ResolvedAnonymizedAggregateScan` and `ResolvedAggregationThresholdAggregateScan` have no pipe spelling; the consumer wraps them as a parenthesized standard subquery via `WrapForPipeSyntaxMode`. |
 
-A1 is detected on the assembled `QueryExpression`; A4 is detected per-scan by
+A1 is detected on the assembled `QueryExpression`; A2 is detected per-scan by
 kind. Both are genuine language limitations — there is nothing to "fix" without
 new pipe syntax.
 
-### A2 / A3 (resolved): group-by keys without/with duplicate aliases
+These are the only fallbacks. In particular, group-by keys never force a
+fallback: every key is materialized in the select list with a unique alias, so a
+`|> AGGREGATE … GROUP BY <key>` can always reference it.
 
-Two former fallbacks have been **removed** — these queries now generate pipe
-syntax via generated aliases:
-
-- **A2 — group-by key without an alias.** A `|> AGGREGATE … GROUP BY <key>` must
-  reference every key by an alias, which means the key has to be materialized in
-  the select list. A key the resolver pruned from the scan output (or that a
-  side-effect/collapsed scan never materialized — e.g.
-  `SELECT f(x) FROM t GROUP BY k` where `k` is not output) used to have no alias
-  and forced a fallback. `SQLBuilder::GetSelectList` (`sql_builder.cc:2630`) now
-  appends any such key to the select list with a generated unique alias
-  (`GenerateUniqueAliasName`) and records its ordinal, so the key is emitted as
+- A key absent from the scan's output (pruned, or never materialized by a
+  side-effect/collapsed scan — e.g. `SELECT f(x) FROM t GROUP BY k` where `k` is
+  not output) is appended to the select list with a generated unique alias by
+  `SQLBuilder::GetSelectList` (`sql_builder.cc:2630`) and emitted as
   `|> AGGREGATE … GROUP BY <expr> AS <alias>`. The extra output column is pruned
-  by a later operator (and by the resolver on re-analysis), so the round trip is
-  preserved.
+  by a later operator (and by the resolver on re-analysis), preserving the round
+  trip.
+- `GetSelectList` gives distinct columns distinct aliases (`UpdateColumnAlias`
+  suffixes collisions), so two keys never share an alias. A column repeated in
+  `ROLLUP`/`CUBE`/`GROUPING SETS` (e.g. `GROUP BY ROLLUP(x, y, x)`) reuses its
+  own alias, which is valid pipe syntax.
 
-- **A3 — duplicate group-by aliases.** `GetSelectList` already assigns a
-  *distinct* alias to every distinct group-by column (`UpdateColumnAlias`
-  suffixes collisions), so two different keys never share an alias. A column
-  intentionally repeated in `ROLLUP`/`CUBE`/`GROUPING SETS` (e.g.
-  `GROUP BY ROLLUP(x, y, x)`) reuses its own alias, which is valid pipe syntax.
-  The duplicate-alias fallback check was therefore obsolete and over-conservative
-  and has been deleted.
+`CanFormPipeSQLQuery` (`query_expression.cc:689`) keeps a defensive
+`AllGroupByColumnsHaveAliases()` guard: it should always hold given the
+materialization above, but if some path leaves a key unaliased it falls back
+rather than crashing while rendering.
 
-`CanFormPipeSQLQuery` (`query_expression.cc:689`) now keeps only a defensive
-`AllGroupByColumnsHaveAliases()` guard (it should always hold given the
-materialization above; if some unforeseen path leaves a key unaliased, it falls
-back rather than crashes while rendering).
-
-> **Implementation note — the ordinal/SQL ambiguity.** A group-by list entry
-> stores *either* a select-list ordinal *or* the key's raw expression SQL in the
-> same string field. These are indistinguishable for an integer-valued key
-> expression (`GROUP BY 1+2`, `GROUP BY CAST(1 AS INT64)` whose SQL is `"1"`), so
-> the materialization tracks *explicitly* which keys already have a select
-> ordinal (`materialized_group_by_columns`) instead of trying to parse the stored
-> value. The `select_list->empty()` placeholder-`NULL` branch is likewise
-> conditioned on the select list, not on `column_list`, so a key materialized for
-> an otherwise-empty column list does not trip the dummy-`NULL` path.
+> **Note — the ordinal/SQL ambiguity.** A group-by list entry stores *either* a
+> select-list ordinal *or* the key's raw expression SQL in the same string field,
+> and the two are indistinguishable for an integer-valued key expression
+> (`GROUP BY 1+2`, `GROUP BY CAST(1 AS INT64)` whose SQL is `"1"`). The
+> materialization in `GetSelectList` therefore tracks *explicitly* which keys
+> already have a select ordinal (`materialized_group_by_columns`) instead of
+> parsing the stored value, and the placeholder-`NULL` branch is conditioned on
+> `select_list` being empty rather than on `column_list`.
 
 ---
 
 ## B. Cases where ResolvedScans aren't 1:1 with pipe operators
 
-### B.1 Many scans → fewer (or zero) operators (collapse)
+### B.1 Many scans → fewer operators (collapse)
 
 | # | Case | Where | Status |
 |---|------|-------|--------|
-| 1 | **Degenerate / pass-through `ProjectScan` → 0 operators.** A `ProjectScan` that only forwards its input columns (no computed columns, no hints, same column list) is dropped. | `IsDegenerateProjectScan()` `sql_builder.cc:3209`; short-circuit at `:3295` | **Fixable — should emit it.** |
-| 2 | **Group-by-key `ProjectScan` folded into `AGGREGATE`.** A `ProjectScan` that computes the grouping-key expressions directly below an `AggregateScan` is recorded in `scans_to_collapse_` and inlined into `|> AGGREGATE … GROUP BY <expr>`, dropping its `EXTEND`. 2 scans → 1 operator. | `scans_to_collapse_` `sql_builder.cc:292`, `:3303`, `:5677`; forced-extend computation `:5583` | **Fixable — should emit the ProjectScan.** |
-| 3 | **Leaf `TableScan` absorbed into the `FROM` head.** A table scan becomes the bare `FROM <table>` root that the next operator appends onto, instead of being wrapped under its own alias. | `TryUseLeafTableScanColumns()` `sql_builder.cc:11904` | **Expected.** `FROM Table` ↔ a `TableScan` is the natural correspondence, not a deviation. |
-| 4 | **`ResolvedSubpipelineInputScan` → 0 operators.** The subpipeline input is an empty pipe head (marked `MarkAsPipeOperatorChain`), not an operator. | `query_expression.h:278`; chain handling in `GetInputPipeSQL` `sql_builder.cc:11880` | **Expected.** The subpipeline input is the head the operators attach to; it has no operator of its own. |
+| 1 | **Leaf `TableScan` absorbed into the `FROM` head.** A table scan becomes the bare `FROM <table>` root that the next operator appends onto, instead of being wrapped under its own alias. | `TryUseLeafTableScanColumns()` `sql_builder.cc:11904` | Expected. `FROM Table` ↔ a `TableScan` is the natural correspondence. |
+| 2 | **`ResolvedSubpipelineInputScan` → pipe head.** The subpipeline input is an empty pipe head (marked `MarkAsPipeOperatorChain`), the thing operators attach to, not an operator itself. | `query_expression.h:278`; `GetInputPipeSQL` `sql_builder.cc:11880` | Expected. |
+| 3 | **Degenerate / pass-through `ProjectScan` elided.** A `ProjectScan` that only forwards its input columns (no computed columns, no hints, same column list) is short-circuited. | `IsDegenerateProjectScan()` `sql_builder.cc:3237`; short-circuit at `:3323` | Internal optimization — no observable effect on the pipe text (see below). |
 
-**Fix direction for #1 and #2.** Both are *simplifications* the SQLBuilder
-performs on the resolved output in pipe mode, and both work against the 1:1
-goal. We do not need them:
+The degenerate-`ProjectScan` elision (#3) does not actually drop a column from
+the output: the forwarded columns are emitted anyway, either by the accumulated
+trailing `|> SELECT` (B.3 #6) or absorbed into the preceding operator's output
+(e.g. an `AGGREGATE`). Routing such a projection through the normal path instead
+of short-circuiting produces byte-identical pipe text, so this is an internal
+optimization rather than a 1:1 gap.
 
-- **#1:** stop eliding trivial `ProjectScan`s in pipe mode — just emit the
-  `|> SELECT`/`|> EXTEND`. (`IsDegenerateProjectScan` already declines to fire
-  in one pipe sub-case at `:3215`; the general degenerate short-circuit at
-  `:3295` is the part to drop for pipe.)
-- **#2:** stop deferring the group-by-key `ProjectScan` so it can be inlined into
-  the `AggregateScan`. Emit a `ProjectScan` (`|> EXTEND`) for it if the query had
-  a pipe projection operator, and let the `AggregateScan` reference the resulting
-  columns by name. This removes the `scans_to_collapse_` machinery for this case.
-
-If we remove the extra code that performs these two simplifications, the emitted
-pipe chain regains one operator per scan. The cost is more verbose output (an
-explicit `|> SELECT`/`|> EXTEND` where today there is none), which is the
-intended trade for round-trip fidelity.
+**There is no group-by-key `ProjectScan` collapse.** Group-by key expressions are
+not separate scans — they live in the `AggregateScan`'s `group_by_list` and are
+inlined into the single `|> AGGREGATE … GROUP BY <expr> AS <alias>` operator,
+which is the 1:1 rendering of that one scan. A `ProjectScan` that genuinely
+computes a value feeding an aggregate (e.g. `|> EXTEND x+1 AS k |> AGGREGATE …
+GROUP BY k`) emits its own `|> SELECT`/`|> EXTEND`. The `scans_to_collapse_`
+mechanism (`sql_builder.cc:292`) collapses only **side-effect-bearing
+`AggregateScan`s** — those carrying a `ResolvedDeferredComputedColumn` from e.g.
+`IFERROR` — so a dependent scan is nested correctly; it never contains a
+`ProjectScan` (enforced by a `RET_CHECK` at `sql_builder.cc:3331`).
 
 ### B.2 One scan → multiple operators (expand)
 
 | # | Case | Where |
 |---|------|-------|
-| 5 | **`AggregateScan` → `|> AGGREGATE` plus extra columns / a trailing `|> SELECT`.** When the aggregate groups by columns the resolver pruned from its output, those keys are re-added to the select list and emitted as extra trailing `AGGREGATE` output columns, then dropped by a later projection. The aggregate's output projection is also appended as its own operator to restore column shape. | grouping-key re-add `sql_builder.cc:5677–5715`; output projection appended as an operator (see `ProcessAggregateScanBase`) |
+| 4 | **`AggregateScan` → `|> AGGREGATE` plus extra columns / a trailing `|> SELECT`.** When the aggregate groups by columns the resolver pruned from its output, those keys are re-added to the select list and emitted as extra trailing `AGGREGATE` output columns, then dropped by a later projection. The aggregate's output projection is also appended as its own operator to restore column shape. | grouping-key re-add `sql_builder.cc:5692–5715`; output projection in `ProcessAggregateScanBase` |
+| 5 | **Constant / `ROLLUP`-`CUBE`-`GROUPING SETS` key → `|> EXTEND` + `|> AGGREGATE`.** A literal/constant key (rejected as a bare `GROUP BY` item) and any non-trivial key inside `ROLLUP`/`CUBE`/`GROUPING SETS` (where items can't carry aliases) are materialized by a preceding `|> EXTEND <expr> AS <alias>` and grouped by alias — one extra operator for the one `AggregateScan`. | forced-extend `ComputePipeGroupByForcedExtendColumns` `sql_builder.cc:5583`; `TryAppendGroupByClause` `query_expression.cc:408` |
 
-This expansion exists to satisfy the rule that `|> AGGREGATE … GROUP BY` emits an
-output column per grouping key. It is the inverse of #2 — once #2 stops
-collapsing the key projection, much of this bookkeeping can be reconsidered.
+These expansions satisfy pipe-syntax rules: `|> AGGREGATE … GROUP BY` emits an
+output column per grouping key, a bare constant is not a valid grouping item, and
+grouping-set constructs forbid inline aliases.
 
 ### B.3 Reordering and synthetic operators (no positional 1:1)
 
@@ -161,29 +151,26 @@ These don't change the operator *count* per scan so much as break the
 
 | # | Case | Where |
 |---|------|-------|
-| 6 | **Canonical clause ordering.** Because the accumulate path serializes clauses in a fixed order, the operator sequence follows `WHERE → AGGREGATE → ORDER BY → SELECT → LIMIT`, not the bottom-up scan order. | `GetPipeSQLQuery()` `query_expression.cc:743–793` |
-| 7 | **Implicit final `|> SELECT`.** A trailing `SELECT` operator is emitted from the accumulated select list even when no `ProjectScan` produced it — and is *suppressed* when a `GROUP BY` already covers the output. | `query_expression.cc:781` |
-| 8 | **Synthetic `|> AS <alias>` at wrap boundaries.** When a clause slot is already filled and the accumulate path must wrap, pipe mode injects `… |> AS <alias>`, an operator that corresponds to no scan. | `WrapImpl` `query_expression.cc:837` |
+| 6 | **Canonical clause ordering + implicit final `|> SELECT`.** The accumulate path serializes clauses in a fixed order (`WHERE → AGGREGATE → ORDER BY → SELECT → LIMIT`), not the bottom-up scan order, and emits a trailing `SELECT` from the accumulated select list even when no `ProjectScan` produced it (suppressed when a `GROUP BY` already covers the output). | `GetPipeSQLQuery()` `query_expression.cc:743–793` |
+| 7 | **Synthetic `|> AS <alias>` at wrap boundaries.** When a clause slot is already filled and the accumulate path must wrap, pipe mode injects `… |> AS <alias>`, an operator that corresponds to no scan. | `WrapImpl` `query_expression.cc:837` |
 
 B.3 is inherent to the accumulate path. Moving more scans onto the
-append-as-you-go path (strategy 2) is the structural fix; the per-case fixes for
-#1 and #2 are the highest-value steps because they remove the two most common
-collapses.
+append-as-you-go path (strategy 2) is the structural fix.
 
 ---
 
 ## Summary
 
-- **A1, A4**: pipe syntax genuinely can't express the query (SELECT hints;
+- **A1, A2**: pipe syntax genuinely can't express the query (SELECT hints;
   anonymized / aggregation-threshold scans) → fall back to standard SQL. Not
-  fixable without new syntax.
-- **A2, A3** (resolved): group-by keys without aliases / with duplicate aliases
-  now generate pipe syntax via generated, uniquified aliases — no more fallback.
-- **B1 #1, #2**: SQLBuilder *simplifications* (elide trivial `ProjectScan`;
-  inline group-by-key `ProjectScan` into `AGGREGATE`). **Remove them** — emit the
-  `ProjectScan` instead — to get back to 1:1.
-- **B1 #3, #4**: expected and correct (`FROM Table` ↔ `TableScan`; subpipeline
-  input head).
-- **B2 #5**: aggregate expansion, partly a consequence of #2.
-- **B3 #6–#8**: ordering/synthetic-operator artifacts of the accumulate path;
-  structurally addressed by preferring the append path.
+  fixable without new syntax. Group-by keys never fall back — they are always
+  materialized with unique, uniquified aliases.
+- **B.1**: leaf `TableScan` → `FROM` head and the subpipeline input head are
+  expected; the degenerate-`ProjectScan` elision is an internal optimization with
+  no observable effect. There is no group-by-key `ProjectScan` collapse.
+- **B.2**: an `AggregateScan` can expand to more than one operator (extra grouping
+  keys / output projection; forced `|> EXTEND` for constant and grouping-set
+  keys) to satisfy pipe-syntax rules.
+- **B.3**: canonical clause ordering, the implicit trailing `|> SELECT`, and
+  synthetic `|> AS` wraps are artifacts of the accumulate path; the structural fix
+  is to prefer the append path.
