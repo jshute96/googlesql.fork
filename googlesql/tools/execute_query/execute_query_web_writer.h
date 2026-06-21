@@ -99,6 +99,11 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
         data.resolved_ast_html;
     current_statement_params_["viz_sqlbuilder_sql_html"] =
         data.sqlbuilder_sql_html;
+    if (!data.post_rewrite_ast_html.empty()) {
+      current_statement_params_["viz_has_post_rewrite"] = true;
+      current_statement_params_["viz_post_rewrite_ast_html"] =
+          data.post_rewrite_ast_html;
+    }
     got_results_ = true;
     return absl::OkStatus();
   }

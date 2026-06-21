@@ -165,6 +165,12 @@
               <div class="viz-info-resizer" title="Drag to resize"></div>
               <div class="viz-info"><span class="viz-info-placeholder">Details for selected node</span></div>
             </div>
+            {{#viz_has_post_rewrite}}
+            <div class="viz-postrewrite">
+              <h4 class="viz-postrewrite-title">Post-rewrite Resolved AST</h4>
+              <div class="viz-pane viz-postrewrite-pane">{{{viz_post_rewrite_ast_html}}}</div>
+            </div>
+            {{/viz_has_post_rewrite}}
             {{/result_visualized}}
 
             {{#result_executed}}

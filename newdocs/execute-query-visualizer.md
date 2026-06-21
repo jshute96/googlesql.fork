@@ -61,8 +61,11 @@ formatters, #8 AST-node resolution info, #10 linear Resolved AST DebugString).
    that scan's `r<n>`. So the SQLBuilder pane lines up visually with the AST pane
    and the correspondence highlighting works across all three panes. The leading
    (FROM/source) segment is cross-referenced to the source scan `r0`.
-5. Hand a `VisualizationData` to the writer. Text writers print three labeled
-   sections; the web writer fills `viz_*_html` template params.
+5. After the three (pre-rewrite) panes are built, run the configured rewriters
+   on the tree; if they change it, include the **post-rewrite** Resolved AST as
+   a separate read-only section (no cross-pane correspondence). Hand a
+   `VisualizationData` to the writer. Text writers print the labeled sections;
+   the web writer fills `viz_*_html` template params.
 
 ## Web UI
 
@@ -361,14 +364,19 @@ noted but not initially built).
 - [ ] Full-fidelity script visualization via script-executor integration
       (analyze each statement in its run-time variable context, rather than the
       current best-effort standalone analysis).
-- [ ] Rewriter toggle: visualization force-disables rewriters to keep the
-      Resolved AST close to the input and preserve the input↔resolved
-      correspondence (keyed on *pre-rewrite* `ResolvedScan*`). An opt-in "apply
-      rewriters" control would need a request param + config field + web
-      checkbox + form parsing, and would *degrade* the input↔resolved
-      correspondence (post-rewrite scans don't match the pre-rewrite
-      `ASTNodeResolvedInfoMap`; resolved↔SQLBuilder would still work). Deferred
-      pending a decision on whether that tradeoff is wanted.
+- [x] Post-rewrite Resolved AST section: after building the three (pre-rewrite)
+      panes, the visualizer runs the configured rewriters on the tree and, when
+      they change it, shows the post-rewrite Resolved AST as a separate
+      read-only section below the panes (linear `.rscan` rendering, standalone).
+      It carries no cross-pane correspondence — rewrites can transform the tree
+      in ways disconnected from the input SQL. The three main panes stay
+      pre-rewrite, so the input↔resolved correspondence is preserved. (We
+      decided against an "apply rewriters" toggle that would have replaced the
+      main panes and lost that correspondence.)
+- [ ] Best-effort correspondence *through* the rewriter, so the post-rewrite
+      Resolved AST (and a SQLBuilder regeneration of it) can map back to the
+      input SQL. Complicated and potentially messy — rewrites can transform the
+      mapping arbitrarily — so this is future work.
 
 ### Next phase — graphical tree / graph view (`visual-graph` branch, child PR)
 

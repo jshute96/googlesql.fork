@@ -295,6 +295,32 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {
   EXPECT_EQ(sb.find("data-node-id=\"s1\""), std::string::npos);  // ...but flat.
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizePostRewriteSection) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard, "SELECT TYPEOF(1) AS t",
+          "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}"
+                            "[AST]{{{viz_resolved_ast_html}}}"
+                            "{{#viz_has_post_rewrite}}"
+                            "[POST]{{{viz_post_rewrite_ast_html}}}"
+                            "{{/viz_has_post_rewrite}}"
+                            "{{/result_visualized}}{{/statements}}"),
+      result));
+  // The rewriter expands typeof() into an if(...$is_null...) form, so the
+  // pre-rewrite pane keeps typeof() and a separate post-rewrite section appears
+  // with the rewritten form.
+  EXPECT_THAT(result, HasSubstr("[POST]"));
+  const size_t post_pos = result.find("[POST]");
+  EXPECT_THAT(result.substr(0, post_pos), HasSubstr("typeof"));
+  const std::string post = result.substr(post_pos);
+  EXPECT_THAT(post, HasSubstr("is_null"));
+  EXPECT_EQ(post.find("typeof"), std::string::npos);
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestQueryExecutedSimpleResult) {
   std::string result;
   EXPECT_TRUE(HandleRequest(

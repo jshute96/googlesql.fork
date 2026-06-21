@@ -719,6 +719,22 @@ html[data-visualize] .right-section {
   white-space: pre;
 }
 
+/* Post-rewrite Resolved AST: a standalone read-only section below the panes
+   (no cross-pane correspondence). */
+.viz-postrewrite {
+  margin-top: 12px;
+}
+.viz-postrewrite-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.viz-postrewrite-pane {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  max-height: 40vh;
+}
+
 /* Details box resizer (drag to change the details box height). */
 .viz-info-resizer {
   flex: 0 0 6px;

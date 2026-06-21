@@ -1562,6 +1562,24 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
     data.input_sql_html = PreBlockHtml(sql);
   }
 
+  // Also compute the post-rewrite Resolved AST.  When the configured rewriters
+  // change the tree, show it as a separate read-only section.  The rewriters
+  // can transform the tree in ways disconnected from the input SQL, so this
+  // section carries no cross-pane correspondence (a best-effort mapping through
+  // the rewriter is future work).  All pre-rewrite panes above are already
+  // built, so rewriting the output in place here is safe.
+  const std::string pre_rewrite_debug = resolved->DebugString();
+  if (RewriteResolvedAst(config.analyzer_options(), sql, config.catalog(),
+                         config.type_factory(),
+                         const_cast<AnalyzerOutput&>(*analyzer_output))
+          .ok()) {
+    const ResolvedNode* post = analyzer_output->resolved_node();
+    if (post != nullptr && post->DebugString() != pre_rewrite_debug) {
+      data.post_rewrite_ast_text = post->DebugString(debug_config);
+      data.post_rewrite_ast_html = post->DebugStringHtml();
+    }
+  }
+
   return writer.visualized(data);
 }
 
