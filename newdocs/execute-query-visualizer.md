@@ -398,9 +398,33 @@ noted but not initially built).
 
 Coarse breakdown; see the **"Next phase"** section above for full requirements.
 
-- [ ] Full structured node/edge/containment **JSON model** + client-side
+**Structured model (JSON schema).** The graph view consumes an engine-neutral
+`QueryGraph` (`tools/execute_query/query_graph.{h,cc}`): the *operator-mode*
+model, from which query mode is a client-side collapse. Shape:
+
+```jsonc
+{
+  "nodes":      [{"id":"r3","kind":"TableScan","container":"b1"}],
+  "edges":      [{"from":"r0","to":"r1","kind":"pipe","label":""}],
+  "containers": [{"id":"b0","kind":"QueryStmt","parent":""}]
+}
+```
+
+Node `id`s are the same `r<n>` tags the textual/HTML panes emit for each scan
+(so a selection in any pane maps 1:1 onto a graph node); container `id`s use a
+distinct `b<n>` space. Edge `kind` is `"pipe"` (the linear pipe-input spine) or
+`"input"` (a secondary input — join rhs, set-op input, subquery — with the
+consuming field name in `label`); data flows `from`→`to`, drawn downward.
+
+- [~] Full structured node/edge/containment **JSON model** + client-side
       rendering (builds on the ids + cross-refs landing now in the textual
       phase); SQLBuilder emits a structured tree instead of segmented text.
+      *Done:* the `QueryGraph` schema + a Resolved-AST emitter
+      (`BuildResolvedAstQueryGraph`, reusing the panes' scan-id order so ids
+      align) + JSON serialization + unit tests. *Pending:* emitting it into the
+      page, the SQLBuilder structured tree, and expression-subquery / set-op
+      coverage (the emitter currently walks direct child scans only, matching
+      the linear panes).
 - [ ] Graph/tree view via **elkjs** geometry + our HTML nodes + SVG edge
       overlay (arrowheads, downward dataflow); query mode and operator mode.
 - [ ] View-mode selector in column tabs (text / query graph / operator graph),

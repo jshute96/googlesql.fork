@@ -375,6 +375,40 @@ cc_test(
 )
 
 cc_library(
+    name = "query_graph",
+    srcs = ["query_graph.cc"],
+    hdrs = ["query_graph.h"],
+    deps = [
+        "//googlesql/resolved_ast",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+cc_test(
+    name = "query_graph_test",
+    srcs = ["query_graph_test.cc"],
+    deps = [
+        ":query_graph",
+        "//googlesql/base:status",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "//googlesql/base/testing:status_matchers",
+        "//googlesql/public:analyzer",
+        "//googlesql/public:analyzer_options",
+        "//googlesql/public:analyzer_output",
+        "//googlesql/public:builtin_function_options",
+        "//googlesql/public:simple_catalog",
+        "//googlesql/public:type",
+        "//googlesql/resolved_ast",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_library(
     name = "execute_query_tool",
     srcs = [
         "execute_query_internal_binproto.cc",
