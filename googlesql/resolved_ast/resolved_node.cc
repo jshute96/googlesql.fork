@@ -97,6 +97,131 @@ std::string ResolvedNode::DebugString(const DebugStringConfig& config) const {
   return output;
 }
 
+namespace {
+std::string HtmlEscape(absl::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (char c : s) {
+    switch (c) {
+      case '&': out += "&amp;"; break;
+      case '<': out += "&lt;"; break;
+      case '>': out += "&gt;"; break;
+      case '"': out += "&quot;"; break;
+      default: out += c;
+    }
+  }
+  return out;
+}
+}  // namespace
+
+std::string ResolvedNode::DebugStringHtml() const {
+  DebugStringConfig config;
+  config.linear_mode = true;
+  int scan_counter = 0;
+  std::string output;
+  EmitNodeHtml(this, config, &scan_counter, &output);
+  return output;
+}
+
+void ResolvedNode::EmitNodeHtml(const ResolvedNode* node,
+                                const DebugStringConfig& config,
+                                int* scan_counter, std::string* output) {
+  if (node == nullptr) {
+    absl::StrAppend(output, "<div class=\"rscan-stmt\">&lt;nullptr&gt;</div>");
+    return;
+  }
+  if (node->IsScan()) {
+    EmitScanChainHtml(node->GetAs<ResolvedScan>(), config, scan_counter,
+                      output);
+    return;
+  }
+  // A non-scan node (typically the statement): render as a labeled block whose
+  // scan fields become nested query boxes.
+  absl::StrAppend(output, "<div class=\"rscan-stmt\"><div class=\"rscan-head\">",
+                  HtmlEscape(node->node_kind_string()), "</div>");
+  EmitScanFieldsHtml(node, config, /*elide=*/nullptr, scan_counter, output);
+  absl::StrAppend(output, "</div>");
+}
+
+void ResolvedNode::EmitScanChainHtml(const ResolvedScan* scan,
+                                     const DebugStringConfig& config,
+                                     int* scan_counter, std::string* output) {
+  // Collect the pipe spine: spine.back() is the source (leaf) scan, spine[0]
+  // is the top of the chain.  A leaf scan with no pipe input is a one-element
+  // spine.
+  std::vector<const ResolvedScan*> spine;
+  for (const ResolvedScan* s = scan; s != nullptr; s = s->GetPipeInputScan()) {
+    spine.push_back(s);
+  }
+  // Emit source first, then each operator stacked below it.
+  for (int i = static_cast<int>(spine.size()) - 1; i >= 0; --i) {
+    const ResolvedScan* s = spine[i];
+    const bool is_operator = (i != static_cast<int>(spine.size()) - 1);
+    const int id = (*scan_counter)++;
+    absl::StrAppend(output, "<div class=\"rscan ",
+                    (id % 2 == 0 ? "scan-a" : "scan-b"),
+                    "\" data-scan-id=\"", id, "\"><div class=\"rscan-head\">",
+                    (is_operator ? "|&gt; " : ""),
+                    HtmlEscape(s->node_kind_string()), "</div>");
+    EmitScanFieldsHtml(s, config,
+                       /*elide=*/is_operator ? s->GetPipeInputScan() : nullptr,
+                       scan_counter, output);
+    absl::StrAppend(output, "</div>");
+  }
+}
+
+void ResolvedNode::EmitScanFieldsHtml(const ResolvedNode* scan,
+                                      const DebugStringConfig& config,
+                                      const ResolvedNode* elide,
+                                      int* scan_counter, std::string* output) {
+  std::vector<DebugStringField> fields;
+  scan->CollectDebugStringFields(&fields);
+
+  for (const DebugStringField& field : fields) {
+    // Skip the field that was consumed as this scan's pipe input (it is the
+    // box directly above).
+    if (elide != nullptr && field.nodes.size() == 1 &&
+        field.nodes[0] == elide) {
+      continue;
+    }
+    if (field.nodes.empty()) {
+      // Scalar field: "name=value" (or bare value if unnamed).
+      if (!field.value.empty() || !field.name.empty()) {
+        absl::StrAppend(output, "<div class=\"rscan-field\">");
+        if (!field.name.empty()) {
+          absl::StrAppend(output, HtmlEscape(field.name), "=");
+        }
+        absl::StrAppend(output, HtmlEscape(field.value), "</div>");
+      }
+      continue;
+    }
+    // Child-node field.  Scan children begin a nested query; non-scan children
+    // (expressions, computed columns, ...) are rendered as escaped text.
+    for (const ResolvedNode* child : field.nodes) {
+      if (child != nullptr && child->IsScan()) {
+        absl::StrAppend(output, "<div class=\"rscan-children\">");
+        if (!field.name.empty()) {
+          absl::StrAppend(output, "<div class=\"rscan-field-name\">",
+                          HtmlEscape(field.name), "=</div>");
+        }
+        absl::StrAppend(output, "<div class=\"rscan-query\">");
+        EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,
+                          output);
+        absl::StrAppend(output, "</div></div>");
+      } else {
+        absl::StrAppend(output, "<div class=\"rscan-field\">");
+        if (!field.name.empty()) {
+          absl::StrAppend(output, HtmlEscape(field.name), "=\n");
+        }
+        absl::StrAppend(output, HtmlEscape(child == nullptr
+                                               ? "<nullptr>"
+                                               : child->DebugString()),
+                        "</div>");
+      }
+    }
+  }
+}
+
 void ResolvedNode::AppendAnnotations(
     const ResolvedNode* node, absl::Span<const NodeAnnotation> annotations,
     std::string* output) {

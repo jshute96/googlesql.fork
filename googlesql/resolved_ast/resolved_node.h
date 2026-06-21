@@ -43,6 +43,7 @@ namespace googlesql {
 // Using forward declarations here to avoid circular includes.
 class ResolvedASTVisitor;
 class ResolvedColumn;
+class ResolvedScan;
 
 // This is the base class for the resolved AST.
 // Subclasses are in the generated file resolved_ast.h.
@@ -204,6 +205,16 @@ class ResolvedNode {
 
   std::string DebugString(const DebugStringConfig& config) const;
   std::string DebugString() const { return DebugString(DebugStringConfig{}); }
+
+  // Renders this node in linear (pipe-style) form as HTML for the execute_query
+  // visualizer's Resolved AST pane.  Emits one `<div class="rscan ...">` box per
+  // ResolvedScan, with alternating "scan-a"/"scan-b" shading for the operators
+  // of a pipe chain, nested query blocks (`rscan-query`) for scans that begin a
+  // new query (a non-pipe-input scan field, e.g. a subquery or set-operation
+  // input), and an enclosing `rscan-stmt` box for the statement.  Each scan box
+  // carries `data-scan-id` so client-side code can correlate it with the SQL
+  // panes.  Per-node fields are rendered as escaped text inside their box.
+  std::string DebugStringHtml() const;
 
   // Check if any semantically meaningful fields have not been accessed in
   // this node or its children. If so, return a descriptive error indicating
@@ -474,6 +485,24 @@ class ResolvedNode {
   static void AppendAnnotations(const ResolvedNode* node,
                                 absl::Span<const NodeAnnotation> annotations,
                                 std::string* output);
+
+  // Helpers for DebugStringHtml().  `scan_counter` numbers scan boxes (for the
+  // data-scan-id attribute and alternating colors).  `EmitNodeHtml` renders an
+  // arbitrary node as a block (used for the statement and for query roots);
+  // `EmitScanChainHtml` flattens a scan's pipe spine into a column of boxes.
+  static void EmitNodeHtml(const ResolvedNode* node,
+                           const DebugStringConfig& config, int* scan_counter,
+                           std::string* output);
+  static void EmitScanChainHtml(const ResolvedScan* scan,
+                                const DebugStringConfig& config,
+                                int* scan_counter, std::string* output);
+  // Renders a single scan box's own fields: scalar fields and non-scan child
+  // nodes become escaped text; scan child nodes become nested query boxes.
+  // `elide` is the pipe-input scan to skip (already shown as the box above).
+  static void EmitScanFieldsHtml(const ResolvedNode* scan,
+                                 const DebugStringConfig& config,
+                                 const ResolvedNode* elide, int* scan_counter,
+                                 std::string* output);
 
   // DebugString on these call protected methods.
   friend class ResolvedComputedColumn;

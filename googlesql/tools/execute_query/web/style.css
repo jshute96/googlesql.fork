@@ -802,7 +802,11 @@ html[data-visualize] .right-section {
 }
 
 /* Resolved AST pane: one box per ResolvedScan, alternating shades, rendered by
-   the structured linear emitter (Milestone 2). */
+   the structured linear emitter (ResolvedNode::DebugStringHtml). */
+.viz-pane .rscan-stmt {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
 .rscan {
   display: block;
   border: 1px solid #cfd6df;
@@ -819,12 +823,24 @@ html[data-visualize] .right-section {
 .rscan.scan-b {
   background: #dde9fb;
 }
-.rscan .rscan-children {
-  margin-left: 1.5em;
+.rscan-head {
+  font-weight: bold;
+}
+.rscan-field {
+  color: #333;
+}
+.rscan-field-name {
+  color: #555;
+  font-weight: bold;
+}
+/* Nested query block: a scan field that begins a new query/subquery. */
+.rscan-children {
+  margin-left: 1.2em;
 }
 .rscan-query {
   border: 1px solid #9bb8df;
   border-radius: 3px;
   margin: 2px 0;
   padding: 2px 4px;
+  background: rgba(255, 255, 255, 0.4);
 }

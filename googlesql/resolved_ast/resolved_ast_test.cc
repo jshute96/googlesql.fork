@@ -345,6 +345,18 @@ TEST_F(ResolvedASTTest, DebugStringLinearMode) {
   EXPECT_THAT(query_stmt->DebugString(
                   {.linear_mode = true, .omit_pipe_input_scan_field = false}),
               HasSubstr("input_scan=<pipe_input>"));
+
+  // DebugStringHtml emits one box per ResolvedScan (alternating shading) inside
+  // a statement block, with nested query blocks for non-pipe-input scans.
+  const std::string html = query_stmt->DebugStringHtml();
+  EXPECT_THAT(html, HasSubstr("rscan-stmt"));
+  EXPECT_THAT(html, HasSubstr("data-scan-id=\"0\""));
+  EXPECT_THAT(html, HasSubstr("class=\"rscan scan-a\""));
+  EXPECT_THAT(html, HasSubstr("class=\"rscan scan-b\""));
+  EXPECT_THAT(html, HasSubstr("rscan-query"));
+  EXPECT_THAT(html, HasSubstr("|&gt; ProjectScan"));
+  // The pipe operator name is escaped; raw "<" must not appear unescaped.
+  EXPECT_THAT(html, Not(HasSubstr("<ProjectScan")));
 }
 
 TEST_F(ResolvedASTTest, DebugStringPrintColumnHolderAsCreated) {

@@ -1403,9 +1403,9 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   ResolvedNode::DebugStringConfig debug_config;
   debug_config.linear_mode = true;
   data.resolved_ast_text = resolved->DebugString(debug_config);
-  // TODO(visualizer): replace with a structured linear emitter (one box per
-  // ResolvedScan, alternating colors, data-scan-id) in Milestone 2.
-  data.resolved_ast_html = PreBlockHtml(data.resolved_ast_text);
+  // Structured linear emitter: one box per ResolvedScan, alternating colors,
+  // nested query blocks, data-scan-id (for correspondence highlighting).
+  data.resolved_ast_html = resolved->DebugStringHtml();
 
   // --- SQLBuilder pane: regenerate SQL in pipe syntax. ---
   SQLBuilder::SQLBuilderOptions sql_builder_options;
