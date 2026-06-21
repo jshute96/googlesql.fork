@@ -2616,25 +2616,53 @@ absl::Status SQLBuilder::GetSelectList(
   // If any group_by column is computed in the select list, then update the sql
   // text for those columns in group_by_list inside the QueryExpression,
   // reflecting the ordinal position of select clause.
+  absl::flat_hash_set<int> materialized_group_by_columns;
   for (int pos = 0; pos < column_list.size(); ++pos) {
     const ResolvedColumn& col = column_list[pos];
     if (query_expression->HasGroupByColumn(col.column_id())) {
       query_expression->SetGroupByColumn(
           col.column_id(),
           absl::StrCat(pos + 1) /* select list ordinal position */);
+      materialized_group_by_columns.insert(col.column_id());
     }
   }
 
-  if (column_list.empty()) {
-    GOOGLESQL_RET_CHECK_EQ(select_list->size(), 0);
-    // Add a dummy value "NULL" to the select list if the column list is empty.
-    // This ensures that we form a valid query for scans with empty columns.
-    const std::string alias =
-        IsPipeSyntaxTargetMode() && query_expression->HasAnyGroupByColumn()
-            // In presence of group by columns, an alias in needed in Pipe
-            // syntax mode to form a syntactically correct query.
-            ? GenerateUniqueAliasName()
-            : "" /* no select alias */;
+  // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY <key>` must reference every
+  // group-by key by a (unique) alias, so each key has to be materialized in the
+  // select list. A key that is not in `column_list` -- e.g. a grouping key the
+  // resolver pruned from this scan's output -- was not assigned a select ordinal
+  // above and still holds its raw expression SQL in the group-by list. Append it
+  // here with a generated unique alias and record its ordinal, so the query can
+  // be formed in Pipe syntax instead of falling back to Standard syntax. The
+  // extra output column is harmless: a later operator (and the resolver, on
+  // re-analysis) prunes any column the query does not output. In the common case
+  // the aggregate already materializes every key, so nothing is appended here.
+  //
+  // Note: whether a key is already materialized is tracked explicitly
+  // (`materialized_group_by_columns`) rather than inferred from its stored
+  // value, because a group-by list entry holds either a select ordinal or the
+  // raw expression SQL, and the two are indistinguishable for an integer-valued
+  // key expression (e.g. `GROUP BY 1+2` or `GROUP BY CAST(1 AS INT64)`).
+  if (IsPipeSyntaxTargetMode()) {
+    for (const auto& [column_id, expr_sql] : query_expression->GroupByList()) {
+      if (materialized_group_by_columns.contains(column_id)) {
+        continue;
+      }
+      select_list->push_back(
+          std::make_pair(expr_sql, GenerateUniqueAliasName()));
+      query_expression->SetGroupByColumn(
+          column_id, absl::StrCat(select_list->size()) /* ordinal */);
+    }
+  }
+
+  if (select_list->empty()) {
+    // The scan has no output columns and no group-by keys were materialized
+    // above. Add a dummy value "NULL" to the select list. This ensures that we
+    // form a valid query for scans with empty columns. (In Pipe syntax mode a
+    // scan with group-by keys but an empty column list materializes those keys
+    // above, so it does not reach here and does not need this placeholder.)
+    GOOGLESQL_RET_CHECK(column_list.empty());
+    const std::string alias = "" /* no select alias */;
     select_list->push_back(std::make_pair("NULL", alias));
   }
 

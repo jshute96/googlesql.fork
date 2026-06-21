@@ -693,39 +693,21 @@ bool QueryExpression::CanFormPipeSQLQuery() const {
     return false;
   }
 
-  // This query has GROUP BY clause.
-  if (HasGroupByClauseOrOnlyAggregateColumns()) {
-    // In Pipe SQL syntax, we must refer to group-by columns using their
-    // aliases. If we have group-by columns without aliases, we cannot form the
-    // query in Pipe SQL syntax.
-    if (!AllGroupByColumnsHaveAliases()) {
-      return false;
-    } else {
-      // If all group-by columns have aliases, we still cannot form the query in
-      // Pipe SQL syntax if there are columns with duplicate aliases.
-      if (!rollup_column_id_list_.empty()) {
-        absl::flat_hash_map<int, std::string> aliases;
-        int i = 0;
-        for (int column_id : rollup_column_id_list_) {
-          aliases[i++] = GetGroupByColumnAliasOrDie(column_id);
-        }
-        if (HasDuplicateAliases(aliases)) {
-          return false;
-        }
-      }
-
-      auto [group_by_columns, _] = GetGroupByAndAggregateColumns();
-      if (!group_by_columns.empty()) {
-        absl::flat_hash_map<int, absl::string_view> aliases;
-        int i = 0;
-        for (auto const& entry : group_by_columns) {
-          aliases[i++] = entry.second;
-        }
-        if (HasDuplicateAliases(aliases)) {
-          return false;
-        }
-      }
-    }
+  // In Pipe SQL syntax, `|> AGGREGATE ... GROUP BY <key>` must refer to every
+  // group-by key by an alias, so each key has to be materialized in the select
+  // list. The SQLBuilder guarantees this (see SQLBuilder::GetSelectList, which
+  // assigns a unique alias to every group-by key in Pipe syntax mode, including
+  // keys pruned from the scan output). This is a defensive guard against any
+  // path that bypasses that materialization: if a key still has no alias, fall
+  // back to Standard syntax rather than crash while rendering.
+  //
+  // Distinct group-by columns always get distinct aliases, so duplicate aliases
+  // are no longer a reason to fall back; a column intentionally repeated in
+  // ROLLUP/CUBE/GROUPING SETS (e.g. `ROLLUP(x, y, x)`) reuses its own alias,
+  // which is valid Pipe syntax.
+  if (HasGroupByClauseOrOnlyAggregateColumns() &&
+      !AllGroupByColumnsHaveAliases()) {
+    return false;
   }
 
   return true;

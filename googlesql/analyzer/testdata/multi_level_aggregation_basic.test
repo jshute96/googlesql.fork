@@ -840,13 +840,16 @@ GROUP BY simpletypes_6.a_5;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  IFERROR(CAST(SUM(CAST(ANY_VALUE(SimpleTypes.int32) AS INT64)
-      GROUP BY SimpleTypes.double, SimpleTypes.bool) AS DOUBLE), SUM(AVG(SimpleTypes.int64)
-      GROUP BY SimpleTypes.double, SimpleTypes.string)) AS a_1
 FROM
   SimpleTypes
-GROUP BY SimpleTypes.double;
+|> AGGREGATE
+     IFERROR(CAST(SUM(CAST(ANY_VALUE(SimpleTypes.int32) AS INT64)
+         GROUP BY SimpleTypes.double, SimpleTypes.bool) AS DOUBLE), SUM(AVG(SimpleTypes.int64)
+         GROUP BY SimpleTypes.double, SimpleTypes.string)) AS a_1
+   GROUP BY SimpleTypes.double AS a_2
+|> AS projectscan_3
+|> SELECT
+     projectscan_3.a_1;
 ==
 
 # Conditional evaluation test.
@@ -949,16 +952,20 @@ GROUP BY simpletypes_5.a_4;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  MIN(IFERROR(AVG(SimpleTypes.double), MAX(SimpleTypes.double))
-    GROUP BY SimpleTypes.double, SimpleTypes.bool) AS a_1,
-  ARRAY_AGG(SimpleTypes.string
-    GROUP BY SimpleTypes.double, SimpleTypes.string
-    ORDER BY MIN(IFERROR(AVG(SimpleTypes.double), MAX(SimpleTypes.double))
-      GROUP BY SimpleTypes.double, SimpleTypes.string, SimpleTypes.int64)) AS a_2
 FROM
   SimpleTypes
-GROUP BY SimpleTypes.double;
+|> AGGREGATE
+     MIN(IFERROR(AVG(SimpleTypes.double), MAX(SimpleTypes.double))
+       GROUP BY SimpleTypes.double, SimpleTypes.bool) AS a_1,
+     ARRAY_AGG(SimpleTypes.string
+       GROUP BY SimpleTypes.double, SimpleTypes.string
+       ORDER BY MIN(IFERROR(AVG(SimpleTypes.double), MAX(SimpleTypes.double))
+         GROUP BY SimpleTypes.double, SimpleTypes.string, SimpleTypes.int64)) AS a_2
+   GROUP BY SimpleTypes.double AS a_3
+|> AS projectscan_4
+|> SELECT
+     projectscan_4.a_1,
+     projectscan_4.a_2;
 ==
 
 # Conditional evaluation for aggregate function in ORDER BY modifier

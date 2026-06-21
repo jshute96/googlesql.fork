@@ -67,13 +67,51 @@ operators, even though the input had several.
 | # | Case | Where | Why |
 |---|------|-------|-----|
 | A1 | **Query has SELECT hints** | `CanFormPipeSQLQuery()` `query_expression.cc:692` | Pipe syntax has no place for `SELECT @{hint}`. |
-| A2 | **Group-by column without an alias** | `query_expression.cc:701` | `|> AGGREGATE … GROUP BY` must reference grouping keys by alias. |
-| A3 | **Duplicate group-by aliases** (including rollup keys) | `query_expression.cc:706–727` | Two grouping keys with the same alias can't be disambiguated in the pipe `GROUP BY`. |
 | A4 | **Scan kind unsupported in pipe syntax** | `IsScanUnsupportedInPipeSyntax()` `sql_builder.cc:367`; wrapped at `:3288`, `:3806` | `ResolvedAnonymizedAggregateScan` and `ResolvedAggregationThresholdAggregateScan` have no pipe spelling; the consumer wraps them as a parenthesized standard subquery via `WrapForPipeSyntaxMode`. |
 
-A1–A3 are detected on the assembled `QueryExpression`; A4 is detected per-scan
-by kind. All four are genuine language limitations, not simplifications — there
-is nothing to "fix" without new pipe syntax.
+A1 is detected on the assembled `QueryExpression`; A4 is detected per-scan by
+kind. Both are genuine language limitations — there is nothing to "fix" without
+new pipe syntax.
+
+### A2 / A3 (resolved): group-by keys without/with duplicate aliases
+
+Two former fallbacks have been **removed** — these queries now generate pipe
+syntax via generated aliases:
+
+- **A2 — group-by key without an alias.** A `|> AGGREGATE … GROUP BY <key>` must
+  reference every key by an alias, which means the key has to be materialized in
+  the select list. A key the resolver pruned from the scan output (or that a
+  side-effect/collapsed scan never materialized — e.g.
+  `SELECT f(x) FROM t GROUP BY k` where `k` is not output) used to have no alias
+  and forced a fallback. `SQLBuilder::GetSelectList` (`sql_builder.cc:2630`) now
+  appends any such key to the select list with a generated unique alias
+  (`GenerateUniqueAliasName`) and records its ordinal, so the key is emitted as
+  `|> AGGREGATE … GROUP BY <expr> AS <alias>`. The extra output column is pruned
+  by a later operator (and by the resolver on re-analysis), so the round trip is
+  preserved.
+
+- **A3 — duplicate group-by aliases.** `GetSelectList` already assigns a
+  *distinct* alias to every distinct group-by column (`UpdateColumnAlias`
+  suffixes collisions), so two different keys never share an alias. A column
+  intentionally repeated in `ROLLUP`/`CUBE`/`GROUPING SETS` (e.g.
+  `GROUP BY ROLLUP(x, y, x)`) reuses its own alias, which is valid pipe syntax.
+  The duplicate-alias fallback check was therefore obsolete and over-conservative
+  and has been deleted.
+
+`CanFormPipeSQLQuery` (`query_expression.cc:689`) now keeps only a defensive
+`AllGroupByColumnsHaveAliases()` guard (it should always hold given the
+materialization above; if some unforeseen path leaves a key unaliased, it falls
+back rather than crashes while rendering).
+
+> **Implementation note — the ordinal/SQL ambiguity.** A group-by list entry
+> stores *either* a select-list ordinal *or* the key's raw expression SQL in the
+> same string field. These are indistinguishable for an integer-valued key
+> expression (`GROUP BY 1+2`, `GROUP BY CAST(1 AS INT64)` whose SQL is `"1"`), so
+> the materialization tracks *explicitly* which keys already have a select
+> ordinal (`materialized_group_by_columns`) instead of trying to parse the stored
+> value. The `select_list->empty()` placeholder-`NULL` branch is likewise
+> conditioned on the select list, not on `column_list`, so a key materialized for
+> an otherwise-empty column list does not trip the dummy-`NULL` path.
 
 ---
 
@@ -136,8 +174,11 @@ collapses.
 
 ## Summary
 
-- **A1–A4**: pipe syntax genuinely can't express the query → fall back to
-  standard SQL. Not fixable without new syntax.
+- **A1, A4**: pipe syntax genuinely can't express the query (SELECT hints;
+  anonymized / aggregation-threshold scans) → fall back to standard SQL. Not
+  fixable without new syntax.
+- **A2, A3** (resolved): group-by keys without aliases / with duplicate aliases
+  now generate pipe syntax via generated, uniquified aliases — no more fallback.
 - **B1 #1, #2**: SQLBuilder *simplifications* (elide trivial `ProjectScan`;
   inline group-by-key `ProjectScan` into `AGGREGATE`). **Remove them** — emit the
   `ProjectScan` instead — to get back to 1:1.
