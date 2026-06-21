@@ -735,6 +735,64 @@ html[data-visualize] .right-section {
   max-height: 40vh;
 }
 
+/* Resolved AST view-mode selector (text vs operator graph). */
+.viz-view {
+  font: inherit;
+  font-size: 0.85em;
+  font-weight: normal;
+  padding: 0 2px;
+}
+
+/* Graph view (operator mode): an absolutely-positioned node-link canvas that
+   replaces the text rendering in the Resolved AST pane. */
+.viz-col.graph-mode .viz-pane > .rscan-stmt {
+  display: none;
+}
+.viz-graph {
+  position: relative;
+  font-size: 0.85em;
+}
+.viz-graph-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.viz-graph-edges .viz-edge {
+  fill: none;
+  stroke: #888;
+  stroke-width: 1.5;
+}
+.viz-graph-edges .viz-edge-input {
+  stroke-dasharray: 4 3;
+}
+.viz-graph-edges #viz-arrow path {
+  fill: #888;
+}
+.viz-gnode {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2px 4px;
+  border: 1px solid #999;
+  border-radius: 4px;
+  background: #eef3fb;
+  cursor: pointer;
+  overflow: hidden;
+}
+.viz-gnode:hover {
+  border-color: #4a6fa5;
+}
+.viz-gnode.viz-selected {
+  outline: 2px solid #c0392b;
+}
+.viz-gnode.viz-corresp {
+  outline: 2px solid #2980b9;
+}
+
 /* Details box resizer (drag to change the details box height). */
 .viz-info-resizer {
   flex: 0 0 6px;

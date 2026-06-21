@@ -149,6 +149,10 @@
                 <div class="viz-col" data-col="ast">
                   <div class="viz-tab">
                     <span class="viz-tab-label">Resolved AST</span>
+                    <select class="viz-view" data-col="ast" title="View mode">
+                      <option value="text">Text</option>
+                      <option value="graph">Operator graph</option>
+                    </select>
                     <button type="button" class="viz-hide" title="Hide column">&times;</button>
                   </div>
                   <div class="viz-pane">{{{viz_resolved_ast_html}}}</div>

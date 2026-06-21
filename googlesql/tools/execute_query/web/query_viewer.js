@@ -171,6 +171,7 @@
     hidden: {},                                  // col key -> true
     weights: {input: 1, ast: 1, sqlbuilder: 1},  // flex-grow per column
     infoH: null,                                 // details-box height in px
+    astView: 'text',                             // Resolved AST: 'text'|'graph'
     lastVH: window.innerHeight
   };
 
@@ -534,6 +535,19 @@
   function handleNodeClick(pane, e) {
     var viz = pane.closest('.viz');
     if (!viz) return;
+    // Operator-graph node: details come from the corresponding (hidden) text
+    // `.rscan` box, which shares the node's id.  (Cross-view correspondence
+    // highlighting is a planned follow-up.)
+    var gnode = e.target.closest('.viz-gnode');
+    if (gnode && pane.contains(gnode)) {
+      var box = viz.querySelector(
+          '.rscan[data-node-id="' + gnode.getAttribute('data-gnode') + '"]');
+      if (box) {
+        var gitems = collectScanHierarchy(box, viz);
+        if (gitems.length > 0) renderDetails(viz, gitems);
+      }
+      return;
+    }
     // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.
     var rscan = e.target.closest('.rscan');
     if (rscan && pane.contains(rscan)) {
@@ -569,6 +583,166 @@
     applyCorrespondence(viz, (id != null ? idRect : rect), id);
   }
 
+  // --- Graph view (operator mode) -----------------------------------------
+  // An initial, hermetic node-link rendering of the Resolved AST's QueryGraph
+  // (embedded as JSON in `.viz-graph-data`).  Layout is a simple layered
+  // placement: rows are the longest path from a source so data flows downward,
+  // the pipe spine stays in one column, and each secondary input branches into
+  // a fresh column to the right.  This is deliberately minimal; a
+  // constraint-based layout (elkjs) and cross-view correspondence highlighting
+  // are planned follow-ups.  Any error falls back to the text rendering.
+  var GCOL_W = 180, GROW_H = 64, GPAD = 16, GNODE_W = 150, GNODE_H = 36;
+  var SVGNS = 'http://www.w3.org/2000/svg';
+
+  function parseGraph(viz) {
+    var el = viz.querySelector('.viz-graph-data[data-graph="ast"]');
+    if (!el) return null;
+    try { return JSON.parse(el.textContent); } catch (e) { return null; }
+  }
+
+  // Computes { colOf, rowOf, cols, rows } for the operator nodes.
+  function layoutGraph(g) {
+    var edgesTo = {};        // consumer id -> [{from, kind}]
+    var isProducer = {};     // id -> appears as some edge.from
+    g.nodes.forEach(function (n) { edgesTo[n.id] = []; });
+    g.edges.forEach(function (e) {
+      (edgesTo[e.to] = edgesTo[e.to] || []).push({from: e.from, kind: e.kind});
+      isProducer[e.from] = true;
+    });
+
+    // Row = longest path (in edges) from a source.  Memoized DFS with a cycle
+    // guard (the model is a DAG, but stay defensive).
+    var rowOf = {}, inProg = {};
+    function row(id) {
+      if (rowOf[id] != null) return rowOf[id];
+      if (inProg[id]) return 0;
+      inProg[id] = true;
+      var r = 0;
+      (edgesTo[id] || []).forEach(function (p) {
+        r = Math.max(r, row(p.from) + 1);
+      });
+      inProg[id] = false;
+      return (rowOf[id] = r);
+    }
+    g.nodes.forEach(function (n) { row(n.id); });
+
+    // Column: place each sink and recurse to its producers; a pipe producer
+    // keeps the column, each secondary input opens a fresh column to the right.
+    var colOf = {}, nextCol = 0, seen = {};
+    function place(id, col) {
+      if (seen[id]) return;
+      seen[id] = true;
+      colOf[id] = col;
+      var prods = edgesTo[id] || [];
+      prods.forEach(function (p) {
+        if (p.kind === 'pipe') place(p.from, col);
+      });
+      prods.forEach(function (p) {
+        if (p.kind !== 'pipe') place(p.from, ++nextCol);
+      });
+    }
+    // Sinks (never a producer) first, then anything left disconnected.
+    g.nodes.forEach(function (n) {
+      if (!isProducer[n.id] && !seen[n.id]) place(n.id, nextCol++);
+    });
+    g.nodes.forEach(function (n) {
+      if (!seen[n.id]) place(n.id, nextCol++);
+    });
+
+    var maxRow = 0, maxCol = 0;
+    g.nodes.forEach(function (n) {
+      maxRow = Math.max(maxRow, rowOf[n.id] || 0);
+      maxCol = Math.max(maxCol, colOf[n.id] || 0);
+    });
+    return {colOf: colOf, rowOf: rowOf, cols: maxCol + 1, rows: maxRow + 1};
+  }
+
+  function renderGraph(viz, pane, g) {
+    var lay = layoutGraph(g);
+    var W = GPAD * 2 + lay.cols * GCOL_W;
+    var H = GPAD * 2 + lay.rows * GROW_H;
+    var canvas = document.createElement('div');
+    canvas.className = 'viz-graph';
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+
+    function left(id) { return GPAD + lay.colOf[id] * GCOL_W; }
+    function top(id) { return GPAD + lay.rowOf[id] * GROW_H; }
+    function midX(id) { return left(id) + GNODE_W / 2; }
+
+    // Edge overlay (behind the nodes), arrowheads pointing down.
+    var svg = document.createElementNS(SVGNS, 'svg');
+    svg.setAttribute('class', 'viz-graph-edges');
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    var defs = document.createElementNS(SVGNS, 'defs');
+    defs.innerHTML =
+        '<marker id="viz-arrow" markerWidth="9" markerHeight="9" refX="6"' +
+        ' refY="3" orient="auto" markerUnits="userSpaceOnUse">' +
+        '<path d="M0,0 L6,3 L0,6 Z"></path></marker>';
+    svg.appendChild(defs);
+    g.edges.forEach(function (e) {
+      if (lay.colOf[e.from] == null || lay.colOf[e.to] == null) return;
+      var x1 = midX(e.from), y1 = top(e.from) + GNODE_H;  // producer bottom
+      var x2 = midX(e.to), y2 = top(e.to);                // consumer top
+      var path = document.createElementNS(SVGNS, 'path');
+      path.setAttribute('d', 'M' + x1 + ',' + y1 + ' L' + x2 + ',' + y2);
+      path.setAttribute('class', 'viz-edge viz-edge-' + e.kind);
+      path.setAttribute('marker-end', 'url(#viz-arrow)');
+      svg.appendChild(path);
+    });
+    canvas.appendChild(svg);
+
+    // Nodes.
+    g.nodes.forEach(function (n) {
+      if (lay.colOf[n.id] == null) return;
+      var d = document.createElement('div');
+      d.className = 'viz-gnode';
+      d.setAttribute('data-gnode', n.id);
+      d.style.left = left(n.id) + 'px';
+      d.style.top = top(n.id) + 'px';
+      d.style.width = GNODE_W + 'px';
+      d.style.height = GNODE_H + 'px';
+      d.textContent = n.kind;
+      canvas.appendChild(d);
+    });
+    pane.appendChild(canvas);
+  }
+
+  // (Re)builds the graph canvas in a `.viz` block's Resolved AST pane to match
+  // `state.astView` (removing any stale canvas first).
+  function buildGraph(viz) {
+    var pane = viz.querySelector('.viz-col[data-col="ast"] .viz-pane');
+    if (!pane) return;
+    var stale = pane.querySelector('.viz-graph');
+    if (stale) stale.parentNode.removeChild(stale);
+    if (state.astView !== 'graph') return;
+    var g = parseGraph(viz);
+    if (!g || !g.nodes || !g.nodes.length) return;
+    try { renderGraph(viz, pane, g); } catch (err) { /* keep text view */ }
+  }
+
+  // Pushes the linked Resolved AST view mode onto every `.viz` block.
+  function applyView() {
+    vizBlocks().forEach(function (viz) {
+      var astCol = viz.querySelector('.viz-col[data-col="ast"]');
+      if (astCol) {
+        astCol.classList.toggle('graph-mode', state.astView === 'graph');
+      }
+      var sel = viz.querySelector('.viz-view[data-col="ast"]');
+      if (sel) sel.value = state.astView;
+      buildGraph(viz);
+    });
+  }
+
+  // View-mode selector (linked across all blocks).
+  document.addEventListener('change', function (e) {
+    var sel = e.target.closest ? e.target.closest('.viz-view') : null;
+    if (!sel) return;
+    state.astView = sel.value === 'graph' ? 'graph' : 'text';
+    applyView();
+  });
+
   // --- Window resize: columns scale proportionally via flex automatically.
   // The details box shrinks proportionally when the window shrinks, but never
   // grows beyond ~10 lines purely from window growth (manual drag may exceed
@@ -596,5 +770,6 @@
   if (document.querySelector('.viz')) {
     document.documentElement.setAttribute('data-visualize', '1');
     applyState();
+    applyView();
   }
 })();
