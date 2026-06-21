@@ -1568,15 +1568,20 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   // section carries no cross-pane correspondence (a best-effort mapping through
   // the rewriter is future work).  All pre-rewrite panes above are already
   // built, so rewriting the output in place here is safe.
-  const std::string pre_rewrite_debug = resolved->DebugString();
   if (RewriteResolvedAst(config.analyzer_options(), sql, config.catalog(),
                          config.type_factory(),
                          const_cast<AnalyzerOutput&>(*analyzer_output))
           .ok()) {
     const ResolvedNode* post = analyzer_output->resolved_node();
-    if (post != nullptr && post->DebugString() != pre_rewrite_debug) {
-      data.post_rewrite_ast_text = post->DebugString(debug_config);
-      data.post_rewrite_ast_html = post->DebugStringHtml();
+    if (post != nullptr) {
+      // Compare (and display) in the same linear form: `data.resolved_ast_text`
+      // already holds the pre-rewrite tree in this form, so reuse it rather than
+      // recomputing a separate DebugString just for the changed-or-not check.
+      std::string post_text = post->DebugString(debug_config);
+      if (post_text != data.resolved_ast_text) {
+        data.post_rewrite_ast_text = std::move(post_text);
+        data.post_rewrite_ast_html = post->DebugStringHtml();
+      }
     }
   }
 

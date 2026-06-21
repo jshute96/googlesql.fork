@@ -212,11 +212,11 @@ class ResolvedNode {
   // of a pipe chain, nested query blocks (`rscan-query`) for scans that begin a
   // new query (a non-pipe-input scan field, e.g. a subquery or set-operation
   // input), and an enclosing `rscan-stmt` box for the statement.  Each scan box
-  // carries `data-scan-id` so client-side code can correlate it with the SQL
+  // carries `data-node-id` so client-side code can correlate it with the SQL
   // panes.  Per-node fields are rendered as escaped text inside their box.
   //
   // If `scan_order` is non-null, it is filled with the scans in scan-id order
-  // (i.e. `scan_order[i]` is the scan whose box has `data-scan-id="i"`), so the
+  // (i.e. `scan_order[i]` is the scan whose box has `data-node-id="i"`), so the
   // caller can build a scan->id map to correlate the other panes.
   std::string DebugStringHtml(
       std::vector<const ResolvedScan*>* scan_order = nullptr) const;
