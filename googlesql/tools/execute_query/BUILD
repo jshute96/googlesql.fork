@@ -421,6 +421,7 @@ cc_library(
     deps = [
         ":execute_query_proto_writer",
         ":execute_query_writer",
+        ":query_graph",
         ":selectable_catalog",
         ":simple_proto_evaluator_table_iterator",
         ":string_error_collector",

@@ -421,10 +421,13 @@ consuming field name in `label`); data flows `from`→`to`, drawn downward.
       phase); SQLBuilder emits a structured tree instead of segmented text.
       *Done:* the `QueryGraph` schema + a Resolved-AST emitter
       (`BuildResolvedAstQueryGraph`, reusing the panes' scan-id order so ids
-      align) + JSON serialization + unit tests. *Pending:* emitting it into the
-      page, the SQLBuilder structured tree, and expression-subquery / set-op
-      coverage (the emitter currently walks direct child scans only, matching
-      the linear panes).
+      align) + JSON serialization + unit tests; the JSON is embedded in the
+      page inside the `.viz` block as
+      `<script type="application/json" class="viz-graph-data" data-graph="ast">`
+      for the client renderer to read. *Pending:* the client-side graph
+      renderer (next item), the SQLBuilder structured tree, and
+      expression-subquery / set-op coverage (the emitter currently walks direct
+      child scans only, matching the linear panes).
 - [ ] Graph/tree view via **elkjs** geometry + our HTML nodes + SVG edge
       overlay (arrowheads, downward dataflow); query mode and operator mode.
 - [ ] View-mode selector in column tabs (text / query graph / operator graph),

@@ -48,6 +48,10 @@ struct VisualizationData {
   std::string resolved_ast_html;
   std::string sqlbuilder_sql_html;
   std::string post_rewrite_ast_html;
+
+  // Structured QueryGraph model (JSON) for the Resolved AST, consumed by the
+  // web graph view.  Web-only; the text writer ignores it.
+  std::string resolved_graph_json;
 };
 
 class ExecuteQueryWriter {

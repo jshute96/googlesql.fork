@@ -77,6 +77,7 @@
 #include "googlesql/scripting/script_segment.h"
 #include "googlesql/tools/execute_query/execute_query_proto_writer.h"
 #include "googlesql/tools/execute_query/execute_query_writer.h"
+#include "googlesql/tools/execute_query/query_graph.h"
 #include "googlesql/tools/execute_query/selectable_catalog.h"
 #include "googlesql/tools/execute_query/value_as_table_adapter.h"
 #include "googlesql/base/case.h"
@@ -1523,6 +1524,11 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   for (int i = 0; i < static_cast<int>(scan_order.size()); ++i) {
     scan_ids[scan_order[i]] = i;
   }
+
+  // Structured graph model of the same Resolved AST (node ids reuse the scan-id
+  // order above, so the graph view lines up with the textual panes).
+  data.resolved_graph_json =
+      BuildResolvedAstQueryGraph(resolved, scan_ids).ToJson();
 
   // --- Input SQL pane: box HTML with node info, tagged with scan-ids. ---
   absl::StatusOr<std::string> input_html =

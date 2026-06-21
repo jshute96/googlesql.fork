@@ -104,6 +104,10 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
       current_statement_params_["viz_post_rewrite_ast_html"] =
           data.post_rewrite_ast_html;
     }
+    if (!data.resolved_graph_json.empty()) {
+      current_statement_params_["viz_resolved_graph_json"] =
+          data.resolved_graph_json;
+    }
     got_results_ = true;
     return absl::OkStatus();
   }

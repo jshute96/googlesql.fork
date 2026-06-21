@@ -164,6 +164,9 @@
               </div>
               <div class="viz-info-resizer" title="Drag to resize"></div>
               <div class="viz-info"><span class="viz-info-placeholder">Details for selected node</span></div>
+              {{#viz_resolved_graph_json}}
+              <script type="application/json" class="viz-graph-data" data-graph="ast">{{{viz_resolved_graph_json}}}</script>
+              {{/viz_resolved_graph_json}}
             </div>
             {{#viz_has_post_rewrite}}
             <div class="viz-postrewrite">

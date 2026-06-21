@@ -298,6 +298,29 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {
   EXPECT_EQ(sb.find("data-node-id=\"s1\""), std::string::npos);  // ...but flat.
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeGraphJson) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "FROM (SELECT 1 AS x) |> WHERE x > 0 |> SELECT x", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}"
+                            "[G]{{{viz_resolved_graph_json}}}"
+                            "{{/result_visualized}}{{/statements}}"),
+      result));
+  // The structured QueryGraph model is embedded as JSON, with the same scan
+  // ids (r0..) the Resolved AST pane uses and a pipe-edge spine.
+  std::string g = result.substr(result.find("[G]"));
+  EXPECT_THAT(g, HasSubstr("\"nodes\":["));
+  EXPECT_THAT(g, HasSubstr("\"edges\":["));
+  EXPECT_THAT(g, HasSubstr("\"containers\":["));
+  EXPECT_THAT(g, HasSubstr("\"id\":\"r0\""));
+  EXPECT_THAT(g, HasSubstr("\"kind\":\"pipe\""));
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestVisualizePostRewriteSection) {
   std::string result;
   EXPECT_TRUE(HandleRequest(
