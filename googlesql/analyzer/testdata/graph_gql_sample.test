@@ -93,14 +93,17 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (weight
       IS (% | ! %))
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_3
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS weight_2
     RETURN
-      a_3 AS a_4
+      weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_4 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.weight_3 AS weight;
 --
 ALTERNATION GROUP: match -[weight]->{3,5}
 --
@@ -225,17 +228,20 @@ FROM
       (
         (a_2
         IS (% | ! %))
-        -[a_3
+        -[weight
         IS (% | ! %)]->
-        (a_4
+        (a_3
         IS (% | ! %))
       ) { 3, 5 }
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_5
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS weight_2
     RETURN
-      a_5 AS a_6
+      weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.weight_3 AS weight;
 --
 ALTERNATION GROUP: match weight = -[]-{3,5}
 --
@@ -366,20 +372,23 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (
-        (a_3
+      weight = (
+        (a_2
         IS (% | ! %))
-        -[a_4
+        -[a_3
         IS (% | ! %)]-
-        (a_5
+        (a_4
         IS (% | ! %))
       ) { 3, 5 }
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_6
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS weight_2
     RETURN
-      a_6 AS a_7
+      weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.weight_3 AS weight;
 --
 ALTERNATION GROUP: let weight = 1
 --
@@ -442,13 +451,16 @@ FROM
   GRAPH_TABLE(
     aml
     LET
-      a_2 = 1
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_3
+      weight = 1
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS weight_2
     RETURN
-      a_3 AS a_4
+      weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_4 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.weight_3 AS weight;
 ==
 
 # The Weight column overwrites the incoming name (explicit).
@@ -538,14 +550,17 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
+      (n
       IS (% | ! %))
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_3
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS n_2
     RETURN
-      a_3 AS a_4
+      n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_4 AS n;
+     aml_1.n_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.n_3 AS n;
 --
 ALTERNATION GROUP: match -[n]->{3,5}
 --
@@ -670,17 +685,20 @@ FROM
       (
         (a_2
         IS (% | ! %))
-        -[a_3
+        -[n
         IS (% | ! %)]->
-        (a_4
+        (a_3
         IS (% | ! %))
       ) { 3, 5 }
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_5
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS n_2
     RETURN
-      a_5 AS a_6
+      n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS n;
+     aml_1.n_3
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.n_3 AS n;
 --
 ALTERNATION GROUP: match n = -[]-{3,5}
 --
@@ -811,20 +829,23 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (
-        (a_3
+      n = (
+        (a_2
         IS (% | ! %))
-        -[a_4
+        -[a_3
         IS (% | ! %)]-
-        (a_5
+        (a_4
         IS (% | ! %))
       ) { 3, 5 }
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_6
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS n_2
     RETURN
-      a_6 AS a_7
+      n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS n;
+     aml_1.n_3
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.n_3 AS n;
 --
 ALTERNATION GROUP: let n = 1
 --
@@ -887,13 +908,16 @@ FROM
   GRAPH_TABLE(
     aml
     LET
-      a_2 = 1
-    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS a_3
+      n = 1
+    TABLESAMPLE bernoulli(5 PERCENT) WITH WEIGHT AS n_2
     RETURN
-      a_3 AS a_4
+      n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.a_4 AS n;
+     aml_1.n_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.n_3 AS n;
 ==
 
 select gt.* from
@@ -1138,34 +1162,39 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (a_3
+      p = (x
       IS (% | ! %))
       (
-        (a_4
+        (a_2
         IS (% | ! %))
-        -[a_5
+        -[e
         IS (% | ! %)]->
-        (a_6
+        (a_3
         IS (% | ! %))
       ) { 3, 5 }
-      (a_7
+      (y
       IS (% | ! %))
-      -[a_8
+      -[e2
       IS (% | ! %)]-
-      (a_9
+      (a_4
       IS (% | ! %))
-    TABLESAMPLE reservoir(5 ROWS PARTITION BY a_3, a_3.age, ELEMENT_ID(a_7), SOURCE_NODE_ID(a_8)) WITH WEIGHT AS a_10 REPEATABLE (123)
+    TABLESAMPLE reservoir(5 ROWS PARTITION BY x, x.age, ELEMENT_ID(y), SOURCE_NODE_ID(e2)) WITH WEIGHT AS w REPEATABLE (123)
     LET
-      a_11 = MAX(a_5.amount)
+      highest = MAX(e.amount)
     RETURN
-      PATH_LENGTH(a_2) AS a_12,
-      a_3.age AS a_13,
-      a_11 AS a_14
+      PATH_LENGTH(p) AS p_len,
+      x.age AS age,
+      highest AS highest_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_12 AS p_len,
-     aml_1.a_13 AS age,
-     aml_1.a_14 AS highest;
+     aml_1.p_len,
+     aml_1.age,
+     aml_1.highest_2
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.p_len,
+     graphtablescan_5.age,
+     graphtablescan_5.highest_2 AS highest;
 --
 ALTERNATION GROUP: e,
 --
@@ -1407,34 +1436,39 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (a_3
+      p = (x
       IS (% | ! %))
       (
-        (a_4
+        (a_2
         IS (% | ! %))
-        -[a_5
+        -[e
         IS (% | ! %)]->
-        (a_6
+        (a_3
         IS (% | ! %))
       ) { 3, 5 }
-      (a_7
+      (y
       IS (% | ! %))
-      -[a_8
+      -[e2
       IS (% | ! %)]-
-      (a_9
+      (a_4
       IS (% | ! %))
-    TABLESAMPLE reservoir(5 ROWS PARTITION BY a_2, a_3.age, ELEMENT_ID(a_7), SOURCE_NODE_ID(a_8)) WITH WEIGHT AS a_10 REPEATABLE (123)
+    TABLESAMPLE reservoir(5 ROWS PARTITION BY p, x.age, ELEMENT_ID(y), SOURCE_NODE_ID(e2)) WITH WEIGHT AS w REPEATABLE (123)
     LET
-      a_11 = MAX(a_5.amount)
+      highest = MAX(e.amount)
     RETURN
-      PATH_LENGTH(a_2) AS a_12,
-      a_3.age AS a_13,
-      a_11 AS a_14
+      PATH_LENGTH(p) AS p_len,
+      x.age AS age,
+      highest AS highest_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_12 AS p_len,
-     aml_1.a_13 AS age,
-     aml_1.a_14 AS highest;
+     aml_1.p_len,
+     aml_1.age,
+     aml_1.highest_2
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.p_len,
+     graphtablescan_5.age,
+     graphtablescan_5.highest_2 AS highest;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -1669,34 +1703,39 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (a_3
+      p = (x
       IS (% | ! %))
       (
-        (a_4
+        (a_2
         IS (% | ! %))
-        -[a_5
+        -[e
         IS (% | ! %)]->
-        (a_6
+        (a_3
         IS (% | ! %))
       ) { 3, 5 }
-      (a_7
+      (y
       IS (% | ! %))
-      -[a_8
+      -[e2
       IS (% | ! %)]-
-      (a_9
+      (a_4
       IS (% | ! %))
-    TABLESAMPLE reservoir(5 ROWS PARTITION BY a_3.age, ELEMENT_ID(a_7), SOURCE_NODE_ID(a_8)) WITH WEIGHT AS a_10 REPEATABLE (123)
+    TABLESAMPLE reservoir(5 ROWS PARTITION BY x.age, ELEMENT_ID(y), SOURCE_NODE_ID(e2)) WITH WEIGHT AS w REPEATABLE (123)
     LET
-      a_11 = MAX(a_5.amount)
+      highest = MAX(e.amount)
     RETURN
-      PATH_LENGTH(a_2) AS a_12,
-      a_3.age AS a_13,
-      a_11 AS a_14
+      PATH_LENGTH(p) AS p_len,
+      x.age AS age,
+      highest AS highest_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_12 AS p_len,
-     aml_1.a_13 AS age,
-     aml_1.a_14 AS highest;
+     aml_1.p_len,
+     aml_1.age,
+     aml_1.highest_2
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.p_len,
+     graphtablescan_5.age,
+     graphtablescan_5.highest_2 AS highest;
 ==
 
 # Test a conflicting weight column name with RETURN * (implicit)

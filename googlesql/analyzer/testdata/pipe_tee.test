@@ -289,6 +289,11 @@ MultiStmt
       +-WithRefScan(column_list=KeyValue.[Key#1, Value#2], with_query_name="$tee_cte_1")
 ==
 
+# Exercises the SQLBuilder for TEE with multiple subpipelines using SELECT,
+# WHERE and EXTEND.
+[run_sqlbuilder]
+[sql_builder_target_syntax_mode=pipe]
+[show_sqlbuilder_output]
 FROM KeyValue
 |> TEE (
     |> SELECT key
@@ -362,6 +367,90 @@ GeneralizedQueryStmt
               +-KeyValue.Value#2 AS Value [STRING]
               +-$pipe_extend.k1000#3 AS k1000 [INT64]
 
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> TEE (
+     |> SELECT
+          KeyValue.Key AS Key
+   ), (
+     |> SELECT
+          KeyValue.Value AS Value
+   ), (
+     |> WHERE
+          (KeyValue.Key) = 0
+     |> SELECT
+          KeyValue.Key AS Key,
+          KeyValue.Value AS Value,
+          (KeyValue.Key) * 1000 AS k1000
+   );
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+GeneralizedQueryStmt
++-output_schema=
+| +-OutputSchema
+|   +-output_column_list=
+|     +-KeyValue.Key#1 AS Key [INT64]
+|     +-KeyValue.Value#2 AS Value [STRING]
++-query=
+  +-PipeTeeScan
+    +-column_list=KeyValue.[Key#1, Value#2]
+    +-input_scan=
+    | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-subpipeline_list=
+      +-GeneralizedQuerySubpipeline
+      | +-subpipeline=
+      | | +-Subpipeline
+      | |   +-scan=
+      | |     +-ProjectScan
+      | |       +-column_list=[KeyValue.Key#1]
+      | |       +-input_scan=
+      | |         +-SubpipelineInputScan(column_list=KeyValue.[Key#1, Value#2])
+      | +-output_schema=
+      |   +-OutputSchema
+      |     +-output_column_list=
+      |       +-KeyValue.Key#1 AS Key [INT64]
+      +-GeneralizedQuerySubpipeline
+      | +-subpipeline=
+      | | +-Subpipeline
+      | |   +-scan=
+      | |     +-ProjectScan
+      | |       +-column_list=[KeyValue.Value#2]
+      | |       +-input_scan=
+      | |         +-SubpipelineInputScan(column_list=KeyValue.[Key#1, Value#2])
+      | +-output_schema=
+      |   +-OutputSchema
+      |     +-output_column_list=
+      |       +-KeyValue.Value#2 AS Value [STRING]
+      +-GeneralizedQuerySubpipeline
+        +-subpipeline=
+        | +-Subpipeline
+        |   +-scan=
+        |     +-ProjectScan
+        |       +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.k1000#3]
+        |       +-expr_list=
+        |       | +-k1000#3 :=
+        |       |   +-FunctionCall(GoogleSQL:$multiply(INT64, INT64) -> INT64)
+        |       |     +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+        |       |     +-Literal(type=INT64, value=1000)
+        |       +-input_scan=
+        |         +-FilterScan
+        |           +-column_list=KeyValue.[Key#1, Value#2]
+        |           +-input_scan=
+        |           | +-SubpipelineInputScan(column_list=KeyValue.[Key#1, Value#2])
+        |           +-filter_expr=
+        |             +-FunctionCall(GoogleSQL:$equal(INT64, INT64) -> BOOL)
+        |               +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+        |               +-Literal(type=INT64, value=0)
+        +-output_schema=
+          +-OutputSchema
+            +-output_column_list=
+              +-KeyValue.Key#1 AS Key [INT64]
+              +-KeyValue.Value#2 AS Value [STRING]
+              +-$pipe_select.k1000#3 AS k1000 [INT64]
 
 [REWRITTEN AST]
 MultiStmt
@@ -410,6 +499,120 @@ MultiStmt
   |           +-FunctionCall(GoogleSQL:$equal(INT64, INT64) -> BOOL)
   |             +-ColumnRef(type=INT64, column=KeyValue.Key#1)
   |             +-Literal(type=INT64, value=0)
+  +-QueryStmt
+    +-output_column_list=
+    | +-KeyValue.Key#1 AS Key [INT64]
+    | +-KeyValue.Value#2 AS Value [STRING]
+    +-query=
+      +-WithRefScan(column_list=KeyValue.[Key#1, Value#2], with_query_name="$tee_cte_1")
+==
+
+# Exercises the SQLBuilder for a subpipeline that contains AGGREGATE; it is
+# emitted as `|> EXTEND <key> |> AGGREGATE ... GROUP BY ...`.
+[run_sqlbuilder]
+[sql_builder_target_syntax_mode=pipe]
+[supported_statement_kinds=QUERY,GENERALIZED_QUERY]
+[show_sqlbuilder_output]
+FROM KeyValue
+|> TEE (
+    |> AGGREGATE COUNT(*) AS n GROUP BY key
+   )
+--
+GeneralizedQueryStmt
++-output_schema=
+| +-OutputSchema
+|   +-output_column_list=
+|     +-KeyValue.Key#1 AS Key [INT64]
+|     +-KeyValue.Value#2 AS Value [STRING]
++-query=
+  +-PipeTeeScan
+    +-column_list=KeyValue.[Key#1, Value#2]
+    +-input_scan=
+    | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-subpipeline_list=
+      +-GeneralizedQuerySubpipeline
+        +-subpipeline=
+        | +-Subpipeline
+        |   +-scan=
+        |     +-AggregateScan
+        |       +-column_list=[$groupby.key#4, $aggregate.n#3]
+        |       +-input_scan=
+        |       | +-SubpipelineInputScan(column_list=KeyValue.[Key#1, Value#2])
+        |       +-group_by_list=
+        |       | +-key#4 := ColumnRef(type=INT64, column=KeyValue.Key#1)
+        |       +-aggregate_list=
+        |         +-n#3 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+        +-output_schema=
+          +-OutputSchema
+            +-output_column_list=
+              +-$groupby.key#4 AS key [INT64]
+              +-$aggregate.n#3 AS n [INT64]
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> TEE (
+     |> AGGREGATE
+          COUNT(*) AS n
+        GROUP BY KeyValue.Key AS key_2
+   );
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+GeneralizedQueryStmt
++-output_schema=
+| +-OutputSchema
+|   +-output_column_list=
+|     +-KeyValue.Key#1 AS Key [INT64]
+|     +-KeyValue.Value#2 AS Value [STRING]
++-query=
+  +-PipeTeeScan
+    +-column_list=KeyValue.[Key#1, Value#2]
+    +-input_scan=
+    | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-subpipeline_list=
+      +-GeneralizedQuerySubpipeline
+        +-subpipeline=
+        | +-Subpipeline
+        |   +-scan=
+        |     +-AggregateScan
+        |       +-column_list=[$groupby.key_2#4, $aggregate.n#3]
+        |       +-input_scan=
+        |       | +-SubpipelineInputScan(column_list=KeyValue.[Key#1, Value#2])
+        |       +-group_by_list=
+        |       | +-key_2#4 := ColumnRef(type=INT64, column=KeyValue.Key#1)
+        |       +-aggregate_list=
+        |         +-n#3 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+        +-output_schema=
+          +-OutputSchema
+            +-output_column_list=
+              +-$groupby.key_2#4 AS key_2 [INT64]
+              +-$aggregate.n#3 AS n [INT64]
+
+[REWRITTEN AST]
+MultiStmt
++-statement_list=
+  +-CreateWithEntryStmt
+  | +-with_entry=
+  |   +-WithEntry
+  |     +-with_query_name="$tee_cte_1"
+  |     +-with_subquery=
+  |       +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+  +-QueryStmt
+  | +-output_column_list=
+  | | +-$groupby.key#4 AS key [INT64]
+  | | +-$aggregate.n#3 AS n [INT64]
+  | +-query=
+  |   +-AggregateScan
+  |     +-column_list=[$groupby.key#4, $aggregate.n#3]
+  |     +-input_scan=
+  |     | +-WithRefScan(column_list=KeyValue.[Key#1, Value#2], with_query_name="$tee_cte_1")
+  |     +-group_by_list=
+  |     | +-key#4 := ColumnRef(type=INT64, column=KeyValue.Key#1)
+  |     +-aggregate_list=
+  |       +-n#3 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
   +-QueryStmt
     +-output_column_list=
     | +-KeyValue.Key#1 AS Key [INT64]

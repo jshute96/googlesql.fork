@@ -64,18 +64,18 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
+     SimpleTypes.int64,
+     SimpleTypes.bool
+|> AS simpletypes_1
 |> SELECT
-     simpletypes_3.a_1 AS a_1,
-     simpletypes_3.a_2 AS a_2,
-     SUM(simpletypes_3.a_1
+     simpletypes_1.int64,
+     simpletypes_1.bool,
+     SUM(simpletypes_1.int64
        WHERE
-         NOT((simpletypes_3.a_2) IS NULL)) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_4
-|> AS analyticscan_5
+         NOT((simpletypes_1.bool) IS NULL)) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_2
+|> AS analyticscan_3
 |> SELECT
-     analyticscan_5.a_4 AS a_4;
+     analyticscan_3.a_2;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -118,14 +118,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(simpletypes_3.a_1
+     SUM(SimpleTypes.int64
        WHERE
-         NOT((simpletypes_3.a_2) IS NULL)) AS a_4;
+         NOT((SimpleTypes.bool) IS NULL)) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # WHERE filtering works with analytic functions with various arguments.
@@ -204,25 +203,18 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
-|> EXTEND
-     simpletypes_3.a_1 AS a_4,
-     simpletypes_3.a_2 AS a_5
 |> AGGREGATE
-   GROUP BY a_4, a_5
-|> AS aggregatescan_6
+   GROUP BY SimpleTypes.int64 AS int64_2, SimpleTypes.bool AS bool_2
+|> AS aggregatescan_1
 |> SELECT
-     aggregatescan_6.a_4 AS a_4,
-     aggregatescan_6.a_5 AS a_5,
-     COUNT(DISTINCT aggregatescan_6.a_4
+     aggregatescan_1.int64_2,
+     aggregatescan_1.bool_2,
+     COUNT(DISTINCT aggregatescan_1.int64_2
        WHERE
-         aggregatescan_6.a_5) OVER () AS a_7
-|> AS analyticscan_8
+         aggregatescan_1.bool_2) OVER () AS a_2
+|> AS analyticscan_3
 |> SELECT
-     analyticscan_8.a_7 AS a_7;
+     analyticscan_3.a_2;
 --
 ALTERNATION GROUP: DISTINCT int64,
 --
@@ -280,18 +272,18 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
+     SimpleTypes.int64,
+     SimpleTypes.bool
+|> AS simpletypes_1
 |> SELECT
-     simpletypes_3.a_1 AS a_1,
-     simpletypes_3.a_2 AS a_2,
-     COUNT(DISTINCT simpletypes_3.a_1
+     simpletypes_1.int64,
+     simpletypes_1.bool,
+     COUNT(DISTINCT simpletypes_1.int64
        WHERE
-         simpletypes_3.a_2) OVER () AS a_4
-|> AS analyticscan_5
+         simpletypes_1.bool) OVER () AS a_2
+|> AS analyticscan_3
 |> SELECT
-     analyticscan_5.a_4 AS a_4;
+     analyticscan_3.a_2;
 --
 ALTERNATION GROUP: ROUND(int64, 0),GROUP BY int64, bool
 --
@@ -363,25 +355,18 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
-|> EXTEND
-     simpletypes_3.a_1 AS a_4,
-     simpletypes_3.a_2 AS a_5
 |> AGGREGATE
-   GROUP BY a_4, a_5
-|> AS aggregatescan_6
+   GROUP BY SimpleTypes.int64 AS int64_2, SimpleTypes.bool AS bool_2
+|> AS aggregatescan_1
 |> SELECT
-     aggregatescan_6.a_4 AS a_4,
-     aggregatescan_6.a_5 AS a_5,
-     COUNT(ROUND(CAST(aggregatescan_6.a_4 AS DOUBLE), 0)
+     aggregatescan_1.int64_2,
+     aggregatescan_1.bool_2,
+     COUNT(ROUND(CAST(aggregatescan_1.int64_2 AS DOUBLE), 0)
        WHERE
-         aggregatescan_6.a_5) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_7
-|> AS analyticscan_8
+         aggregatescan_1.bool_2) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_2
+|> AS analyticscan_3
 |> SELECT
-     analyticscan_8.a_7 AS a_7;
+     analyticscan_3.a_2;
 --
 ALTERNATION GROUP: ROUND(int64, 0),
 --
@@ -441,18 +426,18 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
+     SimpleTypes.int64,
+     SimpleTypes.bool
+|> AS simpletypes_1
 |> SELECT
-     simpletypes_3.a_1 AS a_1,
-     simpletypes_3.a_2 AS a_2,
-     COUNT(ROUND(CAST(simpletypes_3.a_1 AS DOUBLE), 0)
+     simpletypes_1.int64,
+     simpletypes_1.bool,
+     COUNT(ROUND(CAST(simpletypes_1.int64 AS DOUBLE), 0)
        WHERE
-         simpletypes_3.a_2) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_4
-|> AS analyticscan_5
+         simpletypes_1.bool) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_2
+|> AS analyticscan_3
 |> SELECT
-     analyticscan_5.a_4 AS a_4;
+     analyticscan_3.a_2;
 --
 ALTERNATION GROUP: *,GROUP BY int64, bool
 --
@@ -516,27 +501,19 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  simpletypes_3.a_2 AS a_4
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int64 AS a_1,
-         SimpleTypes.bool AS a_2
-    |> AS simpletypes_3
-  )
-GROUP BY simpletypes_3.a_1, 1
-|> AS aggregatescan_5
+  SimpleTypes
+|> AGGREGATE
+   GROUP BY SimpleTypes.int64 AS int64_2, SimpleTypes.bool AS bool_2
+|> AS aggregatescan_1
 |> SELECT
-     aggregatescan_5.a_4 AS a_4,
+     aggregatescan_1.bool_2,
      COUNT(*
        WHERE
-         aggregatescan_5.a_4) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_6
-|> AS analyticscan_7
+         aggregatescan_1.bool_2) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_2
+|> AS analyticscan_3
 |> SELECT
-     analyticscan_7.a_6 AS a_6;
+     analyticscan_3.a_2;
 --
 ALTERNATION GROUP: *,
 --
@@ -590,16 +567,16 @@ FROM
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.bool AS a_1
-|> AS simpletypes_2
+     SimpleTypes.bool
+|> AS simpletypes_1
 |> SELECT
-     simpletypes_2.a_1 AS a_1,
+     simpletypes_1.bool,
      COUNT(*
        WHERE
-         simpletypes_2.a_1) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_3
-|> AS analyticscan_4
+         simpletypes_1.bool) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_2
+|> AS analyticscan_3
 |> SELECT
-     analyticscan_4.a_3 AS a_3;
+     analyticscan_3.a_2;
 ==
 
 # WHERE filtering works with multi-level aggregation.
@@ -655,16 +632,14 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.bool AS a_3
-|> AS simpletypes_4
 |> AGGREGATE
-     SUM(ANY_VALUE(simpletypes_4.a_2)
+     SUM(ANY_VALUE(SimpleTypes.int64)
        WHERE
-         simpletypes_4.a_3
-       GROUP BY simpletypes_4.a_1) AS a_5;
+         SimpleTypes.bool
+       GROUP BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: bool
 --
@@ -712,15 +687,14 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(ANY_VALUE(simpletypes_3.a_1)
+     SUM(ANY_VALUE(SimpleTypes.int64)
        WHERE
-         simpletypes_3.a_2
-       GROUP BY simpletypes_3.a_2) AS a_4;
+         SimpleTypes.bool
+       GROUP BY SimpleTypes.bool) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # WHERE filtering works with multiple nested aggregates.
@@ -815,23 +789,20 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   EnumTable
-|> SELECT
-     EnumTable.key AS a_1,
-     EnumTable.TestEnum AS a_2,
-     EnumTable.AnotherTestEnum AS a_3,
-     EnumTable.RowId AS a_4
-|> AS enumtable_5
 |> AGGREGATE
-     SUM(AVG(CAST(MAX(ANY_VALUE(enumtable_5.a_1)
+     SUM(AVG(CAST(MAX(ANY_VALUE(EnumTable.key)
            WHERE
-             (enumtable_5.a_1) > CAST(1 AS INT32)
-           GROUP BY enumtable_5.a_4, enumtable_5.a_3, enumtable_5.a_2) AS INT64)
+             (EnumTable.key) > CAST(1 AS INT32)
+           GROUP BY EnumTable.RowId, EnumTable.AnotherTestEnum, EnumTable.TestEnum) AS INT64)
          WHERE
-           (enumtable_5.a_1) > CAST(10 AS INT32)
-         GROUP BY enumtable_5.a_4, enumtable_5.a_3)
+           (EnumTable.key) > CAST(10 AS INT32)
+         GROUP BY EnumTable.RowId, EnumTable.AnotherTestEnum)
        WHERE
-         (enumtable_5.a_1) > CAST(100 AS INT32)
-       GROUP BY enumtable_5.a_4) AS a_6;
+         (EnumTable.key) > CAST(100 AS INT32)
+       GROUP BY EnumTable.RowId) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # WHERE filtering works with nested fields. GROUP BY on parent field allows
@@ -981,28 +952,22 @@ GROUP BY doublynestedstructtable_2.a_1.f;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(CAST(doublynestedstructtable_2.a_1.e AS INT64) + CAST(doublynestedstructtable_2.a_1.f.d.a AS INT64)
-    WHERE
-      (doublynestedstructtable_2.a_1.f.c) = CAST(1 AS INT32)
-    GROUP BY doublynestedstructtable_2.a_1.f, doublynestedstructtable_2.a_1) AS a_3,
-  SUM(CAST(doublynestedstructtable_2.a_1.f.c AS INT64) + CAST(doublynestedstructtable_2.a_1.f.d.a AS INT64)
-    WHERE
-      (doublynestedstructtable_2.a_1.f.d.b) LIKE "%filter_expr%"
-    GROUP BY doublynestedstructtable_2.a_1.f, doublynestedstructtable_2.a_1.f.c) AS a_4
 FROM
-  (
-    FROM
-      DoublyNestedStructTable
-    |> SELECT
-         DoublyNestedStructTable.doubly_nested_struct AS a_1
-    |> AS doublynestedstructtable_2
-  )
-GROUP BY doublynestedstructtable_2.a_1.f
-|> AS aggregatescan_5
+  DoublyNestedStructTable
+|> AGGREGATE
+     SUM(CAST(DoublyNestedStructTable.doubly_nested_struct.e AS INT64) + CAST(DoublyNestedStructTable.doubly_nested_struct.f.d.a AS INT64)
+       WHERE
+         (DoublyNestedStructTable.doubly_nested_struct.f.c) = CAST(1 AS INT32)
+       GROUP BY DoublyNestedStructTable.doubly_nested_struct.f, DoublyNestedStructTable.doubly_nested_struct) AS a_1,
+     SUM(CAST(DoublyNestedStructTable.doubly_nested_struct.f.c AS INT64) + CAST(DoublyNestedStructTable.doubly_nested_struct.f.d.a AS INT64)
+       WHERE
+         (DoublyNestedStructTable.doubly_nested_struct.f.d.b) LIKE "%filter_expr%"
+       GROUP BY DoublyNestedStructTable.doubly_nested_struct.f, DoublyNestedStructTable.doubly_nested_struct.f.c) AS a_2
+   GROUP BY DoublyNestedStructTable.doubly_nested_struct.f
+|> AS aggregatescan_3
 |> SELECT
-     aggregatescan_5.a_3 AS a_3,
-     aggregatescan_5.a_4 AS a_4;
+     aggregatescan_3.a_1,
+     aggregatescan_3.a_2;
 ==
 
 # WHERE filtering supported in aggregate functions in ORDER BY clause.
@@ -1068,27 +1033,17 @@ ORDER BY aggregatescan_8.a_7;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(simpletypes_5.a_2) AS a_6,
-  AVG(simpletypes_5.a_4
-    WHERE
-      simpletypes_5.a_3) AS a_7
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.int64 AS a_2,
-         SimpleTypes.bool AS a_3,
-         SimpleTypes.double AS a_4
-    |> AS simpletypes_5
-  )
-GROUP BY simpletypes_5.a_1
-|> AS aggregatescan_8
-|> ORDER BY aggregatescan_8.a_7
+  SimpleTypes
+|> AGGREGATE
+     SUM(SimpleTypes.int64) AS a_1,
+     AVG(SimpleTypes.double
+       WHERE
+         SimpleTypes.bool) AS a_2
+   GROUP BY SimpleTypes.int32 AS int32_2
+|> ORDER BY a_2
 |> SELECT
-     aggregatescan_8.a_6 AS a_6;
+     a_1;
 ==
 
 
@@ -1158,28 +1113,18 @@ WHERE
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(simpletypes_5.a_2) AS a_6,
-  AVG(simpletypes_5.a_4
-    WHERE
-      simpletypes_5.a_3) AS a_7
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.int64 AS a_2,
-         SimpleTypes.bool AS a_3,
-         SimpleTypes.double AS a_4
-    |> AS simpletypes_5
-  )
-GROUP BY simpletypes_5.a_1
-|> AS aggregatescan_8
+  SimpleTypes
+|> AGGREGATE
+     SUM(SimpleTypes.int64) AS a_1,
+     AVG(SimpleTypes.double
+       WHERE
+         SimpleTypes.bool) AS a_2
+   GROUP BY SimpleTypes.int32 AS int32_2
 |> WHERE
-     (aggregatescan_8.a_7) > 100.0
+     a_2 > 100.0
 |> SELECT
-     aggregatescan_8.a_6 AS a_6;
+     a_1;
 ==
 
 # WHERE filtering works in GROUP BY queries with QUALIFY clause.
@@ -1279,30 +1224,22 @@ WHERE
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
-|> EXTEND
-     simpletypes_3.a_1 AS a_4,
-     simpletypes_3.a_2 AS a_5
 |> AGGREGATE
-   GROUP BY a_4, a_5
-|> AS aggregatescan_6
+   GROUP BY SimpleTypes.int64 AS int64_2, SimpleTypes.bool AS bool_2
+|> AS aggregatescan_1
 |> SELECT
-     aggregatescan_6.a_4 AS a_4,
-     aggregatescan_6.a_5 AS a_5,
-     SUM(aggregatescan_6.a_4
+     aggregatescan_1.int64_2,
+     aggregatescan_1.bool_2,
+     SUM(aggregatescan_1.int64_2
        WHERE
-         (aggregatescan_6.a_4) > 0) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_7,
-     AVG(aggregatescan_6.a_4
+         (aggregatescan_1.int64_2) > 0) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_2,
+     AVG(aggregatescan_1.int64_2
        WHERE
-         aggregatescan_6.a_5) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_8
-|> AS analyticscan_9
+         aggregatescan_1.bool_2) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_3
 |> WHERE
-     (analyticscan_9.a_8) > 100.0
+     a_3 > 100.0
 |> SELECT
-     analyticscan_9.a_7 AS a_7;
+     a_2;
 ==
 
 # Simple HAVING filter. Alternations for new aggregate and grouping key.
@@ -1359,14 +1296,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(ANY_VALUE(simpletypes_3.a_1)
-       GROUP BY simpletypes_3.a_2
-       HAVING(COUNT(*)) > 10) AS a_4;
+     SUM(ANY_VALUE(SimpleTypes.int64)
+       GROUP BY SimpleTypes.bool
+       HAVING(COUNT(*)) > 10) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: bool
 --
@@ -1413,14 +1349,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(ANY_VALUE(simpletypes_3.a_1)
-       GROUP BY simpletypes_3.a_2
-       HAVING simpletypes_3.a_2) AS a_4;
+     SUM(ANY_VALUE(SimpleTypes.int64)
+       GROUP BY SimpleTypes.bool
+       HAVING SimpleTypes.bool) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # HAVING filter can reference field from query level grouped columns.
@@ -1478,24 +1413,16 @@ GROUP BY simpletypes_4.a_1;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(ANY_VALUE(simpletypes_4.a_3)
-    GROUP BY simpletypes_4.a_1, simpletypes_4.a_2
-    HAVING(simpletypes_4.a_1) > CAST(10 AS INT32)) AS a_5
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.bool AS a_2,
-         SimpleTypes.double AS a_3
-    |> AS simpletypes_4
-  )
-GROUP BY simpletypes_4.a_1
-|> AS aggregatescan_6
+  SimpleTypes
+|> AGGREGATE
+     SUM(ANY_VALUE(SimpleTypes.double)
+       GROUP BY SimpleTypes.int32, SimpleTypes.bool
+       HAVING(SimpleTypes.int32) > CAST(10 AS INT32)) AS a_1
+   GROUP BY SimpleTypes.int32 AS int32_2
+|> AS aggregatescan_2
 |> SELECT
-     aggregatescan_6.a_5 AS a_5;
+     aggregatescan_2.a_1;
 ==
 
 # HAVING filter works with multiple nested aggregates.
@@ -1593,29 +1520,20 @@ GROUP BY enumtable_5.a_4;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(AVG(CAST(MAX(ANY_VALUE(enumtable_5.a_1)
-        GROUP BY enumtable_5.a_4, enumtable_5.a_3, enumtable_5.a_2
-        HAVING NOT((enumtable_5.a_3) IS NULL)) AS INT64)
-      GROUP BY enumtable_5.a_4, enumtable_5.a_3
-      HAVING(COUNT(*)) > 10)
-    GROUP BY enumtable_5.a_4
-    HAVING(MAX(enumtable_5.a_3)) > CAST("ANOTHERTESTENUM0" AS `googlesql_test.AnotherTestEnum`)) AS a_6
 FROM
-  (
-    FROM
-      EnumTable
-    |> SELECT
-         EnumTable.key AS a_1,
-         EnumTable.TestEnum AS a_2,
-         EnumTable.AnotherTestEnum AS a_3,
-         EnumTable.RowId AS a_4
-    |> AS enumtable_5
-  )
-GROUP BY enumtable_5.a_4
-|> AS aggregatescan_7
+  EnumTable
+|> AGGREGATE
+     SUM(AVG(CAST(MAX(ANY_VALUE(EnumTable.key)
+           GROUP BY EnumTable.RowId, EnumTable.AnotherTestEnum, EnumTable.TestEnum
+           HAVING NOT((EnumTable.AnotherTestEnum) IS NULL)) AS INT64)
+         GROUP BY EnumTable.RowId, EnumTable.AnotherTestEnum
+         HAVING(COUNT(*)) > 10)
+       GROUP BY EnumTable.RowId
+       HAVING(MAX(EnumTable.AnotherTestEnum)) > CAST("ANOTHERTESTENUM0" AS `googlesql_test.AnotherTestEnum`)) AS a_1
+   GROUP BY EnumTable.RowId AS RowId_2
+|> AS aggregatescan_2
 |> SELECT
-     aggregatescan_7.a_6 AS a_6;
+     aggregatescan_2.a_1;
 ==
 
 # HAVING filtering supported in aggregate functions in ORDER BY clause.
@@ -1695,27 +1613,17 @@ ORDER BY aggregatescan_8.a_7;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(simpletypes_5.a_2) AS a_6,
-  AVG(ANY_VALUE(simpletypes_5.a_4)
-    GROUP BY simpletypes_5.a_1, simpletypes_5.a_3
-    HAVING((simpletypes_5.a_1) > CAST(10 AS INT32)) AND ((COUNT(*)) = 10)) AS a_7
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.int64 AS a_2,
-         SimpleTypes.bool AS a_3,
-         SimpleTypes.double AS a_4
-    |> AS simpletypes_5
-  )
-GROUP BY simpletypes_5.a_1
-|> AS aggregatescan_8
-|> ORDER BY aggregatescan_8.a_7
+  SimpleTypes
+|> AGGREGATE
+     SUM(SimpleTypes.int64) AS a_1,
+     AVG(ANY_VALUE(SimpleTypes.double)
+       GROUP BY SimpleTypes.int32, SimpleTypes.bool
+       HAVING((SimpleTypes.int32) > CAST(10 AS INT32)) AND ((COUNT(*)) = 10)) AS a_2
+   GROUP BY SimpleTypes.int32 AS int32_2
+|> ORDER BY a_2
 |> SELECT
-     aggregatescan_8.a_6 AS a_6;
+     a_1;
 ==
 
 # HAVING filtering works in GROUP BY queries with query level HAVING clause.
@@ -1811,30 +1719,20 @@ WHERE
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(MIN(simpletypes_5.a_2)
-    GROUP BY simpletypes_5.a_1, simpletypes_5.a_3
-    HAVING(simpletypes_5.a_1) > CAST(10 AS INT32)) AS a_6,
-  AVG(ANY_VALUE(simpletypes_5.a_4)
-    GROUP BY simpletypes_5.a_1, simpletypes_5.a_3
-    HAVING((simpletypes_5.a_1) > CAST(10 AS INT32)) AND ((COUNT(*)) = 10)) AS a_7
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.int64 AS a_2,
-         SimpleTypes.bool AS a_3,
-         SimpleTypes.double AS a_4
-    |> AS simpletypes_5
-  )
-GROUP BY simpletypes_5.a_1
-|> AS aggregatescan_8
+  SimpleTypes
+|> AGGREGATE
+     SUM(MIN(SimpleTypes.int64)
+       GROUP BY SimpleTypes.int32, SimpleTypes.bool
+       HAVING(SimpleTypes.int32) > CAST(10 AS INT32)) AS a_1,
+     AVG(ANY_VALUE(SimpleTypes.double)
+       GROUP BY SimpleTypes.int32, SimpleTypes.bool
+       HAVING((SimpleTypes.int32) > CAST(10 AS INT32)) AND ((COUNT(*)) = 10)) AS a_2
+   GROUP BY SimpleTypes.int32 AS int32_2
 |> WHERE
-     (aggregatescan_8.a_7) > 100.0
+     a_2 > 100.0
 |> SELECT
-     aggregatescan_8.a_6 AS a_6;
+     a_1;
 ==
 
 # HAVING filtering HAVING expressions.
@@ -1919,27 +1817,17 @@ WHERE
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  SUM(MAX(simpletypes_5.a_2)
-    GROUP BY simpletypes_5.a_1, simpletypes_5.a_3
-    HAVING(COUNT(*)) > 100) AS a_6,
-  AVG(simpletypes_5.a_4
-    WHERE
-      simpletypes_5.a_3) AS a_7
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.int64 AS a_2,
-         SimpleTypes.bool AS a_3,
-         SimpleTypes.double AS a_4
-    |> AS simpletypes_5
-  )
-GROUP BY simpletypes_5.a_1
-|> AS aggregatescan_8
+  SimpleTypes
+|> AGGREGATE
+     SUM(MAX(SimpleTypes.int64)
+       GROUP BY SimpleTypes.int32, SimpleTypes.bool
+       HAVING(COUNT(*)) > 100) AS a_1,
+     AVG(SimpleTypes.double
+       WHERE
+         SimpleTypes.bool) AS a_2
+   GROUP BY SimpleTypes.int32 AS int32_2
 |> WHERE
-     (aggregatescan_8.a_7) > 100.0
+     a_2 > 100.0
 |> SELECT
-     aggregatescan_8.a_6 AS a_6;
+     a_1;

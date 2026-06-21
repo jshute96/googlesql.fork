@@ -1749,7 +1749,13 @@ class AnalyzerTestRunner {
           if (outcome.ast_debug == pre_rewrite_result_string) {
             continue;
           }
-          if (test_case_options_.GetBool(kRunSqlBuilder)) {
+          if (test_case_options_.GetBool(kRunSqlBuilder) &&
+              // A ResolvedMultiStmt (produced by REWRITE_GENERALIZED_STMT for
+              // operators like FORK/TEE) has no single-statement SQL form, so it
+              // cannot be round-tripped through the SQLBuilder and re-analyzed
+              // as a single statement. The SQLBuilder for the corresponding
+              // pre-rewrite ResolvedGeneralizedQueryStmt is exercised above.
+              !rewrite_output->resolved_statement()->Is<ResolvedMultiStmt>()) {
             TestSqlBuilder(test_case, options, catalog, /*is_statement=*/true,
                            rewrite_output.get(), &outcome.sqlbuilder_output);
           }

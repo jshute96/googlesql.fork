@@ -57,20 +57,19 @@ SELECT
   (
     SELECT
       ARRAY_CONCAT(ARRAY< STRUCT< a INT64 > >[STRUCT< a INT64 > (1)], ARRAY< STRUCT< a INT64 > >[STRUCT< a INT64 >
-        (2)]) AS a_2
-    |> AS a_2_7
+        (2)]) AS injected
+    |> AS injected_2
     |> SELECT
-         `IF`((a_2) IS NULL, CAST(NULL AS ARRAY< INT64 >), ARRAY(
+         `IF`((injected) IS NULL, CAST(NULL AS ARRAY< INT64 >), ARRAY(
              FROM
-               UNNEST(a_2) AS a_3 WITH OFFSET AS a_4
+               UNNEST(injected) AS injected_2 WITH OFFSET AS injected_3
              |> SELECT
-                  a_3 AS a_3,
-                  a_4 AS a_4,
-                  a_3.a AS a_5
-             |> AS projectscan_6
-             |> ORDER BY projectscan_6.a_4
+                  injected_2,
+                  injected_3,
+                  injected_2.a AS injected_4
+             |> ORDER BY injected_3
              |> SELECT
-                  projectscan_6.a_5 AS a_5
+                  injected_4
            ))
   ) AS a_1;
 
@@ -107,19 +106,18 @@ SELECT
   (
     SELECT
       ARRAY_CONCAT(ARRAY< STRUCT< a INT64 > >[STRUCT< a INT64 > (1)], ARRAY< STRUCT< a INT64 > >[STRUCT< a INT64 >
-        (2)]) AS a_2
-    |> AS projectscan_3
+        (2)]) AS injected
+    |> AS projectscan_2
     |> SELECT
-         `IF`((projectscan_3.a_2) IS NULL, CAST(NULL AS ARRAY< INT64 >), ARRAY(
+         `IF`((projectscan_2.injected) IS NULL, CAST(NULL AS ARRAY< INT64 >), ARRAY(
              FROM
-               UNNEST(projectscan_3.a_2) AS a_5 WITH OFFSET AS a_6
+               UNNEST(projectscan_2.injected) AS injected_3 WITH OFFSET AS injected_4
              |> SELECT
-                  a_5 AS a_5,
-                  a_6 AS a_6,
-                  a_5.a AS a_7
-             |> AS projectscan_8
-             |> ORDER BY projectscan_8.a_6
+                  injected_3,
+                  injected_4,
+                  injected_3.a AS injected_5
+             |> ORDER BY injected_4
              |> SELECT
-                  projectscan_8.a_7 AS a_7
-           )) AS a_4
+                  injected_5
+           )) AS injected_2
   ) AS a_1;

@@ -461,14 +461,14 @@ FROM
      123 AS a_1
 |> AS projectscan_2
 |> SELECT
-     projectscan_2.a_1 AS a_1,
-     456 AS a_3
-|> AS projectscan_4
+     projectscan_2.a_1,
+     456 AS named
+|> AS projectscan_3
 |> DESCRIBE
 |> WHERE
      true
 |> SELECT
-     Describe AS Describe;
+     Describe;
 
 [REWRITTEN AST]
 QueryStmt
@@ -556,22 +556,20 @@ FROM
      123 AS a_1
 |> AS projectscan_2
 |> SELECT
-     projectscan_2.a_1 AS a_1,
-     456 AS a_3
-|> AS projectscan_4
+     projectscan_2.a_1,
+     456 AS named
 |> WHERE
      false
 |> SELECT
-     CAST(NULL AS STRING) AS a_5
+     CAST(NULL AS STRING) AS a_3
 ) UNION ALL(
 SELECT
-  "**Columns**:\nTable Alias  Column Name  Type\n-----------  -----------  -----\nKeyValue     Key          INT64\n             <unnamed>    INT64\n             named        INT64\n\n**Table Aliases**:\nTable Alias  Columns\n-----------  ----------\nKeyValue     Key, Value\n" AS a_6
+  "**Columns**:\nTable Alias  Column Name  Type\n-----------  -----------  -----\nKeyValue     Key          INT64\n             <unnamed>    INT64\n             named        INT64\n\n**Table Aliases**:\nTable Alias  Columns\n-----------  ----------\nKeyValue     Key, Value\n" AS a_4
 )
-|> AS setoperationscan_7
 |> WHERE
      true
 |> SELECT
-     setoperationscan_7.a_5 AS Describe;
+     a_3 AS Describe;
 ==
 
 # Test the rewriter in a case where the output of DESCRIBE is unused.

@@ -546,29 +546,26 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS keyvalue_2
+     KeyValue.Key,
+     (KeyValue.Key) + 1 AS k1,
+     123 AS k2,
+     SQRT(CAST(KeyValue.Key AS DOUBLE)) AS k3
+|> AS projectscan_1
 |> SELECT
-     keyvalue_2.a_1 AS a_1,
-     (keyvalue_2.a_1) + 1 AS a_3,
-     123 AS a_4,
-     SQRT(CAST(keyvalue_2.a_1 AS DOUBLE)) AS a_5
-|> AS projectscan_6
+     projectscan_1.Key,
+     projectscan_1.k1,
+     projectscan_1.k2,
+     projectscan_1.k3,
+     (projectscan_1.k3) + 1.0 AS k4,
+     "abc" AS k5
+|> AS projectscan_2
 |> SELECT
-     projectscan_6.a_1 AS a_1,
-     projectscan_6.a_3 AS a_3,
-     projectscan_6.a_4 AS a_4,
-     projectscan_6.a_5 AS a_5,
-     (projectscan_6.a_5) + 1.0 AS a_7,
-     "abc" AS a_8
-|> AS projectscan_9
+     projectscan_2.k1,
+     "xxx" AS k6,
+     (projectscan_2.k4) + 1.0 AS k7
+|> AS projectscan_3
 |> SELECT
-     projectscan_9.a_3 AS a_3,
-     "xxx" AS a_10,
-     (projectscan_9.a_7) + 1.0 AS a_11
-|> AS projectscan_12
-|> SELECT
-     projectscan_12.a_3 AS k1;
+     projectscan_3.k1;
 ==
 
 select 1 x

@@ -588,77 +588,54 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  assertscan_6.a_1 AS Key,
-  assertscan_6.a_2 AS Value
+  assertscan_5.a_1 AS Key,
+  assertscan_5.a_2 AS Value
 FROM
   (
     SELECT
-      assertscan_5.a_1 AS a_1,
-      assertscan_5.a_2 AS a_2
+      assertscan_4.a_1 AS a_1,
+      assertscan_4.a_2 AS a_2
     FROM
       (
-        SELECT
-          assertscan_5.a_1 AS a_1,
-          assertscan_5.a_2 AS a_2
-        FROM
-          (
-            SELECT
-              assertscan_4.a_1 AS a_1,
-              assertscan_4.a_2 AS a_2
-            FROM
+        (
+          SELECT
+            assertscan_3.a_1 AS a_1,
+            assertscan_3.a_2 AS a_2
+          FROM
+            (
               (
                 SELECT
-                  assertscan_4.a_1 AS a_1,
-                  assertscan_4.a_2 AS a_2
+                  a_1 AS a_1,
+                  a_2 AS a_2
                 FROM
                   (
-                    SELECT
-                      keyvalue_3.a_1 AS a_1,
-                      keyvalue_3.a_2 AS a_2
                     FROM
-                      (
-                        SELECT
-                          KeyValue.Key AS a_1,
-                          KeyValue.Value AS a_2
-                        FROM
-                          KeyValue
-                        |> AS keyvalue_3
-                        |> ASSERT(keyvalue_3.a_1) = 10, "key=10"
-                      )
-                  ) AS assertscan_4
-                |> AS assertscan_4
-                |> ASSERT(assertscan_4.a_1) = 11, IFNULL(assertscan_4.a_2, "NULL")
-              )
-          ) AS assertscan_5
-        |> AS assertscan_5
-        |> ASSERT(assertscan_5.a_1) = 11, CONCAT(IFNULL(CAST(assertscan_5.a_1 AS STRING), "NULL"), " ", IFNULL(assertscan_5.a_2,
+                      KeyValue
+                    |> SELECT
+                         KeyValue.Key AS a_1,
+                         KeyValue.Value AS a_2
+                    |> ASSERT a_1 = 10, "key=10"
+                  )
+              ) AS assertscan_3
+              |> ASSERT(assertscan_3.a_1) = 11, IFNULL(assertscan_3.a_2, "NULL")
+            )
+        ) AS assertscan_4
+        |> ASSERT(assertscan_4.a_1) = 11, CONCAT(IFNULL(CAST(assertscan_4.a_1 AS STRING), "NULL"), " ", IFNULL(assertscan_4.a_2,
                "NULL"))
       )
-  ) AS assertscan_6;
+  ) AS assertscan_5;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> ASSERT(keyvalue_3.a_1) = 10, "key=10"
-|> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2
-|> AS assertscan_4
-|> ASSERT(assertscan_4.a_1) = 11, IFNULL(assertscan_4.a_2, "NULL")
-|> SELECT
-     assertscan_4.a_1 AS a_1,
-     assertscan_4.a_2 AS a_2
-|> AS assertscan_5
-|> ASSERT(assertscan_5.a_1) = 11, CONCAT(IFNULL(CAST(assertscan_5.a_1 AS STRING), "NULL"), " ", IFNULL(assertscan_5.a_2,
+|> ASSERT(KeyValue.Key) = 10, "key=10"
+|> ASSERT(KeyValue.Key) = 11, IFNULL(KeyValue.Value, "NULL")
+|> ASSERT(KeyValue.Key) = 11, CONCAT(IFNULL(CAST(KeyValue.Key AS STRING), "NULL"), " ", IFNULL(KeyValue.Value,
        "NULL"))
 |> SELECT
-     assertscan_5.a_1 AS Key,
-     assertscan_5.a_2 AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 
 [REWRITTEN AST]
 QueryStmt
@@ -772,24 +749,15 @@ WHERE
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS barrierscan_3
+     KeyValue.Key,
+     KeyValue.Value
 |> WHERE
-     `IF`((barrierscan_3.a_1) = 10, true, ERROR(CONCAT("Assert failed: ", "key=10")))
-|> SELECT
-     barrierscan_3.a_1 AS a_1,
-     barrierscan_3.a_2 AS a_2
-|> AS barrierscan_4
+     `IF`(Key = 10, true, ERROR(CONCAT("Assert failed: ", "key=10")))
 |> WHERE
-     `IF`((barrierscan_4.a_1) = 11, true, ERROR(CONCAT("Assert failed: ", IFNULL(barrierscan_4.a_2, "NULL"))))
-|> SELECT
-     barrierscan_4.a_1 AS a_1,
-     barrierscan_4.a_2 AS a_2
-|> AS barrierscan_5
+     `IF`(Key = 11, true, ERROR(CONCAT("Assert failed: ", IFNULL(Value, "NULL"))))
 |> WHERE
-     `IF`((barrierscan_5.a_1) = 11, true, ERROR(CONCAT("Assert failed: ", CONCAT(IFNULL(CAST(barrierscan_5.a_1 AS STRING),
-               "NULL"), " ", IFNULL(barrierscan_5.a_2, "NULL")))))
+     `IF`(Key = 11, true, ERROR(CONCAT("Assert failed: ", CONCAT(IFNULL(CAST(Key AS STRING), "NULL"), " ",
+             IFNULL(Value, "NULL")))))
 |> SELECT
-     barrierscan_5.a_1 AS Key,
-     barrierscan_5.a_2 AS Value;
+     Key,
+     Value;
