@@ -131,9 +131,9 @@ re-add.
 - The leading source segment is always cross-referenced to the source scan `r0`
   (the deepest source); for queries whose top-level FROM is a subquery this is
   approximate.
-- The SQLBuilder pane no longer carries NameLists, so it has no click-details
-  (only correspondence highlighting). Re-adding details would require
-  re-analyzing the regenerated SQL (as an earlier iteration did).
+- The SQLBuilder pane carries no NameLists of its own; clicking a segment shows
+  the details of the **corresponding Resolved AST scan** ("details for the
+  actual node") rather than re-analyzing the regenerated SQL.
 
 ### Structured ids + cross-references (implemented)
 
@@ -343,7 +343,9 @@ noted but not initially built).
 - [x] Milestone 5: JS correspondence engine generalized to "primary +
       corresponding set" via an undirected `data-corresp` walk; the same-pane
       "reflective" set is deferred (tertiary highlight).
-- [ ] Resolved AST / SQLBuilder pane details content (deferred by design).
+- [x] Resolved AST / SQLBuilder pane details content: clicking a Resolved AST
+      box or SQLBuilder segment shows the scan's parent hierarchy + fields in the
+      info box (SQLBuilder via its corresponding scan), entirely client-side.
 - [ ] Nested-subquery-aware segmentation in the SQLBuilder pane.
 - [ ] Handle non-query statements and scripts (currently query-only).
 - [ ] Revisit rewriter handling: visualization currently disables rewriters; a

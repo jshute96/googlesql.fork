@@ -394,6 +394,45 @@
     infoEl.innerHTML = html;
   }
 
+  // First / all direct children of `el` with class `cls`.
+  function directChild(el, cls) {
+    for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
+      if (c.classList && c.classList.contains(cls)) return c;
+    }
+    return null;
+  }
+  function directChildren(el, cls) {
+    var out = [];
+    for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
+      if (c.classList && c.classList.contains(cls)) out.push(c);
+    }
+    return out;
+  }
+
+  // Builds the details stack for a Resolved AST `.rscan` / `.rscan-stmt` box:
+  // the chain of enclosing scan / query boxes (title from each box's own
+  // `.rscan-head`), innermost first, with the innermost box's own
+  // `.rscan-field`s as the body.  Mirrors collectNodeInfo for the input pane.
+  function collectScanHierarchy(box, root) {
+    var items = [], el = box, innermost = true;
+    while (el && root.contains(el)) {
+      if (el.classList && (el.classList.contains('rscan') ||
+                           el.classList.contains('rscan-stmt'))) {
+        var head = directChild(el, 'rscan-head');
+        var body = '';
+        if (innermost) {
+          body = directChildren(el, 'rscan-field').map(function (f) {
+            return f.innerHTML;
+          }).join('<br>');
+        }
+        items.push({ title: head ? head.innerHTML : '', body: body });
+        innermost = false;
+      }
+      el = el.parentElement;
+    }
+    return items;
+  }
+
   // --- Cross-reference correspondence model ------------------------------
   // Every correspondence node carries a stable id in `data-node-id`: Resolved
   // AST and SQLBuilder boxes on the `.rscan` element itself; input boxes on a
@@ -495,10 +534,21 @@
   function handleNodeClick(pane, e) {
     var viz = pane.closest('.viz');
     if (!viz) return;
-    // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.  (Details for
-    // these panes are TBD.)
+    // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.
     var rscan = e.target.closest('.rscan');
     if (rscan && pane.contains(rscan)) {
+      // Details: a Resolved AST box has its own head/fields; a SQLBuilder
+      // segment carries only text, so show the resolved scan it corresponds to
+      // ("details for the actual node").
+      var detailBox = rscan;
+      if (!directChild(rscan, 'rscan-head')) {
+        var ref = (rscan.getAttribute('data-corresp') || '').split(/\s+/)[0];
+        var rb = ref ? viz.querySelector('.rscan[data-node-id="' + ref + '"]')
+                     : null;
+        if (rb) detailBox = rb;
+      }
+      var items = collectScanHierarchy(detailBox, viz);
+      if (items.length > 0) renderDetails(viz, items);
       applyCorrespondence(viz, rscan, rscan.getAttribute('data-node-id'));
       return;
     }
