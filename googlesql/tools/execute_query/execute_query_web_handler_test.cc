@@ -273,6 +273,28 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeScript) {
   EXPECT_EQ(count, 2);
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "SELECT (SELECT 1) AS a, x FROM (SELECT 1 AS x) UNION ALL SELECT 2, 3",
+          "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}"
+                            "[SB]{{{viz_sqlbuilder_sql_html}}}"
+                            "{{/result_visualized}}{{/statements}}"),
+      result));
+  // The regenerated SQL is a UNION of two parenthesized inputs whose pipe
+  // operators are all nested, so the SQLBuilder pane is a single top-level
+  // segment: no bogus top-level split at the nested "|>".
+  std::string sb = result.substr(result.find("[SB]"));
+  EXPECT_THAT(sb, HasSubstr("|&gt;"));  // nested pipe operators are present...
+  EXPECT_THAT(sb, HasSubstr("data-node-id=\"s0\""));
+  EXPECT_EQ(sb.find("data-node-id=\"s1\""), std::string::npos);  // ...but flat.
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestQueryExecutedSimpleResult) {
   std::string result;
   EXPECT_TRUE(HandleRequest(

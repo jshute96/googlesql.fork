@@ -123,11 +123,12 @@ re-add.
 
 ### Known limitations of the segment approach
 
-- Segments are split at every `|>` in the formatted text, regardless of paren
-  nesting, so a nested subquery's operators are split at the top level rather
-  than rendered as a nested block. The `data-corresp` per operator is still
-  correct (emission order matches textual `|>` order); only the visual grouping
-  is flat.
+- Segments split only at *top-level* `|>` (parenthesis/quote-aware), so a
+  nested subquery's pipe operators stay within their enclosing segment's text
+  rather than becoming bogus top-level segments. They are not yet broken out as
+  their own nested boxes (the structured model will do that), and per-operator
+  correspondence for operators nested inside *expressions* is approximate
+  because the SQLBuilder's emission order need not match textual order there.
 - The leading source segment is always cross-referenced to the source scan `r0`
   (the deepest source); for queries whose top-level FROM is a subquery this is
   approximate.
@@ -346,7 +347,11 @@ noted but not initially built).
 - [x] Resolved AST / SQLBuilder pane details content: clicking a Resolved AST
       box or SQLBuilder segment shows the scan's parent hierarchy + fields in the
       info box (SQLBuilder via its corresponding scan), entirely client-side.
-- [ ] Nested-subquery-aware segmentation in the SQLBuilder pane.
+- [x] Nested-subquery-aware segmentation in the SQLBuilder pane: split only at
+      top-level `|>` (paren/quote-aware) so nested pipe operators don't create
+      bogus top-level segments. (Rendering nested operators as their own boxes,
+      and exact correspondence for ops nested in expressions, await the
+      structured model.)
 - [x] Non-query statements: any statement is visualized like a query (the gate
       now skips only non-statement roots such as bare expressions in expression
       mode). Scripts get best-effort per-statement visualization — each

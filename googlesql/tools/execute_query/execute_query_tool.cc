@@ -1387,42 +1387,82 @@ static std::string PreBlockHtml(absl::string_view text) {
                       "</pre>");
 }
 
-// Renders the SQLBuilder pane: splits the formatted pipe SQL at each "|>" and
-// wraps each segment in a `.rscan` box (the same markup the Resolved AST pane
-// uses).  Each segment gets its own id (s0, s1, ...) and a `data-corresp`
+// Renders the SQLBuilder pane: splits the formatted pipe SQL into `.rscan`
+// boxes (the same markup the Resolved AST pane uses), one per *top-level* pipe
+// operator.  Each segment gets its own id (s0, s1, ...) and a `data-corresp`
 // cross-reference (r<id>) to the ResolvedScan that produced it, so the panes
 // line up and the client-side correspondence highlighting lights up across all
-// three panes.  The leading segment (the FROM source, before the first "|>") is
-// cross-referenced to `source_scan_id`; the segment introduced by the (k+1)-th
-// "|>" is cross-referenced to `op_scan_ids[k]` (the SQLBuilder records one scan
-// per emitted "|>", in output order).  A box is shaded to match its scan's
-// parity in the AST pane.
+// three panes.
+//
+// Splitting is parenthesis/quote-aware: only a "|>" at paren depth 0 (and
+// outside string/identifier literals) starts a new segment.  Operators nested
+// inside parentheses (subqueries, set-operation inputs) stay within their
+// enclosing segment's text rather than becoming bogus top-level segments.
+// Every "|>" (at any depth) advances the `op_scan_ids` cursor so top-level
+// segments map to the right scan in the SQLBuilder's emission order; the
+// leading segment (before the first top-level "|>") is cross-referenced to
+// `source_scan_id`.  Per-operator correspondence for operators nested inside
+// *expressions* is approximate (the SQLBuilder's emission order need not match
+// textual order there) and is left to the structured model.  A box is shaded to
+// match its scan's parity in the AST pane.
 static std::string SegmentPipeSqlToHtml(absl::string_view sql,
                                         int source_scan_id,
                                         const std::vector<int>& op_scan_ids) {
-  std::vector<absl::string_view> segments;
-  size_t start = 0;    // beginning of the current segment
-  size_t search = 0;   // where to resume searching for the next "|>"
-  while (true) {
-    size_t pipe = sql.find("|>", search);
-    if (pipe == absl::string_view::npos) {
-      segments.push_back(sql.substr(start));
-      break;
+  struct Segment {
+    size_t start, end;
+    int scan_id;
+  };
+  std::vector<Segment> segments;
+  size_t seg_start = 0;
+  int op_index = 0;     // count of "|>" seen so far, at any depth
+  int cur_scan_id = source_scan_id;
+  int depth = 0;
+  char quote = 0;       // open string/identifier quote char, or 0 if not in one
+  for (size_t i = 0; i < sql.size(); ++i) {
+    const char c = sql[i];
+    if (quote != 0) {
+      if (c == '\\') {
+        ++i;             // skip the escaped character
+      } else if (c == quote) {
+        quote = 0;
+      }
+      continue;
     }
-    // segments[0] is the leading source (may be empty); each later segment
-    // begins at a "|>".
-    segments.push_back(sql.substr(start, pipe - start));
-    start = pipe;
-    search = pipe + 2;
+    switch (c) {
+      case '\'':
+      case '"':
+      case '`':
+        quote = c;
+        break;
+      case '(':
+        ++depth;
+        break;
+      case ')':
+        if (depth > 0) --depth;
+        break;
+      case '|':
+        if (i + 1 < sql.size() && sql[i + 1] == '>') {
+          const int sid = op_index < static_cast<int>(op_scan_ids.size())
+                              ? op_scan_ids[op_index]
+                              : -1;
+          ++op_index;
+          if (depth == 0) {
+            segments.push_back({seg_start, i, cur_scan_id});
+            seg_start = i;
+            cur_scan_id = sid;
+          }
+          ++i;           // skip the '>'
+        }
+        break;
+      default:
+        break;
+    }
   }
+  segments.push_back({seg_start, sql.size(), cur_scan_id});
 
   std::string html = "<div class=\"rscan-stmt\">";
   for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
-    const int scan_id =
-        (i == 0) ? source_scan_id
-                 : (i - 1 < static_cast<int>(op_scan_ids.size())
-                        ? op_scan_ids[i - 1]
-                        : -1);
+    const int scan_id = segments[i].scan_id;
     const char* cls = (scan_id >= 0 && scan_id % 2 == 1) ? "scan-b" : "scan-a";
     absl::StrAppend(&html, "<div class=\"rscan ", cls, "\" data-node-id=\"s", i,
                     "\"");
@@ -1431,7 +1471,8 @@ static std::string SegmentPipeSqlToHtml(absl::string_view sql,
     }
     absl::StrAppend(
         &html, ">",
-        EscapeHtmlText(absl::StripTrailingAsciiWhitespace(segments[i])),
+        EscapeHtmlText(absl::StripTrailingAsciiWhitespace(sql.substr(
+            segments[i].start, segments[i].end - segments[i].start))),
         "</div>");
   }
   absl::StrAppend(&html, "</div>");
