@@ -19,6 +19,9 @@
 
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 
@@ -57,16 +60,48 @@ struct ResolvedScanInfo {
   std::shared_ptr<const NameList> input_name_list;
 };
 
+// Extra information the resolver learned about an AST node that resolved to a
+// ResolvedFunctionCall.
+struct FunctionCallInfo {
+  // The chosen concrete function signature, including the return type,
+  // formatted as a string.  E.g. "SUM(INT64) -> INT64".
+  std::string signature;
+};
+
+// Extra information the resolver learned about an AST node that is a statement.
+struct StatementInfo {
+  // For a query statement, the visible output columns as (name, type) pairs.
+  // Empty for non-query statements and for value-table output.
+  std::vector<std::pair<std::string, std::string>> output_columns;
+
+  // True if the query statement's output is a value table.
+  bool is_value_table = false;
+
+  // For value-table output, the value type formatted as a string.
+  std::string value_table_type;
+};
+
 // Extra information the resolver learned about a particular AST node, beyond
 // what is captured in the resolved AST.  This is intended for query visualizer
 // and similar tooling.  Which fields are populated depends on the kind of node
 // and what the resolver was able to learn about it.
 struct ASTNodeResolvedInfo {
+  // A short human-readable title for this node, for use as a heading in
+  // visualizer tooling. Examples: "Table my.dataset.T", "|> WHERE",
+  // "FROM query", "Table subquery", "CTE subquery cte_name". May be empty.
+  std::string node_title;
+
   // Set when this AST node resolved to a ResolvedTableScan.
   std::optional<TableScanInfo> table_scan_info;
 
   // Set when this AST node directly corresponds to some ResolvedScan.
   std::optional<ResolvedScanInfo> resolved_scan_info;
+
+  // Set when this AST node resolved to a ResolvedFunctionCall.
+  std::optional<FunctionCallInfo> function_call_info;
+
+  // Set when this AST node is a statement.
+  std::optional<StatementInfo> statement_info;
 };
 
 // Maps an AST node to the extra resolution information the resolver learned

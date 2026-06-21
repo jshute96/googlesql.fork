@@ -20,6 +20,7 @@
 
 #include "googlesql/tools/execute_query/web/page_body.html.h"
 #include "googlesql/tools/execute_query/web/page_template.html.h"
+#include "googlesql/tools/execute_query/web/query_viewer.js.h"
 #include "googlesql/tools/execute_query/web/style.css.h"
 #include "googlesql/tools/execute_query/web/table.html.h"
 
@@ -33,6 +34,7 @@ const QueryWebTemplates& QueryWebTemplates::Default() {
 QueryWebTemplates::QueryWebTemplates()
     : page_template_(embedded_resources::kPageTemplate),
       style_css_(embedded_resources::kStyleCSS),
+      query_viewer_js_(embedded_resources::kQueryViewerJS),
       page_body_(embedded_resources::kPageBody),
       table_(embedded_resources::kTable) {}
 
@@ -42,6 +44,10 @@ const std::string& QueryWebTemplates::GetWebPageContents() const {
 
 const std::string& QueryWebTemplates::GetWebPageCSS() const {
   return style_css_;
+}
+
+const std::string& QueryWebTemplates::GetWebPageJS() const {
+  return query_viewer_js_;
 }
 
 const std::string& QueryWebTemplates::GetWebPageBody() const {

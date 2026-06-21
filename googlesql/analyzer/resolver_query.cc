@@ -318,6 +318,17 @@ std::string PipeOperatorName(const ASTNode* pipe_node) {
   return pipe_node->GetNodeKindString();
 }
 
+// Returns a human-readable title for a pipe operator node, for use as a heading
+// in query visualizer tooling, e.g. "|> WHERE".  Reuses `PipeOperatorName`,
+// turning its "pipe WHERE" style into the "|> WHERE" syntax.
+std::string PipeOperatorTitle(const ASTNode* pipe_node) {
+  std::string name = PipeOperatorName(pipe_node);
+  if (absl::StartsWith(name, "pipe ")) {
+    return absl::StrCat("|> ", absl::string_view(name).substr(5));
+  }
+  return name;
+}
+
 // Returns an error if the given query has an unbounded list of selected
 // columns, which is implicitly possible when using pipe syntax. Intended to be
 // used in strict mode to avoid the number of output query columns being
@@ -994,6 +1005,31 @@ absl::Status Resolver::ResolveQuery(
       pipe_operator_list, scope, output, output_name_list,
       options.inferred_type_for_query, options.allow_terminal));
 
+  // Record query-level info for query visualizer tooling.  The title is the
+  // caller-provided hint if any (e.g. "Table subquery", "CTE subquery foo"),
+  // otherwise derived from the query's role.
+  {
+    ASTNodeResolvedInfo& query_info = ast_node_resolved_info_map_[query];
+    if (!options.node_title_hint.empty()) {
+      query_info.node_title = options.node_title_hint;
+    } else if (options.is_expr_subquery) {
+      query_info.node_title = "Expression subquery";
+    } else if (!query->pipe_operator_list().empty()) {
+      // A query with pipe operators; this node is the parent of both the
+      // initial query (FROM/SELECT) and the pipe operators that follow it.
+      query_info.node_title = "Query with pipe operators";
+    } else if (options.is_outer_query) {
+      query_info.node_title = "Query";
+    } else {
+      query_info.node_title = "Query fragment";
+    }
+    if (*output_name_list != nullptr) {
+      query_info.resolved_scan_info = ResolvedScanInfo{
+          .output_name_list = *output_name_list,
+      };
+    }
+  }
+
   if (in_strict_mode()) {
     GOOGLESQL_RETURN_IF_ERROR(
         DisallowImplicitSelectStar(query->query_expr(), pipe_operator_list));
@@ -1352,6 +1388,7 @@ absl::Status Resolver::ResolvePipeOperatorList(
     // operators, the output name list is null because they produce no table.
     ASTNodeResolvedInfo& resolved_info =
         ast_node_resolved_info_map_[pipe_operator];
+    resolved_info.node_title = PipeOperatorTitle(pipe_operator);
     resolved_info.resolved_scan_info = ResolvedScanInfo{
         .is_pipe_operator = true,
         .output_name_list = *current_name_list,
@@ -3378,9 +3415,11 @@ Resolver::ResolveAliasedQuery(const ASTAliasedQuery* with_entry,
     // We always pass empty_name_scope_ when resolving the subquery inside
     // WITH.  Those queries must stand alone and cannot reference any
     // correlated columns or other names defined outside.
-    GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(with_entry->query(), empty_name_scope_.get(),
-                                 with_alias, &resolved_subquery,
-                                 &subquery_name_list));
+    GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(
+        with_entry->query(), empty_name_scope_.get(), with_alias,
+        &resolved_subquery, &subquery_name_list,
+        {.node_title_hint =
+             absl::StrCat("CTE subquery ", with_alias.ToString())}));
 
     // We don't want pseudo-columns from the subquery to make it out
     // of the WITH, so prune them away.
@@ -4598,6 +4637,15 @@ absl::Status Resolver::ResolveFromQuery(
   }
 
   *output_name_list = name_list;
+
+  // Record info for query visualizer tooling: a FROM query is the initial
+  // segment of a pipe query and produces this output NameList.
+  ASTNodeResolvedInfo& from_info = ast_node_resolved_info_map_[from_query];
+  from_info.node_title = "FROM query";
+  from_info.resolved_scan_info = ResolvedScanInfo{
+      .output_name_list = name_list,
+  };
+
   return absl::OkStatus();
 }
 
@@ -13978,7 +14026,8 @@ absl::Status Resolver::ResolveTableSubquery(
   std::unique_ptr<const ResolvedScan> resolved_subquery;
   std::shared_ptr<const NameList> subquery_name_list;
   GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(table_ref->subquery(), scope, alias,
-                               &resolved_subquery, &subquery_name_list));
+                               &resolved_subquery, &subquery_name_list,
+                               {.node_title_hint = "Table subquery"}));
   GOOGLESQL_RET_CHECK(nullptr != subquery_name_list);
 
   // A table subquery never preserves order, so we clear is_ordered on the
@@ -17718,6 +17767,7 @@ absl::Status Resolver::MakeScanForTable(
   // Record information about this table scan for query visualizer tooling,
   // keyed on the AST node for the table reference.
   ASTNodeResolvedInfo& resolved_info = ast_node_resolved_info_map_[ast_location];
+  resolved_info.node_title = absl::StrCat("Table ", table->FullName());
   resolved_info.table_scan_info = TableScanInfo{
       .table = table,
       .output_name_list = name_list,

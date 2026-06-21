@@ -42,12 +42,19 @@ gen_string_constant_header_file(
     variable = "kStyleCSS",
 )
 
+gen_string_constant_header_file(
+    name = "query_viewer_js_h",
+    src = "query_viewer.js",
+    variable = "kQueryViewerJS",
+)
+
 cc_library(
     name = "embedded_resources",
     srcs = [
         "embedded_resources.cc",
         "page_body.html.h",
         "page_template.html.h",
+        "query_viewer.js.h",
         "style.css.h",
         "table.html.h",
     ],

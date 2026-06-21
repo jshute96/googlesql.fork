@@ -1235,6 +1235,17 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "reflection_helper_test",
+    srcs = ["reflection_helper_test.cc"],
+    deps = [
+        ":reflection_cc_proto",
+        ":reflection_helper",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
 proto_library(
     name = "reflection_proto",
     srcs = ["reflection.proto"],
