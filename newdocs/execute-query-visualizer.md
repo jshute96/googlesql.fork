@@ -428,22 +428,25 @@ consuming field name in `label`); data flows `from`→`to`, drawn downward.
       structured tree, and expression-subquery / set-op coverage (the emitter
       currently walks direct child scans only, matching the linear panes).
 - [~] Graph/tree view via elkjs geometry + our HTML nodes + SVG edge overlay
-      (arrowheads, downward dataflow); query mode and operator mode. *Done:* an
-      initial **operator-mode** renderer in `query_viewer.js` — HTML `.viz-gnode`
-      boxes positioned by a small hermetic layered layout (rows = longest path
-      from a source so data flows down; pipe spine in one column, secondary
-      inputs branch right) with an SVG edge overlay (downward arrowheads; pipe
-      edges solid, secondary inputs dashed), clicking a node shows its scan
-      hierarchy in the details box. *Pending / deferred:* **elkjs** for a
-      constraint-based layout (vendoring it is a separate step — the restricted
-      sandbox can't fetch it, so v1 is hermetic), **query mode**, and the richer
-      join/set-op/CTE placement constraints. The hand-rolled layout is the
-      "simpler fallback for a first cut" the library study calls out.
+      (arrowheads, downward dataflow); query mode and operator mode. *Done:*
+      hermetic **operator-mode** and **query-mode** renderers in
+      `query_viewer.js` — HTML `.viz-gnode` boxes positioned by a small layered
+      layout (rows = longest path from a source so data flows down; pipe spine
+      in one column, secondary inputs branch right) with an SVG edge overlay
+      (downward arrowheads; pipe edges solid, secondary inputs dashed). Query
+      mode is a client-side collapse of the operators sharing a container into
+      one node per query box (a query node corresponds to all the scans it
+      aggregates). Clicking a node shows its scan hierarchy in the details box.
+      *Pending / deferred:* **elkjs** for a constraint-based layout (vendoring
+      it is a separate step — the restricted sandbox can't fetch it, so v1 is
+      hermetic), and the richer join/set-op/CTE placement constraints. The
+      hand-rolled layout is the "simpler fallback for a first cut" the library
+      study calls out.
 - [~] View-mode selector in column tabs (text / query graph / operator graph),
       linked across all panes in the window. *Done:* a `text` / `operator graph`
-      `<select>` in the Resolved AST tab, linked via the shared `state.astView`
-      across every `.viz` block. *Pending:* the query-graph option, and
-      extending the selector to the other columns once they get tree views.
+      / `query graph` `<select>` in the Resolved AST tab, linked via the shared
+      `state.astView` across every `.viz` block. *Pending:* extending the
+      selector to the other columns once they get tree views.
 - [ ] Out-of-line subqueries with placeholders (`<table:…>`, `<cte:…>`,
       `<subquery:N>`, `<subpipeline:N>`); CTE reference edges and stacking.
 - [~] Cross-view correspondence: N-operator dashed grouping box,

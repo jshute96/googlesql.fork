@@ -147,8 +147,10 @@ class QueryGraphBuilder {
         continue;
       }
       const ResolvedScan* child_scan = child->GetAs<ResolvedScan>();
+      // Label the nested query box by its output (top) scan's kind, so the
+      // collapsed query-graph node reads meaningfully (e.g. "JoinScan").
       const std::string child_container =
-          AddContainer("query", container);
+          AddContainer(child_scan->node_kind_string(), container);
       const std::string child_out = AddChain(child_scan, child_container);
       if (!child_out.empty()) {
         graph_.edges.push_back(

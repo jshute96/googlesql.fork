@@ -562,7 +562,17 @@
     var gnode = e.target.closest('.viz-gnode');
     if (gnode && pane.contains(gnode)) {
       var gid = gnode.getAttribute('data-node-id');
-      var box = viz.querySelector('.rscan[data-node-id="' + gid + '"]');
+      // Details come from the corresponding (hidden) text `.rscan` box.  An
+      // operator node shares the box's id; a query node (b<n>) has no box of
+      // its own, so use its first aggregated operator (`data-corresp`).
+      var detailId = gid;
+      var box = viz.querySelector('.rscan[data-node-id="' + detailId + '"]');
+      if (!box) {
+        detailId = (gnode.getAttribute('data-corresp') || '').split(/\s+/)[0];
+        box = detailId
+            ? viz.querySelector('.rscan[data-node-id="' + detailId + '"]')
+            : null;
+      }
       if (box) {
         var gitems = collectScanHierarchy(box, viz);
         if (gitems.length > 0) renderDetails(viz, gitems);
@@ -679,7 +689,11 @@
     return {colOf: colOf, rowOf: rowOf, cols: maxCol + 1, rows: maxRow + 1};
   }
 
-  function renderGraph(viz, pane, g) {
+  // Renders graph `g` into `pane`.  `correspOf(id)` returns the ids this node
+  // corresponds to (set as `data-corresp`); operator nodes share the text box's
+  // id and inherit its edges, so they pass `null`, but query nodes (ids in the
+  // `b<n>` space) list the operator ids they aggregate.
+  function renderGraph(viz, pane, g, correspOf) {
     var lay = layoutGraph(g);
     var W = GPAD * 2 + lay.cols * GCOL_W;
     var H = GPAD * 2 + lay.rows * GROW_H;
@@ -721,6 +735,10 @@
       var d = document.createElement('div');
       d.className = 'viz-gnode';
       d.setAttribute('data-node-id', n.id);
+      var corresp = correspOf ? correspOf(n.id) : null;
+      if (corresp && corresp.length) {
+        d.setAttribute('data-corresp', corresp.join(' '));
+      }
       d.style.left = left(n.id) + 'px';
       d.style.top = top(n.id) + 'px';
       d.style.width = GNODE_W + 'px';
@@ -731,6 +749,33 @@
     pane.appendChild(canvas);
   }
 
+  // Collapses the operator graph to a query graph: one node per container that
+  // holds operators, edges between containers derived from the inter-container
+  // operator edges (deduped), and `members[containerId] = [operator ids]` so a
+  // query node can correspond to the scans it aggregates.
+  function collapseToQueries(g) {
+    var cont = {}, members = {};
+    g.nodes.forEach(function (n) {
+      cont[n.id] = n.container;
+      (members[n.container] = members[n.container] || []).push(n.id);
+    });
+    var nodes = g.containers.filter(function (c) { return members[c.id]; })
+        .map(function (c) {
+          return {id: c.id, kind: c.kind, container: c.parent};
+        });
+    var seen = {}, edges = [];
+    g.edges.forEach(function (e) {
+      var a = cont[e.from], b = cont[e.to];
+      if (!a || !b || a === b) return;
+      var key = a + '>' + b + '>' + e.kind;
+      if (seen[key]) return;
+      seen[key] = true;
+      edges.push({from: a, to: b, kind: e.kind, label: e.label});
+    });
+    return {graph: {nodes: nodes, edges: edges, containers: g.containers},
+            members: members};
+  }
+
   // (Re)builds the graph canvas in a `.viz` block's Resolved AST pane to match
   // `state.astView` (removing any stale canvas first).
   function buildGraph(viz) {
@@ -738,10 +783,19 @@
     if (!pane) return;
     var stale = pane.querySelector('.viz-graph');
     if (stale) stale.parentNode.removeChild(stale);
-    if (state.astView !== 'graph') return;
+    if (state.astView === 'text') return;
     var g = parseGraph(viz);
     if (!g || !g.nodes || !g.nodes.length) return;
-    try { renderGraph(viz, pane, g); } catch (err) { /* keep text view */ }
+    try {
+      if (state.astView === 'query') {
+        var collapsed = collapseToQueries(g);
+        renderGraph(viz, pane, collapsed.graph, function (id) {
+          return collapsed.members[id] || [];
+        });
+      } else {
+        renderGraph(viz, pane, g, null);
+      }
+    } catch (err) { /* keep text view */ }
   }
 
   // Pushes the linked Resolved AST view mode onto every `.viz` block.
@@ -749,7 +803,7 @@
     vizBlocks().forEach(function (viz) {
       var astCol = viz.querySelector('.viz-col[data-col="ast"]');
       if (astCol) {
-        astCol.classList.toggle('graph-mode', state.astView === 'graph');
+        astCol.classList.toggle('graph-mode', state.astView !== 'text');
       }
       var sel = viz.querySelector('.viz-view[data-col="ast"]');
       if (sel) sel.value = state.astView;
@@ -761,7 +815,8 @@
   document.addEventListener('change', function (e) {
     var sel = e.target.closest ? e.target.closest('.viz-view') : null;
     if (!sel) return;
-    state.astView = sel.value === 'graph' ? 'graph' : 'text';
+    var v = sel.value;
+    state.astView = (v === 'operator' || v === 'query') ? v : 'text';
     applyView();
   });
 
