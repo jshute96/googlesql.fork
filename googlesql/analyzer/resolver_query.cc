@@ -1161,6 +1161,11 @@ absl::Status Resolver::ResolvePipeOperatorList(
     GOOGLESQL_RET_CHECK(*current_name_list != nullptr);
     NameScope current_scope(outer_scope, *current_name_list);
 
+    // The names in scope before this pipe operator, captured for query
+    // visualizer tooling below.  After the operator is resolved,
+    // `*current_name_list` holds the names in scope afterwards.
+    NameListPtr input_name_list = *current_name_list;
+
     switch (pipe_operator->node_kind()) {
       case AST_PIPE_WHERE:
         GOOGLESQL_RETURN_IF_ERROR(ResolvePipeWhere(pipe_operator->GetAs<ASTPipeWhere>(),
@@ -1341,6 +1346,17 @@ absl::Status Resolver::ResolvePipeOperatorList(
     // a table.
     GOOGLESQL_RET_CHECK_EQ(terminal_operator_name != nullptr,
                  *current_name_list == nullptr);
+
+    // Record information about this pipe operator for query visualizer tooling,
+    // including the names in scope before and after the operator.  For terminal
+    // operators, the output name list is null because they produce no table.
+    ASTNodeResolvedInfo& resolved_info =
+        ast_node_resolved_info_map_[pipe_operator];
+    resolved_info.resolved_scan_info = ResolvedScanInfo{
+        .is_pipe_operator = true,
+        .output_name_list = *current_name_list,
+        .input_name_list = std::move(input_name_list),
+    };
   }
 
   // Now add the ResolvedWithScans at the end.
@@ -17698,6 +17714,14 @@ absl::Status Resolver::MakeScanForTable(
     GOOGLESQL_ASSIGN_OR_RETURN(name_list, NameList::AddRangeVariableInWrappingNameList(
                                     alias, alias_location, name_list));
   }
+
+  // Record information about this table scan for query visualizer tooling,
+  // keyed on the AST node for the table reference.
+  ASTNodeResolvedInfo& resolved_info = ast_node_resolved_info_map_[ast_location];
+  resolved_info.table_scan_info = TableScanInfo{
+      .table = table,
+      .output_name_list = name_list,
+  };
 
   *output_table_scan = std::move(table_scan);
   *output_name_list = std::move(name_list);
