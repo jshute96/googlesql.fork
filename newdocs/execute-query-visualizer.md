@@ -126,6 +126,32 @@ re-add.
   (only correspondence highlighting). Re-adding details would require
   re-analyzing the regenerated SQL (as an earlier iteration did).
 
+### Planned evolution: structured output instead of segmented text
+
+The current SQLBuilder correspondence is a passive side-channel
+(`pipe_operator_scan_order()`) plus after-the-fact text segmentation at `|>`.
+The more robust design (discussed during development) is for the SQLBuilder to
+stop emitting a flat string with separate pointers into it, and instead build a
+**structured list/tree of output elements** (sequential and nested), each
+carrying a reference to the `ResolvedScan` it came from — or, if we emit HTML
+`<div>`s with hierarchical IDs during generation, the divs' IDs *are* the
+references. Correspondence then needs no re-segmentation and naturally respects
+nesting (fixing the limitations above). This is a `QueryExpression`-level
+refactor and is deliberately out of scope for this prework.
+
+### Where the scan-id lives: external map vs. node field
+
+Today the scan-id is held in an **external** `flat_hash_map<const ResolvedScan*,
+int>` built from `DebugStringHtml`'s emission order, and shared across panes;
+this works because the visualizer analyzes once and hands the *same* Resolved
+AST to both the HTML emitter and the SQLBuilder, so the `ResolvedScan*` pointers
+match. An alternative is to **store the id on the node** (a field on
+`ResolvedNode`/`ASTNode`, filled by a pass). That would be worth doing if the id
+ever needs to persist *inside* the tree — e.g. if the SQLBuilder had to emit an
+inline id reference during generation, or to keep ids stable across a rewriter
+pass that reorders scans. Not needed yet (rewriters are disabled for
+visualization), so we keep the external map.
+
 ## Status / TODOs
 
 - [x] Milestone 1: `Visualize` tool mode; text output; web 3-pane scaffold.
