@@ -545,20 +545,54 @@
     var byId = collectNodes(viz);
     var primaryPane = byId[startId] ? byId[startId].pane :
         (clickedEl.closest ? clickedEl.closest('.viz-pane') : null);
+    var corresp = [];                                   // highlighted records
     reachableIds(buildAdj(byId), startId).forEach(function (id) {
       var rec = byId[id];
       if (!rec || rec.el === clickedEl) return;
       if (rec.pane && rec.pane === primaryPane) return;  // reflective: defer
       rec.el.classList.add('viz-corresp');
+      corresp.push(rec);
+    });
+    scrollCorrespIntoView(clickedEl, primaryPane, corresp);
+  }
+
+  // Element's top offset within its scroll pane's content (px).
+  function offsetInPane(el, pane) {
+    return el.getBoundingClientRect().top - pane.getBoundingClientRect().top +
+        pane.scrollTop;
+  }
+
+  // Scrolls each *other* pane so its topmost corresponding node aligns
+  // vertically with the clicked node's position in its own pane's viewport.
+  function scrollCorrespIntoView(clickedEl, clickedPane, corresp) {
+    if (!clickedPane || !corresp.length) return;
+    var anchor = clickedEl.getBoundingClientRect().top -
+        clickedPane.getBoundingClientRect().top;       // viewport offset
+    var topByPane = {};                                 // pane -> {pane, el, off}
+    corresp.forEach(function (rec) {
+      var pane = rec.pane;
+      if (!pane || pane === clickedPane) return;
+      var off = offsetInPane(rec.el, pane);
+      // Key by pane identity by stashing a sequence id on the pane element.
+      var cur = topByPane[pane.__vizKey || (pane.__vizKey = ++scrollPaneSeq)];
+      if (!cur || off < cur.off) {
+        topByPane[pane.__vizKey] = {pane: pane, el: rec.el, off: off};
+      }
+    });
+    Object.keys(topByPane).forEach(function (k) {
+      var entry = topByPane[k];
+      var desired = Math.max(0, entry.off - anchor);
+      try { entry.pane.scrollTo({top: desired, behavior: 'smooth'}); }
+      catch (e) { entry.pane.scrollTop = desired; }
     });
   }
+  var scrollPaneSeq = 0;
 
   function handleNodeClick(pane, e) {
     var viz = pane.closest('.viz');
     if (!viz) return;
-    // Operator-graph node: details come from the corresponding (hidden) text
-    // `.rscan` box, which shares the node's id.  (Cross-view correspondence
-    // highlighting is a planned follow-up.)
+    // Graph node (operator or query): show details from the corresponding text
+    // `.rscan` box and drive cross-pane correspondence highlighting.
     var gnode = e.target.closest('.viz-gnode');
     if (gnode && pane.contains(gnode)) {
       var gid = gnode.getAttribute('data-node-id');

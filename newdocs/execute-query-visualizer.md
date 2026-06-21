@@ -454,9 +454,11 @@ consuming field name in `label`); data flows `from`→`to`, drawn downward.
       *Done:* the correspondence engine is view-aware — graph nodes share the
       `r<n>` ids, and `collectNodes` highlights the *visible* element per id, so
       clicking a graph node highlights its corresponding input/SQLBuilder nodes
-      (and vice-versa) in operator-graph mode just as in text mode. *Pending:*
-      the N-operator dashed grouping box, placeholder ↔ target highlight, and
-      scroll-into-view with vertical alignment.
+      (and vice-versa) in operator- and query-graph modes just as in text mode;
+      and **scroll-into-view** now scrolls each other pane so its topmost
+      corresponding node aligns vertically with the clicked node. *Pending:* the
+      N-operator dashed grouping box and placeholder ↔ target highlight (the
+      individual-highlight fallback is in place for both).
 - [ ] SQL AST graph view (syntactic containment; split only FROM tables /
       subqueries and pipe operators).
 - [ ] (If useful) tertiary "reflective" highlight (deferred; see Highlight
