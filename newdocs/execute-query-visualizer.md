@@ -347,7 +347,15 @@ noted but not initially built).
       box or SQLBuilder segment shows the scan's parent hierarchy + fields in the
       info box (SQLBuilder via its corresponding scan), entirely client-side.
 - [ ] Nested-subquery-aware segmentation in the SQLBuilder pane.
-- [ ] Handle non-query statements and scripts (currently query-only).
+- [x] Non-query statements: any statement is visualized like a query (the gate
+      now skips only non-statement roots such as bare expressions in expression
+      mode). Scripts get best-effort per-statement visualization — each
+      top-level statement is framed as its own block and visualized, skipping
+      any that don't analyze standalone (e.g. ones that reference script
+      variables, or control-flow constructs).
+- [ ] Full-fidelity script visualization via script-executor integration
+      (analyze each statement in its run-time variable context, rather than the
+      current best-effort standalone analysis).
 - [ ] Revisit rewriter handling: visualization currently disables rewriters; a
       toggle may be wanted.
 

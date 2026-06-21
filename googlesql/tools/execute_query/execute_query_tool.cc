@@ -1446,9 +1446,10 @@ static std::string SegmentPipeSqlToHtml(absl::string_view sql,
 static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
                                    ExecuteQueryConfig& config,
                                    ExecuteQueryWriter& writer) {
-  // Only queries are visualized for now.  In query mode the parser root is
-  // always an ASTStatement.
-  if (config.sql_mode() != ExecuteQueryConfig::SqlMode::kQuery) {
+  // Visualize any statement (SELECT, DML, DDL, ...).  Skip non-statement roots
+  // such as bare expressions (expression mode), which don't fit the query-pane
+  // model.  Scripts reach this per top-level statement via their own path.
+  if (!ast->IsStatement()) {
     return absl::OkStatus();
   }
 
@@ -2531,6 +2532,23 @@ static absl::Status ExecuteScript(absl::string_view script,
   if (config.has_tool_mode(ToolMode::kParse) ||
       config.has_tool_mode(ToolMode::kUnparse)) {
     GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, script, config, writer));
+  }
+  if (config.has_tool_mode(ToolMode::kVisualize)) {
+    // Visualize each top-level statement of the script independently, framing
+    // each as its own statement block (StartStatement flushes the previous; the
+    // caller flushes the last).  A script statement may not analyze standalone
+    // (e.g. it references a script variable whose type is only known at run
+    // time); such statements are skipped rather than aborting the whole script.
+    // Full-fidelity script visualization would require integrating with the
+    // script executor so each statement is analyzed in its run-time context.
+    if (const ASTScript* script_node = (*ast)->GetAsOrNull<ASTScript>()) {
+      bool is_first = true;
+      for (const ASTStatement* stmt : script_node->statement_list()) {
+        GOOGLESQL_RETURN_IF_ERROR(writer.StartStatement(is_first));
+        is_first = false;
+        VisualizeQuery(script, stmt, config, writer).IgnoreError();
+      }
+    }
   }
   if (config.has_tool_mode(ToolMode::kExecute)) {
     GOOGLESQL_RETURN_IF_ERROR(ExplainAndOrExecuteSql(nullptr, config, writer, script));

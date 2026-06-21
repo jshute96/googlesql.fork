@@ -233,6 +233,46 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeCrossRefs) {
   EXPECT_THAT(sb, HasSubstr("|&gt; WHERE"));
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeNonQueryStatement) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "CREATE TABLE t AS SELECT 1 AS x", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}"
+                            "[V]{{{viz_resolved_ast_html}}}"
+                            "{{/result_visualized}}{{/statements}}"),
+      result));
+  // A non-query (DDL) statement is visualized just like a query: the resolved
+  // CREATE-statement block contains the query's scan boxes.
+  EXPECT_THAT(result, HasSubstr("[V]"));
+  EXPECT_THAT(result, HasSubstr("class=\"rscan "));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeScript) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kScript,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "SELECT 1 AS x; SELECT 2 AS y;", "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}"
+                            "[V]{{{viz_resolved_ast_html}}}"
+                            "{{/result_visualized}}{{/statements}}"),
+      result));
+  // Each top-level statement of the script is visualized as its own block.
+  int count = 0;
+  for (size_t pos = 0; (pos = result.find("[V]", pos)) != std::string::npos;
+       pos += 3) {
+    ++count;
+  }
+  EXPECT_EQ(count, 2);
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestQueryExecutedSimpleResult) {
   std::string result;
   EXPECT_TRUE(HandleRequest(
