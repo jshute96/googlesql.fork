@@ -49,7 +49,10 @@ FROM
 |> AGGREGATE
      SumOfAggregateArgs(SimpleTypes.int64
        WHERE
-         (SimpleTypes.int64) > 10) AS a_1;
+         (SimpleTypes.int64) > 10) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 
 Rewrite ERROR: SQL function inliner cannot inline aggregate function Lazy_resolution_function:SumOfAggregateArgs with WHERE filter modifier
 ==
@@ -113,7 +116,10 @@ FROM
 |> AGGREGATE
      SumOfAggregateArgs(MAX(SimpleTypes.int64)
        GROUP BY SimpleTypes.string
-       HAVING(MIN(SimpleTypes.int64)) > 10) AS a_1;
+       HAVING(MIN(SimpleTypes.int64)) > 10) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 
 Rewrite ERROR: SQL function inliner cannot inline aggregate function Lazy_resolution_function:SumOfAggregateArgs with GROUP BY modifier
 ==
@@ -234,7 +240,10 @@ FROM
 FROM
   UNNEST(ARRAY< INT64 >[1, 2, 3] AS e)
 |> AGGREGATE
-     WRAPPEDAGGWITHWHEREMODIFIER(e) AS a_1;
+     WRAPPEDAGGWITHWHEREMODIFIER(e) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -304,7 +313,10 @@ FROM
          (projectscan_1.e_2) > 10) AS a_2
 |> AS aggregatescan_3
 |> SELECT
-     aggregatescan_3.a_2 AS a_4;
+     aggregatescan_3.a_2 AS a_4
+|> AS projectscan_5
+|> SELECT
+     projectscan_5.a_4;
 
 ==
 
@@ -363,7 +375,10 @@ FROM
 |> AGGREGATE
      SumOfAggregateArgs(MAX(SimpleTypes.int64)
        GROUP BY SimpleTypes.bool
-       HAVING(COUNT(*)) > 10) AS a_1;
+       HAVING(COUNT(*)) > 10) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 
 Rewrite ERROR: SQL function inliner cannot inline aggregate function Lazy_resolution_function:SumOfAggregateArgs with GROUP BY modifier
 ==
@@ -491,7 +506,10 @@ FROM
 FROM
   UNNEST(ARRAY< INT64 >[1, 2, 3] AS e)
 |> AGGREGATE
-     WRAPPEDAGGWITHHAVINGMODIFIER(e) AS a_1;
+     WRAPPEDAGGWITHHAVINGMODIFIER(e) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -565,7 +583,10 @@ FROM
        HAVING(COUNT(*)) > 10) AS a_2
 |> AS aggregatescan_3
 |> SELECT
-     aggregatescan_3.a_2 AS a_4;
+     aggregatescan_3.a_2 AS a_4
+|> AS projectscan_5
+|> SELECT
+     projectscan_5.a_4;
 ==
 
 # Test inlining a non-templated UDA with a WHERE modifier and a non-templated
@@ -749,7 +770,11 @@ FROM
 |> AS aggregatescan_4
 |> SELECT
      aggregatescan_4.a_2 AS a_5,
-     aggregatescan_4.a_3 AS a_6;
+     aggregatescan_4.a_3 AS a_6
+|> AS projectscan_7
+|> SELECT
+     projectscan_7.a_5,
+     projectscan_7.a_6;
 ==
 
 # Test inlining a TVF with a filter.
@@ -824,7 +849,13 @@ FROM
 |> AGGREGATE
      COUNT(*
        WHERE
-         x > 2) AS result;
+         x > 2) AS result
+|> AS aggregatescan_1
+|> SELECT
+     aggregatescan_1.result
+|> AS projectscan_2
+|> SELECT
+     projectscan_2.result;
 ==
 
 # Test inlining a templated TVF with a filter.
@@ -1047,37 +1078,45 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-WITH
-  unused AS (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32,
-         SimpleTypes.int64,
-         SimpleTypes.uint32,
-         SimpleTypes.uint64,
-         SimpleTypes.string,
-         SimpleTypes.bytes,
-         SimpleTypes.bool,
-         SimpleTypes.float,
-         SimpleTypes.double,
-         SimpleTypes.date,
-         SimpleTypes.timestamp_seconds,
-         SimpleTypes.timestamp_millis,
-         SimpleTypes.timestamp_micros,
-         SimpleTypes.timestamp_nanos,
-         SimpleTypes.timestamp,
-         SimpleTypes.numeric,
-         SimpleTypes.bignumeric,
-         SimpleTypes.json,
-         SimpleTypes.uuid
-  )
 FROM
-  UNNEST(ARRAY< INT64 >[1, 2, 3] AS x)
-|> AGGREGATE
-     COUNT(*
-       WHERE
-         x > 2) AS result;
+  (WITH
+      unused AS (
+        FROM
+          SimpleTypes
+        |> SELECT
+             SimpleTypes.int32,
+             SimpleTypes.int64,
+             SimpleTypes.uint32,
+             SimpleTypes.uint64,
+             SimpleTypes.string,
+             SimpleTypes.bytes,
+             SimpleTypes.bool,
+             SimpleTypes.float,
+             SimpleTypes.double,
+             SimpleTypes.date,
+             SimpleTypes.timestamp_seconds,
+             SimpleTypes.timestamp_millis,
+             SimpleTypes.timestamp_micros,
+             SimpleTypes.timestamp_nanos,
+             SimpleTypes.timestamp,
+             SimpleTypes.numeric,
+             SimpleTypes.bignumeric,
+             SimpleTypes.json,
+             SimpleTypes.uuid
+      )
+    FROM
+      UNNEST(ARRAY< INT64 >[1, 2, 3] AS x)
+    |> AGGREGATE
+         COUNT(*
+           WHERE
+             x > 2) AS result
+    |> AS aggregatescan_1
+    |> SELECT
+         aggregatescan_1.result
+    |> AS withscan_2
+  )
+|> SELECT
+     withscan_2.result;
 ==
 
 # Test inlining a UDF with a filter.
@@ -1156,7 +1195,11 @@ SELECT
     |> AGGREGATE
          COUNT(*
            WHERE
-             false) AS a_3) AS a_1;
+             false) AS a_3
+    |> AS aggregatescan_4
+    |> SELECT
+         aggregatescan_4.a_3
+  ) AS a_1;
 ==
 
 # Test inlining a templated UDF with a filter.
@@ -1270,4 +1313,8 @@ SELECT
     |> AGGREGATE
          COUNT(arg
            WHERE
-             true) AS a_3)) AS a_1;
+             true) AS a_3
+    |> AS aggregatescan_4
+    |> SELECT
+         aggregatescan_4.a_3
+  )) AS a_1;

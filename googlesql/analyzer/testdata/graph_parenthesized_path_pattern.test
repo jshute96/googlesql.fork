@@ -148,7 +148,12 @@ FROM
 |> SELECT
      aml_1.Id,
      aml_1.PersonId,
-     aml_1.c_id;
+     aml_1.c_id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.Id,
+     graphtablescan_2.PersonId,
+     graphtablescan_2.c_id;
 
 ==
 
@@ -368,7 +373,12 @@ FROM
 |> SELECT
      aml_1.id,
      aml_1.accountId,
-     aml_1.fid;
+     aml_1.fid
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.id,
+     graphtablescan_6.accountId,
+     graphtablescan_6.fid;
 ==
 
 select * from graph_table(
@@ -642,7 +652,12 @@ FROM
 |> SELECT
      aml_1.Id,
      aml_1.PersonId,
-     aml_1.fid;
+     aml_1.fid
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.Id,
+     graphtablescan_6.PersonId,
+     graphtablescan_6.fid;
 ==
 
 select * from graph_table(
@@ -838,7 +853,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.id,
-     aml_1.accountId;
+     aml_1.accountId
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.id,
+     graphtablescan_5.accountId;
 ==
 
 select * from graph_table(
@@ -957,7 +976,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.res;
+     aml_1.res
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.res;
 ==
 
 select * from graph_table(
@@ -1162,7 +1184,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.Id;
+     aml_1.Id
+|> AS graphtablescan_7
+|> SELECT
+     graphtablescan_7.Id;
 ==
 
 select * from graph_table(
@@ -1328,7 +1353,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.id;
+     aml_1.id
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.id;
 ==
 
 select * from graph_table(
@@ -1494,7 +1522,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.id;
+     aml_1.id
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.id;
 ==
 
 select * from graph_table(
@@ -1750,7 +1781,18 @@ FROM
      aml_1.name,
      aml_1.syndicateData,
      aml_1.syndicateId,
-     aml_1.syndicateName;
+     aml_1.syndicateName
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.age,
+     graphtablescan_5.balance,
+     graphtablescan_5.birthday,
+     graphtablescan_5.data,
+     graphtablescan_5.id,
+     graphtablescan_5.name,
+     graphtablescan_5.syndicateData,
+     graphtablescan_5.syndicateId,
+     graphtablescan_5.syndicateName;
 ==
 
 select * from graph_table(
@@ -2289,7 +2331,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.accountId,
-     aml_1.personId;
+     aml_1.personId
+|> AS graphtablescan_15
+|> SELECT
+     graphtablescan_15.accountId,
+     graphtablescan_15.personId;
 ==
 
 select * from graph_table(
@@ -2742,7 +2788,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.accountId,
-     aml_1.personId;
+     aml_1.personId
+|> AS graphtablescan_11
+|> SELECT
+     graphtablescan_11.accountId,
+     graphtablescan_11.personId;
 
 ==
 

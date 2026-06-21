@@ -1730,10 +1730,10 @@ FROM
 |> SELECT
      aml_1.distinct_ids,
      aml_1.name
-|> AS projectscan_3
+|> AS graphtablescan_3
 |> SELECT
-     projectscan_3.name,
-     projectscan_3.distinct_ids;
+     graphtablescan_3.name,
+     graphtablescan_3.distinct_ids;
 ==
 
 # SQLBuilder test: more complex example
@@ -2006,9 +2006,14 @@ FROM
       first_acc_id AS first_acc_id_2
   ) AS aml_1
 |> SELECT
-     aml_1.name_2 AS name,
-     aml_1.distinct_ids_2 AS distinct_ids,
-     aml_1.first_acc_id_2 AS first_acc_id;
+     aml_1.name_2,
+     aml_1.distinct_ids_2,
+     aml_1.first_acc_id_2
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name_2 AS name,
+     graphtablescan_2.distinct_ids_2 AS distinct_ids,
+     graphtablescan_2.first_acc_id_2 AS first_acc_id;
 ==
 
 # Subquery with struct.*
@@ -2266,7 +2271,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.birthday,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.birthday,
+     graphtablescan_3.balance;
 ==
 
 # Explicit group by
@@ -4766,8 +4775,12 @@ FROM
       distinct_ids AS distinct_ids_2
   ) AS aml_1
 |> SELECT
-     aml_1.name_2 AS name,
-     aml_1.distinct_ids_2 AS distinct_ids;
+     aml_1.name_2,
+     aml_1.distinct_ids_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name_2 AS name,
+     graphtablescan_3.distinct_ids_2 AS distinct_ids;
 ==
 
 # SQLBuilder test: more complex example
@@ -5044,9 +5057,14 @@ FROM
       first_acc_id_2 AS first_acc_id_3
   ) AS aml_1
 |> SELECT
-     aml_1.name_3 AS name,
-     aml_1.distinct_ids_3 AS distinct_ids,
-     aml_1.first_acc_id_3 AS first_acc_id;
+     aml_1.name_3,
+     aml_1.distinct_ids_3,
+     aml_1.first_acc_id_3
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name_3 AS name,
+     graphtablescan_3.distinct_ids_3 AS distinct_ids,
+     graphtablescan_3.first_acc_id_3 AS first_acc_id;
 ==
 
 # Subquery with struct.*
@@ -5336,8 +5354,12 @@ FROM
       balance_2 AS balance_3
   ) AS aml_1
 |> SELECT
-     aml_1.birthday_3 AS birthday,
-     aml_1.balance_3 AS balance;
+     aml_1.birthday_3,
+     aml_1.balance_3
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.birthday_3 AS birthday,
+     graphtablescan_3.balance_3 AS balance;
 ==
 
 # Explicit group by

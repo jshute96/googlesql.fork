@@ -121,7 +121,10 @@ FROM
 |> AGGREGATE
      SUM(SimpleTypes.int64
        WHERE
-         NOT((SimpleTypes.bool) IS NULL)) AS a_1;
+         NOT((SimpleTypes.bool) IS NULL)) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # WHERE filtering works with analytic functions with various arguments.
@@ -633,7 +636,10 @@ FROM
      SUM(ANY_VALUE(SimpleTypes.int64)
        WHERE
          SimpleTypes.bool
-       GROUP BY SimpleTypes.int32) AS a_1;
+       GROUP BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: bool
 --
@@ -685,7 +691,10 @@ FROM
      SUM(ANY_VALUE(SimpleTypes.int64)
        WHERE
          SimpleTypes.bool
-       GROUP BY SimpleTypes.bool) AS a_1;
+       GROUP BY SimpleTypes.bool) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # WHERE filtering works with multiple nested aggregates.
@@ -790,7 +799,10 @@ FROM
          GROUP BY EnumTable.RowId, EnumTable.AnotherTestEnum)
        WHERE
          (EnumTable.key) > CAST(100 AS INT32)
-       GROUP BY EnumTable.RowId) AS a_1;
+       GROUP BY EnumTable.RowId) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # WHERE filtering works with nested fields. GROUP BY on parent field allows
@@ -1287,7 +1299,10 @@ FROM
 |> AGGREGATE
      SUM(ANY_VALUE(SimpleTypes.int64)
        GROUP BY SimpleTypes.bool
-       HAVING(COUNT(*)) > 10) AS a_1;
+       HAVING(COUNT(*)) > 10) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: bool
 --
@@ -1337,7 +1352,10 @@ FROM
 |> AGGREGATE
      SUM(ANY_VALUE(SimpleTypes.int64)
        GROUP BY SimpleTypes.bool
-       HAVING SimpleTypes.bool) AS a_1;
+       HAVING SimpleTypes.bool) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # HAVING filter can reference field from query level grouped columns.

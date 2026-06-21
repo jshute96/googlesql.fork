@@ -109,18 +109,22 @@ rather than crashing while rendering.
 
 ### B.1 Many scans → fewer operators (collapse)
 
+Two collapses remain, both expected:
+
 | # | Case | Where | Status |
 |---|------|-------|--------|
 | 1 | **Leaf `TableScan` absorbed into the `FROM` head.** A table scan becomes the bare `FROM <table>` root that the next operator appends onto, instead of being wrapped under its own alias. | `TryUseLeafTableScanColumns()` `sql_builder.cc:11904` | Expected. `FROM Table` ↔ a `TableScan` is the natural correspondence. |
 | 2 | **`ResolvedSubpipelineInputScan` → pipe head.** The subpipeline input is an empty pipe head (marked `MarkAsPipeOperatorChain`), the thing operators attach to, not an operator itself. | `query_expression.h:278`; `GetInputPipeSQL` `sql_builder.cc:11880` | Expected. |
-| 3 | **Degenerate / pass-through `ProjectScan` elided.** A `ProjectScan` that only forwards its input columns (no computed columns, no hints, same column list) is short-circuited. | `IsDegenerateProjectScan()` `sql_builder.cc:3237`; short-circuit at `:3323` | Internal optimization — no observable effect on the pipe text (see below). |
 
-The degenerate-`ProjectScan` elision (#3) does not actually drop a column from
-the output: the forwarded columns are emitted anyway, either by the accumulated
-trailing `|> SELECT` (B.3 #6) or absorbed into the preceding operator's output
-(e.g. an `AGGREGATE`). Routing such a projection through the normal path instead
-of short-circuiting produces byte-identical pipe text, so this is an internal
-optimization rather than a 1:1 gap.
+In Pipe syntax mode every `ResolvedProjectScan` maps to a pipe operator,
+including a **degenerate (pass-through) projection** — one that forwards its input
+columns unchanged (no computed columns, no hints, same column list). It is
+emitted as a `|> SELECT` of its columns rather than being elided, keeping the
+scan↔operator mapping 1:1 (the `|> SELECT` is a no-op, and the columns also flow
+under fresh aliases via the wrap that precedes it — see B.3). The elision is
+still applied in Standard syntax mode, where a redundant nested `SELECT` would be
+pure noise. See `VisitResolvedProjectScan` and `IsDegenerateProjectScan`
+(`sql_builder.cc:3237`, `:3328`).
 
 **There is no group-by-key `ProjectScan` collapse.** Group-by key expressions are
 not separate scans — they live in the `AggregateScan`'s `group_by_list` and are
@@ -166,8 +170,9 @@ append-as-you-go path (strategy 2) is the structural fix.
   fixable without new syntax. Group-by keys never fall back — they are always
   materialized with unique, uniquified aliases.
 - **B.1**: leaf `TableScan` → `FROM` head and the subpipeline input head are
-  expected; the degenerate-`ProjectScan` elision is an internal optimization with
-  no observable effect. There is no group-by-key `ProjectScan` collapse.
+  expected. Every `ResolvedProjectScan` maps to a pipe operator, including a
+  degenerate pass-through (emitted as a no-op `|> SELECT`); the elision applies
+  only in Standard syntax mode. There is no group-by-key `ProjectScan` collapse.
 - **B.2**: an `AggregateScan` can expand to more than one operator (extra grouping
   keys / output projection; forced `|> EXTEND` for constant and grouping-set
   keys) to satisfy pipe-syntax rules.

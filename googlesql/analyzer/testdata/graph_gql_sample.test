@@ -100,7 +100,10 @@ FROM
       weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.weight_3 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.weight_3 AS weight;
 --
 ALTERNATION GROUP: match -[weight]->{3,5}
 --
@@ -235,7 +238,10 @@ FROM
       weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.weight_3 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.weight_3 AS weight;
 --
 ALTERNATION GROUP: match weight = -[]-{3,5}
 --
@@ -379,7 +385,10 @@ FROM
       weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.weight_3 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.weight_3 AS weight;
 --
 ALTERNATION GROUP: let weight = 1
 --
@@ -448,7 +457,10 @@ FROM
       weight_2 AS weight_3
   ) AS aml_1
 |> SELECT
-     aml_1.weight_3 AS weight;
+     aml_1.weight_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.weight_3 AS weight;
 ==
 
 # The Weight column overwrites the incoming name (explicit).
@@ -545,7 +557,10 @@ FROM
       n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.n_3 AS n;
+     aml_1.n_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.n_3 AS n;
 --
 ALTERNATION GROUP: match -[n]->{3,5}
 --
@@ -680,7 +695,10 @@ FROM
       n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.n_3 AS n;
+     aml_1.n_3
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.n_3 AS n;
 --
 ALTERNATION GROUP: match n = -[]-{3,5}
 --
@@ -824,7 +842,10 @@ FROM
       n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.n_3 AS n;
+     aml_1.n_3
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.n_3 AS n;
 --
 ALTERNATION GROUP: let n = 1
 --
@@ -893,7 +914,10 @@ FROM
       n_2 AS n_3
   ) AS aml_1
 |> SELECT
-     aml_1.n_3 AS n;
+     aml_1.n_3
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.n_3 AS n;
 ==
 
 select gt.* from
@@ -1165,7 +1189,12 @@ FROM
 |> SELECT
      aml_1.p_len,
      aml_1.age,
-     aml_1.highest_2 AS highest;
+     aml_1.highest_2
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.p_len,
+     graphtablescan_5.age,
+     graphtablescan_5.highest_2 AS highest;
 --
 ALTERNATION GROUP: e,
 --
@@ -1434,7 +1463,12 @@ FROM
 |> SELECT
      aml_1.p_len,
      aml_1.age,
-     aml_1.highest_2 AS highest;
+     aml_1.highest_2
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.p_len,
+     graphtablescan_5.age,
+     graphtablescan_5.highest_2 AS highest;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -1696,7 +1730,12 @@ FROM
 |> SELECT
      aml_1.p_len,
      aml_1.age,
-     aml_1.highest_2 AS highest;
+     aml_1.highest_2
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.p_len,
+     graphtablescan_5.age,
+     graphtablescan_5.highest_2 AS highest;
 ==
 
 # Test a conflicting weight column name with RETURN * (implicit)

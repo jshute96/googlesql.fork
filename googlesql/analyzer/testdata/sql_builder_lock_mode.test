@@ -1589,14 +1589,19 @@ FROM
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-WITH
-  kv1 AS (
-    FROM
-      KeyValue
-    |> SELECT
-         KeyValue.Key
-  )
 FROM
-  kv1 AS withrefscan_1
+  (WITH
+      kv1 AS (
+        FROM
+          KeyValue
+        |> SELECT
+             KeyValue.Key
+      )
+    FROM
+      kv1 AS withrefscan_1
+    |> SELECT
+         withrefscan_1.Key
+    |> AS withscan_2
+  )
 |> SELECT
-     withrefscan_1.Key AS key;
+     withscan_2.Key AS key;

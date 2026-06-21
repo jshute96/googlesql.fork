@@ -1720,7 +1720,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # WALK path mode on top-level path.
@@ -1872,7 +1875,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # SIMPLE path mode on top-level path.
@@ -2024,7 +2030,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # ACYCLIC path mode on top-level path.
@@ -2176,7 +2185,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # TRAIL path mode does not apply to whole graph pattern.
@@ -2471,7 +2483,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.the_answer;
 ==
 
 # TRAIL path mode works with quantified paths.
@@ -2641,7 +2656,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # ACYCLIC path mode works with quantified paths.
@@ -2811,7 +2829,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # Nested path modes work.
@@ -2975,7 +2996,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 
@@ -3204,7 +3228,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 # TRAIL path mode works with paths created from quantified edges.
@@ -3359,7 +3386,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # Path modes work with paths that have ASTGraphPathPattern nodes stripped.
@@ -3491,7 +3521,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 # Path modes work with quantified paths that have been converted from quantified
@@ -3630,7 +3663,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 # Nested path modes work with quantified paths that have been converted from
@@ -3782,7 +3818,10 @@ FROM
       42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 [default language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+SQL_GRAPH_BOUNDED_PATH_QUANTIFICATION,+SQL_GRAPH_PATH_MODE]
@@ -6439,4 +6478,3 @@ SELECT one FROM GRAPH_TABLE(
 ERROR: Path pattern with path mode and search prefix is not allowed [at 3:9]
   MATCH ANY SHORTEST TRAIL -[b]->
         ^
-

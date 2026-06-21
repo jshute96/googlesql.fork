@@ -582,7 +582,11 @@ FROM
   )) AS a_4)
 |> SELECT
      a_4.arr0 AS a_5,
-     a_4.arr1 AS a_6;
+     a_4.arr1 AS a_6
+|> AS projectscan_7
+|> SELECT
+     projectscan_7.a_5,
+     projectscan_7.a_6;
 --
 ALTERNATION GROUP: 0.05
 --
@@ -876,7 +880,11 @@ FROM
   )) AS a_4)
 |> SELECT
      a_4.arr0 AS a_5,
-     a_4.arr1 AS a_6;
+     a_4.arr1 AS a_6
+|> AS projectscan_7
+|> SELECT
+     projectscan_7.a_5,
+     projectscan_7.a_6;
 ==
 
 # `mode` argument that is a non-literal only works if it has ARRAY_ZIP_MODE as
@@ -1732,7 +1740,12 @@ FROM
 |> SELECT
      a_4.arr0 AS a_5,
      a_4.arr1 AS a_6,
-     a_4.offset AS off;
+     a_4.offset AS off
+|> AS projectscan_7
+|> SELECT
+     projectscan_7.a_5,
+     projectscan_7.a_6,
+     projectscan_7.off;
 ==
 
 # ============== UNNEST with table alias or argument alias =========
@@ -4091,7 +4104,14 @@ FROM
      testtable_1.TestEnum,
      testtable_1.KitchenSink,
      a_5.arr0 AS repeated_int32_val,
-     a_5.arr1 AS repeated_string_val;
+     a_5.arr1 AS repeated_string_val
+|> AS projectscan_6
+|> SELECT
+     projectscan_6.key,
+     projectscan_6.TestEnum,
+     projectscan_6.KitchenSink,
+     projectscan_6.repeated_int32_val,
+     projectscan_6.repeated_string_val;
 ==
 
 [show_sqlbuilder_output]
@@ -4470,7 +4490,14 @@ FROM
      testtable_1.TestEnum,
      testtable_1.KitchenSink,
      a_5.arr0 AS repeated_int32_val,
-     a_5.arr1 AS array2;
+     a_5.arr1 AS array2
+|> AS projectscan_6
+|> SELECT
+     projectscan_6.key,
+     projectscan_6.TestEnum,
+     projectscan_6.KitchenSink,
+     projectscan_6.repeated_int32_val,
+     projectscan_6.array2;
 ==
 
 [show_sqlbuilder_output]
@@ -4841,7 +4868,14 @@ FROM
      testtable_1.TestEnum,
      testtable_1.KitchenSink,
      a_5.arr0 AS array1,
-     a_5.arr1 AS array2;
+     a_5.arr1 AS array2
+|> AS projectscan_6
+|> SELECT
+     projectscan_6.key,
+     projectscan_6.TestEnum,
+     projectscan_6.KitchenSink,
+     projectscan_6.array1,
+     projectscan_6.array2;
 ==
 
 # 2 arguments: path expressions reference columns from different lhs tables.
@@ -5505,7 +5539,11 @@ FROM
             a_6.arr1 AS array2
        |> AS projectscan_7
        |> SELECT
-            STRUCT< array1 INT32, array2 INT32 > (projectscan_7.array1, projectscan_7.array2) AS a_8
+            projectscan_7.array1,
+            projectscan_7.array2
+       |> AS projectscan_8
+       |> SELECT
+            STRUCT< array1 INT32, array2 INT32 > (projectscan_8.array1, projectscan_8.array2) AS a_9
      ) AS col1;
 ==
 

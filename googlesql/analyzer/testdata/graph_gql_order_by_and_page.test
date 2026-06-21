@@ -2498,7 +2498,10 @@ FROM
       p.birthday AS birthday
   ) AS aml_1
 |> SELECT
-     aml_1.birthday;
+     aml_1.birthday
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.birthday;
 ==
 
 # Standalone ORDER BY statement: multiple ordering expressions.
@@ -2641,7 +2644,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.birthday,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.birthday,
+     graphtablescan_3.balance;
 ==
 
 # Standalone ORDER BY statement: accepts COLLATE and NULLS order clauses.
@@ -2788,7 +2795,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.birthday,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.birthday,
+     graphtablescan_3.balance;
 ==
 
 # Standalone ORDER BY statement with LIMIT and SKIP clauses.
@@ -2901,7 +2912,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Consecutive standalone ORDER BY statements.
@@ -3055,7 +3069,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.name,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.balance;
 ==
 
 # Standalone OFFSET/LIMIT statement.
@@ -3146,7 +3164,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Standalone OFFSET statement.
@@ -3243,7 +3264,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -3327,7 +3351,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Standalone OFFSET statement/LIMIT statement with kint64max/2.
@@ -3427,7 +3454,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -3511,7 +3541,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Standalone OFFSET/LIMIT statements including kint64max/2.
@@ -3620,7 +3653,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -3710,7 +3746,10 @@ FROM
       p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # ORDER BY expression on standalone statement.
@@ -3832,7 +3871,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.name,
-     aml_1.age;
+     aml_1.age
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name,
+     graphtablescan_2.age;
 ==
 
 # ORDER BY statement after RETURN statement.
@@ -3933,7 +3976,10 @@ FROM
     ORDER BY p.name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # ORDER BY statement after RETURN statement: multiple ordering expressions.
@@ -4074,7 +4120,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.name,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY statement after RETURN statement:
@@ -4220,7 +4270,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.name,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY statement after RETURN statement with LIMIT and OFFSET clauses.
@@ -4329,7 +4383,10 @@ FROM
     ORDER BY p.name OFFSET 10 LIMIT 20
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Consecutive ORDER BY statements after RETURN statement separated by NEXT.
@@ -4487,8 +4544,12 @@ FROM
       balance AS balance_2
   ) AS aml_1
 |> SELECT
-     aml_1.name_2 AS name,
-     aml_1.balance_2 AS balance;
+     aml_1.name_2,
+     aml_1.balance_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name_2 AS name,
+     graphtablescan_3.balance_2 AS balance;
 ==
 
 # OFFSET/LIMIT statement after RETURN statement.
@@ -4578,7 +4639,10 @@ FROM
     OFFSET 10 LIMIT 20
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # ORDER BY expression after RETURN statement.
@@ -4720,7 +4784,12 @@ FROM
 |> SELECT
      aml_1.name,
      aml_1.age,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.age,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY functions, aggregates and aliases after RETURN statement.
@@ -4894,11 +4963,11 @@ FROM
      aml_1.age,
      aml_1.balance,
      aml_1.name
-|> AS projectscan_3
+|> AS graphtablescan_3
 |> SELECT
-     projectscan_3.name,
-     projectscan_3.age,
-     projectscan_3.balance;
+     graphtablescan_3.name,
+     graphtablescan_3.age,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY clause on RETURN statement when anonymous variables exist.
@@ -5039,7 +5108,10 @@ FROM
     ORDER BY a.name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name;
 ==
 
 # ORDER BY clause on RETURN statement with aggregates and anonymous variables.
@@ -5175,7 +5247,10 @@ FROM
     ORDER BY name
   ) AS aml_1
 |> SELECT
-     aml_1.name;
+     aml_1.name
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name;
 ==
 
 # ORDER BY graph node is not allowed

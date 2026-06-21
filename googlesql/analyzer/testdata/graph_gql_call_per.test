@@ -249,8 +249,12 @@ FROM
       column_bytes AS column_bytes_2
   ) AS aml_1
 |> SELECT
-     aml_1.column_bool_2 AS column_bool,
-     aml_1.column_bytes_2 AS column_bytes;
+     aml_1.column_bool_2,
+     aml_1.column_bytes_2
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.column_bool_2 AS column_bool,
+     graphtablescan_2.column_bytes_2 AS column_bytes;
 ==
 
 # Pass the wrong table type (int instead of bool) to test the error message.

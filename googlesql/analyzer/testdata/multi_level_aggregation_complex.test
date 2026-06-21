@@ -70,7 +70,11 @@ SELECT
       SimpleTypes
     |> AGGREGATE
          SUM(MIN(SimpleTypes.int64)
-           GROUP BY SimpleTypes.bool) AS a_2)) AS a_1;
+           GROUP BY SimpleTypes.bool) AS a_2
+    |> AS aggregatescan_3
+    |> SELECT
+         aggregatescan_3.a_2
+  )) AS a_1;
 ==
 
 SELECT
@@ -175,7 +179,11 @@ FROM
          SimpleTypes
        |> AGGREGATE
             SUM(MIN(SimpleTypes.int64)
-              GROUP BY SimpleTypes.bool) AS a_4)) AS a_3;
+              GROUP BY SimpleTypes.bool) AS a_4
+       |> AS aggregatescan_5
+       |> SELECT
+            aggregatescan_5.a_4
+     )) AS a_3;
 ==
 
 SELECT
@@ -242,7 +250,11 @@ SELECT
       SimpleTypes
     |> AGGREGATE
          SUM(MIN(SimpleTypes.int64)
-           GROUP BY SimpleTypes.bool) AS a_2) AS a_1;
+           GROUP BY SimpleTypes.bool) AS a_2
+    |> AS aggregatescan_3
+    |> SELECT
+         aggregatescan_3.a_2
+  ) AS a_1;
 ==
 
 SELECT
@@ -386,7 +398,11 @@ SELECT
       SimpleTypes
     |> AGGREGATE
          SUM(MIN(SimpleTypes.int64)
-           GROUP BY SimpleTypes.bool) AS a_2) AS a_1;
+           GROUP BY SimpleTypes.bool) AS a_2
+    |> AS aggregatescan_3
+    |> SELECT
+         aggregatescan_3.a_2
+  ) AS a_1;
 ==
 
 SELECT
@@ -467,9 +483,13 @@ SELECT
       SimpleTypes
     |> AGGREGATE
          SUM(MIN(SimpleTypes.int64)
-           GROUP BY SimpleTypes.bool) AS a_2) IN (
+           GROUP BY SimpleTypes.bool) AS a_2
+    |> AS aggregatescan_3
+    |> SELECT
+         aggregatescan_3.a_2
+  ) IN (
     SELECT
-      1 AS a_3
+      1 AS a_4
   )) AS a_1;
 ==
 
@@ -1040,7 +1060,11 @@ FROM
        |> AGGREGATE
             ARRAY_AGG(aggregatescan_1.f.d.a
               GROUP BY aggregatescan_1.f.d.a
-              ORDER BY aggregatescan_1.f.d.a) AS a_3) AS a_2;
+              ORDER BY aggregatescan_1.f.d.a) AS a_3
+       |> AS aggregatescan_4
+       |> SELECT
+            aggregatescan_4.a_3
+     ) AS a_2;
 ==
 
 # Correlated path expressions with multi-level aggregates, and correlated
@@ -2112,7 +2136,11 @@ FROM
    AS matchrecognizescan_5
 |> SELECT
      matchrecognizescan_5.a_2 AS max_agg,
-     matchrecognizescan_5.a_3 AS array_agg;
+     matchrecognizescan_5.a_3 AS array_agg
+|> AS projectscan_6
+|> SELECT
+     projectscan_6.max_agg,
+     projectscan_6.array_agg;
 ==
 
 # Inner-most ORDER BY creates a column to compute before aggregation.
@@ -2198,7 +2226,10 @@ FROM
      ARRAY_AGG(projectscan_2.bool
        GROUP BY projectscan_2.bool
        ORDER BY STRING_AGG(projectscan_2.string
-         ORDER BY projectscan_2.a_1)) AS a_3;
+         ORDER BY projectscan_2.a_1)) AS a_3
+|> AS aggregatescan_4
+|> SELECT
+     aggregatescan_4.a_3;
 ==
 
 # Inner-most ORDER BY creates a column to compute before aggregation.
@@ -2314,7 +2345,10 @@ FROM
          GROUP BY projectscan_3.string, projectscan_3.int64)
        GROUP BY projectscan_3.string
        ORDER BY STRING_AGG(projectscan_3.string
-         ORDER BY projectscan_3.a_2)) AS a_4;
+         ORDER BY projectscan_3.a_2)) AS a_4
+|> AS aggregatescan_5
+|> SELECT
+     aggregatescan_5.a_4;
 ==
 
 # Multi-level aggregation on an aggregate function with more than 1 argument.

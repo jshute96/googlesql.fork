@@ -90,7 +90,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.Name;
+     aml_1.Name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.Name;
 ==
 
 # Correlated columns in node WHERE clause
@@ -301,7 +304,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.One;
+     aml_1.One
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.One;
 ==
 
 select gt.* from
@@ -365,5 +371,7 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.One;
-
+     aml_1.One
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.One;

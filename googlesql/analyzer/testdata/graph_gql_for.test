@@ -708,5 +708,9 @@ FROM
       offset AS offset_2
   ) AS aml_1
 |> SELECT
-     aml_1.x_2 AS x,
-     aml_1.offset_2 AS offset;
+     aml_1.x_2,
+     aml_1.offset_2
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.x_2 AS x,
+     graphtablescan_2.offset_2 AS offset;

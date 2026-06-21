@@ -112,7 +112,10 @@ FROM
       PATH_LENGTH(concatted) AS len
   ) AS aml_1
 |> SELECT
-     aml_1.len;
+     aml_1.len
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.len;
 
 ==
 

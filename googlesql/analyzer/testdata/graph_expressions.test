@@ -122,7 +122,12 @@ FROM
 |> SELECT
      aml_1.same_node_a_b,
      aml_1.same_node_a,
-     aml_1.same_edge;
+     aml_1.same_edge
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.same_node_a_b,
+     graphtablescan_2.same_node_a,
+     graphtablescan_2.same_edge;
 ==
 
 select * from graph_table(
@@ -361,7 +366,17 @@ FROM
      aml_1.val4,
      aml_1.val5,
      aml_1.val6,
-     aml_1.val7;
+     aml_1.val7
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.val0,
+     graphtablescan_2.val1,
+     graphtablescan_2.val2,
+     graphtablescan_2.val3,
+     graphtablescan_2.val4,
+     graphtablescan_2.val5,
+     graphtablescan_2.val6,
+     graphtablescan_2.val7;
 ==
 
 # <source/destination predicate> first argument must be node.
@@ -669,7 +684,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.has_id;
+     aml_1.has_id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.has_id;
 
 ==
 
@@ -746,7 +764,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.has_birthday;
+     aml_1.has_birthday
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.has_birthday;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -1232,14 +1253,18 @@ FROM
             1 AS a_2
           |> AS projectscan_3
           |> AGGREGATE
-               ARRAY_AGG(n) AS a_4)) AS arr_length
+               ARRAY_AGG(n) AS a_4
+          |> AS aggregatescan_5
+          |> SELECT
+               aggregatescan_5.a_4
+        )) AS arr_length
     )
   ) AS aml_1
 |> SELECT
      aml_1.arr_length
-|> AS graphtablescan_5
+|> AS graphtablescan_6
 |> SELECT
-     1 AS a_6;
+     1 AS a_7;
 ==
 
 select gt.* from graph_table(
@@ -1423,7 +1448,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.all_different;
+     aml_1.all_different
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.all_different;
 
 ==
 
@@ -1602,7 +1630,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.all_different;
+     aml_1.all_different
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.all_different;
 ==
 
 # mixing node and edge in all_different is not allowed
@@ -1850,7 +1881,12 @@ FROM
 |> SELECT
      aml_1.js_n,
      aml_1.js_e,
-     aml_1.js_m;
+     aml_1.js_m
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.js_n,
+     graphtablescan_2.js_e,
+     graphtablescan_2.js_m;
 ==
 
 select gt.* from graph_table(
@@ -1923,7 +1959,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.node_labels;
+     aml_1.node_labels
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.node_labels;
 ==
 
 select gt.* from graph_table(
@@ -2029,7 +2068,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.edge_labels;
+     aml_1.edge_labels
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.edge_labels;
 ==
 
 select gt.* from graph_table(
@@ -2113,7 +2155,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.empty_labels,
-     aml_1.has_id;
+     aml_1.has_id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.empty_labels,
+     graphtablescan_2.has_id;
 ==
 
 select gt.* from graph_table(
@@ -2186,7 +2232,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.node_properties;
+     aml_1.node_properties
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.node_properties;
 ==
 
 select gt.* from graph_table(
@@ -2292,7 +2341,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.edge_properties;
+     aml_1.edge_properties
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.edge_properties;
 ==
 
 # <is labeled predicate> LHS must be a graph element type
@@ -2509,7 +2561,14 @@ FROM
      aml_1.true_pred,
      aml_1.false_pred,
      aml_1.is_person,
-     aml_1.is_account;
+     aml_1.is_account
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.labels,
+     graphtablescan_2.true_pred,
+     graphtablescan_2.false_pred,
+     graphtablescan_2.is_person,
+     graphtablescan_2.is_account;
 ==
 
 select gt.* from graph_table(
@@ -2642,7 +2701,13 @@ FROM
      aml_1.nid,
      aml_1.eid,
      aml_1.source_node_id,
-     aml_1.destination_node_id;
+     aml_1.destination_node_id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.nid,
+     graphtablescan_2.eid,
+     graphtablescan_2.source_node_id,
+     graphtablescan_2.destination_node_id;
 ==
 
 # TODO: b/348064840 - Add test cases for path variables
@@ -2820,7 +2885,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.node_name,
-     aml_1.edge_name;
+     aml_1.edge_name
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_name,
+     graphtablescan_3.edge_name;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+JSON_TYPE,+JSON_MUTATOR_FUNCTIONS{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -3286,9 +3355,12 @@ FROM
       ) AS aml_1
     |> SELECT
          aml_1.a_2
-  )) AS tvfscan_2
+    |> AS graphtablescan_2
+    |> SELECT
+         graphtablescan_2.a_2
+  )) AS tvfscan_3
 |> SELECT
-     tvfscan_2.x.id;
+     tvfscan_3.x.id;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+SQL_GRAPH_BOUNDED_PATH_QUANTIFICATION,+INLINE_LAMBDA_ARGUMENT,+CAST_DIFFERENT_ARRAY_TYPES,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT]
@@ -3556,7 +3628,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.arr;
+     aml_1.arr
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.arr;
 ==
 
 # Repro test for b/355707672
@@ -3674,6 +3749,9 @@ FROM
          ) AS aml_3
        |> SELECT
             aml_3.x
+       |> AS graphtablescan_4
+       |> SELECT
+            graphtablescan_4.x
      ) AS a_2;
 ==
 
@@ -3858,7 +3936,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.js_p;
+     aml_1.js_p
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.js_p;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]

@@ -215,7 +215,10 @@ FROM
       n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.id;
+     aml_1.id
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.id;
 ==
 
 # Analytic functions in FILTER with horizontal agg
@@ -460,7 +463,10 @@ FROM
       n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.id;
+     aml_1.id
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.id;
 ==
 
 
@@ -656,7 +662,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.id,
-     aml_1.w_2 AS w;
+     aml_1.w_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.id,
+     graphtablescan_3.w_2 AS w;
 ==
 
 # Analytic functions are allowed in LET with horizontal agg
@@ -897,7 +907,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.id,
-     aml_1.w_2 AS w;
+     aml_1.w_2
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.id,
+     graphtablescan_5.w_2 AS w;
 ==
 
 # Analytic functions are in LET still disallow vertical agg
@@ -1106,7 +1120,10 @@ FROM
     GROUP BY n.name
   ) AS aml_1
 |> SELECT
-     aml_1.w1;
+     aml_1.w1
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.w1;
 ==
 
 # Regression test where analytic columns referenced on RETURN's ORDER BY  clause
@@ -1303,7 +1320,12 @@ FROM
 |> SELECT
      aml_1.w1,
      aml_1.id,
-     aml_1.age;
+     aml_1.age
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.w1,
+     graphtablescan_3.id,
+     graphtablescan_3.age;
 ==
 
 # Analytic function in RETURN still disallows horizontal aggregation
@@ -1521,7 +1543,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.id,
-     aml_1.w_2 AS w;
+     aml_1.w_2
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.id,
+     graphtablescan_4.w_2 AS w;
 ==
 
 # Analytic function in WITH with vertical aggregation
@@ -1747,7 +1773,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.amount,
-     aml_1.w1_2 AS w1;
+     aml_1.w1_2
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.amount,
+     graphtablescan_6.w1_2 AS w1;
 ==
 
 # Analytic function in WITH still disallows horizontal aggregation
@@ -2492,7 +2522,10 @@ FROM
       n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.id;
+     aml_1.id
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.id;
 ==
 
 # PARTITION BY graph path
@@ -2676,7 +2709,10 @@ FROM
       n.id AS id
   ) AS aml_1
 |> SELECT
-     aml_1.id;
+     aml_1.id
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.id;
 ==
 
 # Regression test for b/382069429
@@ -2757,7 +2793,10 @@ FROM
     ORDER BY x
   ) AS aml_1
 |> SELECT
-     aml_1.z;
+     aml_1.z
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.z;
 ==
 
 # Regression test for b/382069429
@@ -2860,7 +2899,10 @@ FROM
     ORDER BY x
   ) AS aml_1
 |> SELECT
-     aml_1.z;
+     aml_1.z
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.z;
 ==
 
 # Regression test for b/382069429

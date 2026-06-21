@@ -236,7 +236,10 @@ FROM
 FROM
   TestTable.KitchenSink.repeated_int32_val AS original_alias
 |> SELECT
-     original_alias;
+     original_alias
+|> AS projectscan_1
+|> SELECT
+     projectscan_1.original_alias;
 ==
 
 # This is to demontrate that this feature does not work with correlated subquery.
@@ -389,4 +392,3 @@ FROM
 |> SELECT
      ri;
 ==
-

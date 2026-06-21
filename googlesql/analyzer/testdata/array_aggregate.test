@@ -389,7 +389,10 @@ FROM
        |> AS projectscan_12
        |> SELECT
             `IF`((ARRAY_LENGTH(projectscan_12.a_9)) >= 1, projectscan_12.a_9, CAST(NULL AS ARRAY< INT64 >)) AS injected
-     ) AS a_8;
+     ) AS a_8
+|> AS projectscan_13
+|> SELECT
+     projectscan_13.a_8;
 ==
 
 # Duplicate ARRAY_AGGs in the same AggregateScan
@@ -465,7 +468,11 @@ FROM
      ARRAY_AGG(a
        ORDER BY a) AS a_2,
      ARRAY_AGG(a
-       ORDER BY a) AS a_3;
+       ORDER BY a) AS a_3
+|> AS aggregatescan_4
+|> SELECT
+     aggregatescan_4.a_2,
+     aggregatescan_4.a_3;
 
 [REWRITTEN AST]
 QueryStmt
@@ -716,7 +723,11 @@ FROM
        |> AS projectscan_12
        |> SELECT
             `IF`((ARRAY_LENGTH(projectscan_12.a_10)) >= 1, projectscan_12.a_10, CAST(NULL AS ARRAY< INT64 >)) AS injected_2
-     ) AS a_9;
+     ) AS a_9
+|> AS projectscan_13
+|> SELECT
+     projectscan_13.a_5,
+     projectscan_13.a_9;
 
 ==
 
@@ -818,7 +829,11 @@ FROM
      ARRAY_AGG(arrayscan_2.a
        ORDER BY b) AS a_3,
      ARRAY_AGG(b
-       ORDER BY arrayscan_2.a) AS a_4;
+       ORDER BY arrayscan_2.a) AS a_4
+|> AS aggregatescan_5
+|> SELECT
+     aggregatescan_5.a_3,
+     aggregatescan_5.a_4;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1112,7 +1127,11 @@ FROM
        |> AS projectscan_13
        |> SELECT
             `IF`((ARRAY_LENGTH(projectscan_13.a_11)) >= 1, projectscan_13.a_11, CAST(NULL AS ARRAY< UINT64 >)) AS injected_2
-     ) AS a_10;
+     ) AS a_10
+|> AS projectscan_14
+|> SELECT
+     projectscan_14.a_6,
+     projectscan_14.a_10;
 
 ==
 
@@ -1244,7 +1263,13 @@ FROM
      COUNT(b) AS a_5,
      ARRAY_AGG(b
        HAVING MIN 3
-       ORDER BY arrayscan_2.a) AS a_6;
+       ORDER BY arrayscan_2.a) AS a_6
+|> AS aggregatescan_7
+|> SELECT
+     aggregatescan_7.a_3,
+     aggregatescan_7.a_4,
+     aggregatescan_7.a_5,
+     aggregatescan_7.a_6;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1571,7 +1596,13 @@ FROM
        |> AS projectscan_15
        |> SELECT
             `IF`((ARRAY_LENGTH(projectscan_15.a_13)) >= 1, projectscan_15.a_13, CAST(NULL AS ARRAY< UINT64 >)) AS injected_2
-     ) AS a_12;
+     ) AS a_12
+|> AS projectscan_16
+|> SELECT
+     projectscan_16.a_8,
+     projectscan_16.a_4,
+     projectscan_16.a_5,
+     projectscan_16.a_12;
 
 ==
 
@@ -1638,7 +1669,11 @@ FROM
    UNNEST(testtable_1.KitchenSink.repeated_int64_val) AS a
 |> AGGREGATE
      ARRAY_AGG(a) AS a_2,
-     ARRAY_AGG(a + 2) AS a_3;
+     ARRAY_AGG(a + 2) AS a_3
+|> AS aggregatescan_4
+|> SELECT
+     aggregatescan_4.a_2,
+     aggregatescan_4.a_3;
 
 ==
 
@@ -1739,7 +1774,11 @@ FROM
        LIMIT 2) AS a_4,
      ARRAY_AGG(projectscan_3.a
        ORDER BY projectscan_3.a_2
-       LIMIT 3) AS a_5;
+       LIMIT 3) AS a_5
+|> AS aggregatescan_6
+|> SELECT
+     aggregatescan_6.a_4,
+     aggregatescan_6.a_5;
 
 [REWRITTEN AST]
 QueryStmt
@@ -2002,27 +2041,34 @@ FROM
              UNNEST(aggregatescan_6.a_4) AS a_9
            |> SELECT
                 a_9.a_0 AS a_3
+           |> AS projectscan_10
+           |> SELECT
+                projectscan_10.a_3
            |> LIMIT 2 OFFSET 0) AS a_8
-       |> AS projectscan_10
+       |> AS projectscan_11
        |> SELECT
-            `IF`((ARRAY_LENGTH(projectscan_10.a_8)) >= 1, projectscan_10.a_8, CAST(NULL AS ARRAY< INT64 >)) AS injected
+            `IF`((ARRAY_LENGTH(projectscan_11.a_8)) >= 1, projectscan_11.a_8, CAST(NULL AS ARRAY< INT64 >)) AS injected
      ) AS a_7,
      (
        SELECT
          ARRAY(
            FROM
-             UNNEST(aggregatescan_6.a_5) AS a_13
+             UNNEST(aggregatescan_6.a_5) AS a_14
            |> SELECT
-                a_13.a_0 AS a_6,
-                a_13.`$orderbycol1_1` AS a_14
-           |> ORDER BY a_14
+                a_14.a_0 AS a_6,
+                a_14.`$orderbycol1_1` AS a_15
+           |> ORDER BY a_15
            |> SELECT
                 a_6
-           |> LIMIT 3 OFFSET 0) AS a_12
-       |> AS projectscan_15
+           |> LIMIT 3 OFFSET 0) AS a_13
+       |> AS projectscan_16
        |> SELECT
-            `IF`((ARRAY_LENGTH(projectscan_15.a_12)) >= 1, projectscan_15.a_12, CAST(NULL AS ARRAY< INT64 >)) AS injected_2
-     ) AS a_11;
+            `IF`((ARRAY_LENGTH(projectscan_16.a_13)) >= 1, projectscan_16.a_13, CAST(NULL AS ARRAY< INT64 >)) AS injected_2
+     ) AS a_12
+|> AS projectscan_17
+|> SELECT
+     projectscan_17.a_7,
+     projectscan_17.a_12;
 
 ==
 
@@ -2165,7 +2211,11 @@ FROM
             ARRAY_AGG(projectscan_5.a
               HAVING MAX withrefscan_1.correlated
               ORDER BY projectscan_5.a_4
-              LIMIT 3) AS a_6) AS a_2;
+              LIMIT 3) AS a_6
+       |> AS aggregatescan_7
+       |> SELECT
+            aggregatescan_7.a_6
+     ) AS a_2;
 
 [REWRITTEN AST]
 QueryStmt
@@ -2409,4 +2459,7 @@ FROM
               |> SELECT
                    `IF`((ARRAY_LENGTH(projectscan_12.a_9)) >= 1, projectscan_12.a_9, CAST(NULL AS ARRAY< INT64 >)) AS injected
             ) AS a_8
+       |> AS projectscan_13
+       |> SELECT
+            projectscan_13.a_8
      ) AS a_2;

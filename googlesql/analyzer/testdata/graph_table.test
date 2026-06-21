@@ -91,7 +91,12 @@ FROM
 |> SELECT
      aml_1.name,
      aml_1.number,
-     aml_1.concat_str;
+     aml_1.concat_str
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name,
+     graphtablescan_2.number,
+     graphtablescan_2.concat_str;
 ==
 
 # Use a quoted version of an internal name as node variable.
@@ -163,7 +168,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.literal_true;
+     aml_1.literal_true
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.literal_true;
 ==
 
 # Accessing an undefined element returns error
@@ -381,7 +389,18 @@ FROM
      aml_1.name,
      aml_1.syndicateData,
      aml_1.syndicateId,
-     aml_1.syndicateName;
+     aml_1.syndicateName
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.age,
+     graphtablescan_2.balance,
+     graphtablescan_2.birthday,
+     graphtablescan_2.data,
+     graphtablescan_2.id,
+     graphtablescan_2.name,
+     graphtablescan_2.syndicateData,
+     graphtablescan_2.syndicateId,
+     graphtablescan_2.syndicateName;
 ==
 
 # DotStar in COLUMNS clause must refer to a graph element.
@@ -632,7 +651,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.inner_name;
+     aml_1.inner_name
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.inner_name;
 ==
 
 # Correlated column in graph_table columns clause.
@@ -861,7 +883,10 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.c_value;
+     aml_1.c_value
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.c_value;
 ==
 
 # Correlated graph subquery in graph_table columns clause.
@@ -1000,11 +1025,17 @@ FROM
           ) AS aml_2
         |> SELECT
              aml_2.name
+        |> AS graphtablescan_3
+        |> SELECT
+             graphtablescan_3.name
         |> LIMIT 1) AS inner_name
     )
   ) AS aml_1
 |> SELECT
-     aml_1.inner_name;
+     aml_1.inner_name
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.inner_name;
 ==
 
 # Join between graph tables and non-graph tables.
@@ -1464,7 +1495,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.birthday,
-     aml_1.balance;
+     aml_1.balance
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.birthday,
+     graphtablescan_2.balance;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+TABLESAMPLE,+STRATIFIED_RESERVOIR_TABLESAMPLE]
@@ -1680,6 +1715,11 @@ FROM
     )
   ) AS aml_1
 |> SELECT
-     aml_1.n_2 AS n,
-     aml_1.e_2 AS e,
-     aml_1.x_2 AS x;
+     aml_1.n_2,
+     aml_1.e_2,
+     aml_1.x_2
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.n_2 AS n,
+     graphtablescan_2.e_2 AS e,
+     graphtablescan_2.x_2 AS x;

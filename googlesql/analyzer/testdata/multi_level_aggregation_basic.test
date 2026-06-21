@@ -51,7 +51,10 @@ FROM
   SimpleTypes
 |> AGGREGATE
      SUM(ANY_VALUE(SimpleTypes.int64)
-       GROUP BY SimpleTypes.int32) AS a_1;
+       GROUP BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: (int64).ANY_VALUE().SUM(GROUP BY int32)
 --
@@ -591,7 +594,10 @@ FROM
 |> AGGREGATE
      ARRAY_AGG(ANY_VALUE(SimpleTypes.int64)
        GROUP BY SimpleTypes.int32
-       ORDER BY SimpleTypes.int32) AS a_1;
+       ORDER BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # ORDER BY clause uses aggregation, but multi-level aggregate arguments don't.
@@ -647,7 +653,10 @@ FROM
 |> AGGREGATE
      ARRAY_AGG(SimpleTypes.int32
        GROUP BY SimpleTypes.int32
-       ORDER BY SUM(SimpleTypes.int64)) AS a_1;
+       ORDER BY SUM(SimpleTypes.int64)) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # ORDER BY clause can reference post-grouping aggregate columns.
@@ -706,7 +715,10 @@ FROM
 |> AGGREGATE
      ARRAY_AGG(ANY_VALUE(SimpleTypes.int64)
        GROUP BY SimpleTypes.int32
-       ORDER BY ANY_VALUE(SimpleTypes.int64)) AS a_1;
+       ORDER BY ANY_VALUE(SimpleTypes.int64)) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # LIMIT clause test
@@ -760,7 +772,10 @@ FROM
 |> AGGREGATE
      ARRAY_AGG(ANY_VALUE(SimpleTypes.int64)
        GROUP BY SimpleTypes.int32
-       LIMIT 5) AS a_1;
+       LIMIT 5) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # Conditional evaluation test.
@@ -1562,7 +1577,10 @@ FROM
 |> AGGREGATE
      ARRAY_AGG(DISTINCT SimpleTypes.int32
        GROUP BY SimpleTypes.int32
-       ORDER BY SimpleTypes.int32) AS a_1;
+       ORDER BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # ORDER BY a grouping key that is a struct field access.
@@ -1904,7 +1922,10 @@ FROM
   SimpleTypes
 |> AGGREGATE
      SUM(AVG(SimpleTypes.int64)
-       GROUP BY SimpleTypes.string) AS a_1;
+       GROUP BY SimpleTypes.string) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # Ensure 'grouping-constness' works correctly with CUBE, ROLLUP and GROUPING
@@ -2616,7 +2637,10 @@ FROM
 |> AS kitchensinkvaluetable_1
 |> AGGREGATE
      MAX(MIN(kitchensinkvaluetable_1.value.int64_val)
-       GROUP BY kitchensinkvaluetable_1.value.int64_key_1) AS a_2;
+       GROUP BY kitchensinkvaluetable_1.value.int64_key_1) AS a_2
+|> AS aggregatescan_3
+|> SELECT
+     aggregatescan_3.a_2;
 ==
 
 # CTE with multi-level aggregation.
@@ -2833,7 +2857,10 @@ FROM
 |> AGGREGATE
      STRING_AGG(CAST(b"HJ:ESN" AS STRING FORMAT "base64")
        GROUP BY a, CAST(b"HJ:ESN" AS STRING FORMAT "base64")
-       ORDER BY a) AS a_1;
+       ORDER BY a) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # Regression test for b/379931737
@@ -2920,7 +2947,10 @@ FROM
 |> AGGREGATE
      STRING_AGG(CAST(ARRAY_FIND(ARRAY< INT64 >[1], (e_2) -> e_2 > 5, CAST("FIRST" AS ARRAY_FIND_MODE)) AS STRING)
        GROUP BY a, CAST(ARRAY_FIND(ARRAY< INT64 >[1], (e) -> e > 5, CAST("FIRST" AS ARRAY_FIND_MODE)) AS STRING)
-       ORDER BY a) AS a_1;
+       ORDER BY a) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # GROUP BY modifier can contain hints
@@ -2972,7 +3002,10 @@ FROM
   SimpleTypes
 |> AGGREGATE
      SUM(AVG(SimpleTypes.int64)
-       GROUP @{ abc = 1 } BY SimpleTypes.bool) AS a_1;
+       GROUP @{ abc = 1 } BY SimpleTypes.bool) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # GROUP BY modifier can contain hints
@@ -3199,4 +3232,8 @@ FROM
        GROUP BY (projectscan_4.x) + 1) AS a_5,
      ARRAY_AGG(STRUCT< ARRAY< INT64 > > (ARRAY_AGG(DISTINCT projectscan_4.a_3
            ORDER BY projectscan_4.a_3))
-       GROUP BY (projectscan_4.x) + 1) AS a_6;
+       GROUP BY (projectscan_4.x) + 1) AS a_6
+|> AS aggregatescan_7
+|> SELECT
+     aggregatescan_7.a_5,
+     aggregatescan_7.a_6;

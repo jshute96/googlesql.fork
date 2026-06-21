@@ -97,7 +97,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.number,
-     aml_1.concat_str;
+     aml_1.concat_str
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.number,
+     graphtablescan_2.concat_str;
 ==
 
 # not found in catalog
@@ -202,7 +206,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.number,
-     aml_1.concat_str;
+     aml_1.concat_str
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.number,
+     graphtablescan_2.concat_str;
 
 ==
 
@@ -296,7 +304,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.number,
-     aml_1.concat_str;
+     aml_1.concat_str
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.number,
+     graphtablescan_2.concat_str;
 ==
 
 # NOT operator on a parenthesized expression
@@ -379,7 +391,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.number,
-     aml_1.concat_str;
+     aml_1.concat_str
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.number,
+     graphtablescan_2.concat_str;
 
 ==
 
@@ -461,7 +477,11 @@ FROM
   ) AS aml_1
 |> SELECT
      aml_1.balance,
-     aml_1.id;
+     aml_1.id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.balance,
+     graphtablescan_2.id;
 ==
 
 # An empty label filter will resolve to the labelexpr % | !%
@@ -626,7 +646,18 @@ FROM
      aml_1.name,
      aml_1.syndicateData,
      aml_1.syndicateId,
-     aml_1.syndicateName;
+     aml_1.syndicateName
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.age,
+     graphtablescan_2.balance,
+     graphtablescan_2.birthday,
+     graphtablescan_2.data,
+     graphtablescan_2.id,
+     graphtablescan_2.name,
+     graphtablescan_2.syndicateData,
+     graphtablescan_2.syndicateId,
+     graphtablescan_2.syndicateName;
 ==
 
 # Referring to a node pattern with an edge only label is an error

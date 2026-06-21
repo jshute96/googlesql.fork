@@ -3236,16 +3236,9 @@ absl::Status SQLBuilder::VisitResolvedUnpivotScan(
 
 bool SQLBuilder::IsDegenerateProjectScan(
     const ResolvedProjectScan* node, const QueryExpression* query_expression) {
-  // In Pipe syntax mode, we cannot mark the project scan as degenerate
-  // when it wraps over an aggregate scan with group-by columns.
-  // Otherwise, the select list is overwritten with the output columns, and that
-  // causes a bad query to be output if there are duplicate column names.
-  if (IsPipeSyntaxTargetMode() &&
-      node->input_scan()->Is<ResolvedAggregateScanBase>() &&
-      query_expression->HasAnyGroupByColumn()) {
-    return false;
-  }
-
+  // Only reached in Standard syntax mode: Pipe syntax mode never elides a
+  // degenerate ProjectScan (see VisitResolvedProjectScan), so it does not call
+  // this.
   return node->expr_list_size() == 0     // no computed columns
          && node->hint_list_size() == 0  // no hints
          // same column list as the input scan
@@ -3320,7 +3313,13 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
     SetPathForColumnList(node->column_list(), alias);
   }
 
-  if (IsDegenerateProjectScan(node, query_expression.get()) &&
+  // In Pipe syntax mode, do not elide a degenerate (pass-through) ProjectScan:
+  // emit it through the normal path so every ResolvedProjectScan maps to a pipe
+  // operator (kept 1:1 even though the resulting `|> SELECT` is a no-op). In
+  // Standard syntax mode the elision is still applied -- a redundant nested
+  // SELECT there is pure noise.
+  if (!IsPipeSyntaxTargetMode() &&
+      IsDegenerateProjectScan(node, query_expression.get()) &&
       query_expression->CanFormSQLQuery()) {
     // NOTE: any future fields added to ProjectScan that are not IGNORABLE will
     // fail at CheckFieldsAccessed() when this condition is met.

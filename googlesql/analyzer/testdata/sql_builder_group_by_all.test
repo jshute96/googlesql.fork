@@ -404,9 +404,14 @@ SELECT
    GROUP BY projectscan_1.a AS a_2, projectscan_1.b AS b_2
 |> AS aggregatescan_4
 |> SELECT
-     aggregatescan_4.a_2 AS a,
-     aggregatescan_4.b_2 AS b,
-     aggregatescan_4.a_3;
+     aggregatescan_4.a_2,
+     aggregatescan_4.b_2,
+     aggregatescan_4.a_3
+|> AS projectscan_5
+|> SELECT
+     projectscan_5.a_2 AS a,
+     projectscan_5.b_2 AS b,
+     projectscan_5.a_3;
 ==
 
 # GROUP BY ALL in the outermost query and its direct table subquery.
@@ -510,13 +515,18 @@ SELECT
      aggregatescan_4.b_2,
      aggregatescan_4.a_3
 |> AS projectscan_5
-|> AGGREGATE
-   GROUP BY projectscan_5.a_2 AS a_4, projectscan_5.b_2 AS b_3, projectscan_5.a_3 AS a_6
-|> AS aggregatescan_7
 |> SELECT
-     aggregatescan_7.a_4 AS a,
-     aggregatescan_7.b_3 AS b,
-     aggregatescan_7.a_6;
+     projectscan_5.a_2,
+     projectscan_5.b_2,
+     projectscan_5.a_3
+|> AS projectscan_6
+|> AGGREGATE
+   GROUP BY projectscan_6.a_2 AS a_4, projectscan_6.b_2 AS b_3, projectscan_6.a_3 AS a_7
+|> AS aggregatescan_8
+|> SELECT
+     aggregatescan_8.a_4 AS a,
+     aggregatescan_8.b_3 AS b,
+     aggregatescan_8.a_7;
 ==
 
 [language_features=NONE,+GROUP_BY_ALL,+GROUP_BY_STRUCT]
@@ -708,5 +718,3 @@ FROM
 |> AS aggregatescan_1
 |> SELECT
      "a" AS x;
-==
-

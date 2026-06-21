@@ -6000,12 +6000,20 @@ FROM
 |> WHERE
      NOT((unpivot_unnest.value) IS NULL)
 |> SELECT
-     projectscan_1.string_ci,
-     projectscan_1.string_binary,
-     projectscan_1.struct_with_string_ci,
-     projectscan_1.array_with_string_ci,
+     projectscan_1.string_ci AS string_ci_2,
+     projectscan_1.string_binary AS string_binary_2,
+     projectscan_1.struct_with_string_ci AS struct_with_string_ci_2,
+     projectscan_1.array_with_string_ci AS array_with_string_ci_2,
      unpivot_unnest.value,
-     unpivot_unnest.metric;
+     unpivot_unnest.metric
+|> AS projectscan_2
+|> SELECT
+     projectscan_2.string_ci_2 AS string_ci,
+     projectscan_2.string_binary_2 AS string_binary,
+     projectscan_2.struct_with_string_ci_2 AS struct_with_string_ci,
+     projectscan_2.array_with_string_ci_2 AS array_with_string_ci,
+     projectscan_2.value,
+     projectscan_2.metric;
 
 [SQLBUILDER_RESOLVED_AST_SHAPE]
 * Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
@@ -6022,48 +6030,51 @@ QueryStmt
 +-query=
   +-ProjectScan
     +-column_list=[CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>, $pipe_select.value#7, $pipe_select.metric#8]
-    +-expr_list=
-    | +-value#7 :=
-    | | +-GetStructField
-    | |   +-type=STRING
-    | |   +-expr=
-    | |   | +-ColumnRef(type=STRUCT<value STRING, metric STRING>, column=$array.unpivot_unnest#6)
-    | |   +-field_idx=0
-    | +-metric#8 :=
-    |   +-GetStructField
-    |     +-type=STRING
-    |     +-expr=
-    |     | +-ColumnRef(type=STRUCT<value STRING, metric STRING>, column=$array.unpivot_unnest#6)
-    |     +-field_idx=1
     +-input_scan=
-      +-FilterScan
-        +-column_list=[$pipe_select.regular_value#5, CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>, $array.unpivot_unnest#6]
+      +-ProjectScan
+        +-column_list=[CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>, $pipe_select.value#7, $pipe_select.metric#8]
+        +-expr_list=
+        | +-value#7 :=
+        | | +-GetStructField
+        | |   +-type=STRING
+        | |   +-expr=
+        | |   | +-ColumnRef(type=STRUCT<value STRING, metric STRING>, column=$array.unpivot_unnest#6)
+        | |   +-field_idx=0
+        | +-metric#8 :=
+        |   +-GetStructField
+        |     +-type=STRING
+        |     +-expr=
+        |     | +-ColumnRef(type=STRUCT<value STRING, metric STRING>, column=$array.unpivot_unnest#6)
+        |     +-field_idx=1
         +-input_scan=
-        | +-ArrayScan
-        |   +-column_list=[$pipe_select.regular_value#5, CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>, $array.unpivot_unnest#6]
-        |   +-input_scan=
-        |   | +-ProjectScan
-        |   |   +-column_list=[$pipe_select.regular_value#5, CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>]
-        |   |   +-expr_list=
-        |   |   | +-regular_value#5 := Literal(type=STRING, value="abc")
-        |   |   +-input_scan=
-        |   |     +-TableScan(column_list=CollatedTable.[string_ci#1, string_binary#2, struct_with_string_ci#3, array_with_string_ci#4], table=CollatedTable, column_index_list=[0, 1, 2, 3])
-        |   +-array_expr_list=
-        |   | +-FunctionCall(GoogleSQL:$make_array(repeated(1) STRUCT<value STRING, metric STRING>) -> ARRAY<STRUCT<value STRING, metric STRING>>)
-        |   |   +-MakeStruct
-        |   |     +-type=STRUCT<value STRING, metric STRING>
-        |   |     +-field_list=
-        |   |       +-ColumnRef(type=STRING, column=$pipe_select.regular_value#5)
-        |   |       +-Literal(type=STRING, value="regular_value", has_explicit_type=TRUE)
-        |   +-element_column_list=[$array.unpivot_unnest#6]
-        +-filter_expr=
-          +-FunctionCall(GoogleSQL:$not(BOOL) -> BOOL)
-            +-FunctionCall(GoogleSQL:$is_null(STRING) -> BOOL)
-              +-GetStructField
-                +-type=STRING
-                +-expr=
-                | +-ColumnRef(type=STRUCT<value STRING, metric STRING>, column=$array.unpivot_unnest#6)
-                +-field_idx=0
+          +-FilterScan
+            +-column_list=[$pipe_select.regular_value#5, CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>, $array.unpivot_unnest#6]
+            +-input_scan=
+            | +-ArrayScan
+            |   +-column_list=[$pipe_select.regular_value#5, CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>, $array.unpivot_unnest#6]
+            |   +-input_scan=
+            |   | +-ProjectScan
+            |   |   +-column_list=[$pipe_select.regular_value#5, CollatedTable.string_ci#1{Collation:"und:ci"}, CollatedTable.string_binary#2{Collation:"binary"}, CollatedTable.struct_with_string_ci#3<_,{Collation:"und:ci"}>, CollatedTable.array_with_string_ci#4<{Collation:"und:ci"}>]
+            |   |   +-expr_list=
+            |   |   | +-regular_value#5 := Literal(type=STRING, value="abc")
+            |   |   +-input_scan=
+            |   |     +-TableScan(column_list=CollatedTable.[string_ci#1, string_binary#2, struct_with_string_ci#3, array_with_string_ci#4], table=CollatedTable, column_index_list=[0, 1, 2, 3])
+            |   +-array_expr_list=
+            |   | +-FunctionCall(GoogleSQL:$make_array(repeated(1) STRUCT<value STRING, metric STRING>) -> ARRAY<STRUCT<value STRING, metric STRING>>)
+            |   |   +-MakeStruct
+            |   |     +-type=STRUCT<value STRING, metric STRING>
+            |   |     +-field_list=
+            |   |       +-ColumnRef(type=STRING, column=$pipe_select.regular_value#5)
+            |   |       +-Literal(type=STRING, value="regular_value", has_explicit_type=TRUE)
+            |   +-element_column_list=[$array.unpivot_unnest#6]
+            +-filter_expr=
+              +-FunctionCall(GoogleSQL:$not(BOOL) -> BOOL)
+                +-FunctionCall(GoogleSQL:$is_null(STRING) -> BOOL)
+                  +-GetStructField
+                    +-type=STRING
+                    +-expr=
+                    | +-ColumnRef(type=STRUCT<value STRING, metric STRING>, column=$array.unpivot_unnest#6)
+                    +-field_idx=0
 ==
 
 create table t (a int64) default collate 'und:ci';
@@ -11607,7 +11618,12 @@ FROM
 |> SELECT
      matchrecognizescan_7.a_1,
      matchrecognizescan_7.a_2,
-     matchrecognizescan_7.a_5 AS x;
+     matchrecognizescan_7.a_5 AS x
+|> AS projectscan_8
+|> SELECT
+     projectscan_8.a_1,
+     projectscan_8.a_2,
+     projectscan_8.x;
 ==
 
 # Collation through the MEASURES clause.

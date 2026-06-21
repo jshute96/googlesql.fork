@@ -101,7 +101,10 @@ FROM
      ARRAY_AGG(SimpleTypes.string
        GROUP BY SimpleTypes.string
        ORDER BY SimpleTypes.string
-       LIMIT 1) AS a_1;
+       LIMIT 1) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 
 Rewrite ERROR: generic::unimplemented: Aggregate functions with GROUP BY modifiers are not supported in ORDER_BY_AND_LIMIT_IN_AGGREGATE rewriter
 ==
@@ -239,4 +242,3 @@ ERROR: multi-level aggregate expression references column double which is neithe
   STRING_AGG(string GROUP BY string ORDER BY double + int64)
                                              ^
 ==
-

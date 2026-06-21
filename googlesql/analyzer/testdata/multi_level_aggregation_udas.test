@@ -1268,7 +1268,11 @@ RETURNS INT64 AS (
         UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_1
       |> AGGREGATE
            SUM(key
-             GROUP BY key) AS a_2)
+             GROUP BY key) AS a_2
+      |> AS aggregatescan_3
+      |> SELECT
+           aggregatescan_3.a_2
+    )
     GROUP BY key)
 );
 ==
@@ -1437,7 +1441,11 @@ FROM
                   |> AS aggregatescan_3
                   |> SELECT
                        aggregatescan_3.a_2
-                )) AS a_4)) AS a_1;
+                )) AS a_4
+         |> AS aggregatescan_5
+         |> SELECT
+              aggregatescan_5.a_4
+       )) AS a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1619,7 +1627,11 @@ FROM
                                 |> AS aggregatescan_6
                                 |> SELECT
                                      aggregatescan_6.a_5
-                              )) AS a_7) AS a_4
+                              )) AS a_7
+                       |> AS aggregatescan_8
+                       |> SELECT
+                            aggregatescan_8.a_7
+                     ) AS a_4
                 |> ORDER BY off
                 |> SELECT
                      a_4
@@ -1686,7 +1698,11 @@ RETURNS INT64 AS (
       UNNEST(arr) AS X
     |> AGGREGATE
          SUM(X
-           GROUP BY X) AS a_1)
+           GROUP BY X) AS a_1
+    |> AS aggregatescan_2
+    |> SELECT
+         aggregatescan_2.a_1
+  )
 );
 ==
 
@@ -1748,7 +1764,11 @@ RETURNS INT64 AS (
       UNNEST(arr) AS X
     |> AGGREGATE
          SUM(int64_arg
-           GROUP BY X) AS a_1)
+           GROUP BY X) AS a_1
+    |> AS aggregatescan_2
+    |> SELECT
+         aggregatescan_2.a_1
+  )
 );
 ==
 
@@ -1948,7 +1968,11 @@ RETURNS DOUBLE AS (
         UNNEST(arr1) AS a_1
       |> AGGREGATE
            MAX(key
-             GROUP BY key) AS a_2) AS DOUBLE)
+             GROUP BY key) AS a_2
+      |> AS aggregatescan_3
+      |> SELECT
+           aggregatescan_3.a_2
+    ) AS DOUBLE)
     GROUP BY key)
 );
 ==
