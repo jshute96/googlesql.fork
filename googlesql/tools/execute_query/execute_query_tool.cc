@@ -243,6 +243,15 @@ ABSL_FLAG(bool, use_box_glyphs, true,
           "Use Unicode box glyphs instead of ASCII characters for the resolved "
           "AST and the result tables output.");
 
+ABSL_FLAG(bool, linear_resolved_ast, false,
+          "Print the resolved AST in linear (pipe-style) mode, with scan "
+          "sequences flattened using '|>' operators, instead of as a nested "
+          "tree.");
+
+ABSL_FLAG(bool, linear_and_tree_resolved_ast, false,
+          "Print the resolved AST both as a nested tree and in linear "
+          "(pipe-style) mode, for easy comparison.");
+
 namespace googlesql {
 
 namespace {
@@ -813,8 +822,9 @@ absl::StatusOr<std::unique_ptr<ExecuteQueryWriter>> MakeWriterFromFlags(
   }
 
   if (mode == "box") {
-    return std::make_unique<ExecuteQueryStreamWriter>(output,
-                                                      config.use_box_glyphs());
+    return std::make_unique<ExecuteQueryStreamWriter>(
+        output, config.use_box_glyphs(), config.linear_resolved_ast(),
+        config.linear_and_tree_resolved_ast());
   }
 
   std::function<absl::Status(const google::protobuf::Message& msg, std::ostream&)>
@@ -905,6 +915,9 @@ absl::Status InitializeExecuteQueryConfig(ExecuteQueryConfig& config) {
   config.mutable_analyzer_options().set_prune_unused_columns(
       absl::GetFlag(FLAGS_prune_unused_columns));
   config.set_use_box_glyphs(absl::GetFlag(FLAGS_use_box_glyphs));
+  config.set_linear_resolved_ast(absl::GetFlag(FLAGS_linear_resolved_ast));
+  config.set_linear_and_tree_resolved_ast(
+      absl::GetFlag(FLAGS_linear_and_tree_resolved_ast));
 
   GOOGLESQL_RETURN_IF_ERROR(SetDescriptorPoolFromFlags(config));
   GOOGLESQL_RETURN_IF_ERROR(SetToolModeFromFlags(config));
