@@ -52,8 +52,16 @@ formatters, #8 AST-node resolution info, #10 linear Resolved AST DebugString).
    block for the statement, and a `data-scan-id` per scan box. Scalar fields and
    non-scan children render as escaped text in their box.
 4. **SQLBuilder pane**: run `SQLBuilder` in `TargetSyntaxMode::kPipe` on the
-   Resolved AST, lenient-format the result, then **re-parse and re-analyze** it
-   so its NameLists are available, and render it with the same box formatter.
+   Resolved AST and lenient-format the result. The SQLBuilder records, as a
+   passive side-channel (`pipe_operator_scan_order()`), the original
+   `ResolvedScan` responsible for each emitted `|>` (in output order).
+   `SegmentPipeSqlToHtml` then splits the formatted SQL at each `|>` and wraps
+   each segment in a `.rscan` box — the *same* markup the Resolved AST pane uses
+   — tagged with that scan's `data-scan-id`. So the SQLBuilder pane lines up
+   visually with the AST pane and the existing correspondence highlighting
+   (keyed on `.rscan[data-scan-id]`) works across all three panes with no extra
+   client code. The leading (FROM/source) segment is tagged with the source
+   scan-id (0).
 5. Hand a `VisualizationData` to the writer. Text writers print three labeled
    sections; the web writer fills `viz_*_html` template params.
 
@@ -93,17 +101,30 @@ The `ResolvedScan` (a linear pipe operator) is the correspondence hub:
   pipe-operator / table AST nodes to scan info; this will be extended to carry
   the `const ResolvedScan*` so the link is exact. Parse-location byte ranges are
   the fallback.
-- **Resolved AST ↔ SQLBuilder SQL**: the `SQLBuilder` will be instrumented (pipe
-  mode only) to record the output byte range each `ResolvedScan` produces (each
-  scan → 1–2 pipe operators). Non-pipe-input scan fields mark query boundaries
-  (→ subqueries); a trailing final-column-list `ProjectScan` belongs to the
-  enclosing query.
-- **SQLBuilder SQL ↔ its NameLists**: via re-analysis (already done) — used for
-  the details box, not for correspondence.
+- **Resolved AST ↔ SQLBuilder SQL**: the `SQLBuilder` (pipe mode) records the
+  original `ResolvedScan` for each emitted `|>` in output order
+  (`pipe_operator_scan_order()`); `SegmentPipeSqlToHtml` tags each output
+  segment's `.rscan` box with that scan's id. Since both the AST and SQLBuilder
+  panes use `.rscan[data-scan-id]`, correspondence is automatic. A scan that
+  emits two `|>`s maps both segments to the same id.
 
-Clicking selects the item and highlights corresponding ranges in the other
-visible panes; when there is no 1:1 match we fall back to the nearest enclosing
-query block. Hidden panes are skipped (except transitively through the AST).
+Clicking selects the item (`.viz-selected`) and highlights the matching
+`data-scan-id` boxes/markers in the other panes (`.viz-corresp`). Hidden panes
+are simply not visible; the highlight classes are still applied so they show on
+re-add.
+
+### Known limitations of the segment approach
+
+- Segments are split at every `|>` in the formatted text, regardless of paren
+  nesting, so a nested subquery's operators are split at the top level rather
+  than rendered as a nested block. The `data-scan-id` per operator is still
+  correct (emission order matches textual `|>` order); only the visual grouping
+  is flat.
+- The leading source segment is always tagged scan-id 0 (the deepest source);
+  for queries whose top-level FROM is a subquery this is approximate.
+- The SQLBuilder pane no longer carries NameLists, so it has no click-details
+  (only correspondence highlighting). Re-adding details would require
+  re-analyzing the regenerated SQL (as an earlier iteration did).
 
 ## Status / TODOs
 
@@ -112,11 +133,13 @@ query block. Hidden panes are skipped (except transitively through the AST).
       dividers + details resizer, linked state, click→details box.
 - [x] Milestone 2: structured linear Resolved AST emitter
       (`ResolvedNode::DebugStringHtml`).
-- [ ] Milestone 4: correspondence data + cross-pane highlighting.
-  - [ ] Extend `ResolvedScanInfo`/`TableScanInfo` with `const ResolvedScan*`.
-  - [ ] Instrument `SQLBuilder` (pipe mode) to emit per-scan output ranges.
-  - [ ] JS correspondence engine over a render-time scan-id map.
-- [ ] Resolved AST pane details/info content (deferred by design).
+- [x] Milestone 4a: input SQL ↔ Resolved AST correspondence
+      (`ResolvedScanInfo`/`TableScanInfo` carry `const ResolvedScan*`; input
+      boxes tagged via `.ni-scan-id`; JS correspondence engine).
+- [x] Milestone 4b: Resolved AST ↔ SQLBuilder SQL correspondence via passive
+      emission-order instrumentation + `.rscan` segment divs.
+- [ ] Resolved AST / SQLBuilder pane details content (deferred by design).
+- [ ] Nested-subquery-aware segmentation in the SQLBuilder pane.
 - [ ] Handle non-query statements and scripts (currently query-only).
 - [ ] Revisit rewriter handling: visualization currently disables rewriters; a
       toggle may be wanted.

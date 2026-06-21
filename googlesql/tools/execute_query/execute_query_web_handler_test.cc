@@ -221,8 +221,13 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeScanIds) {
   // The input pane carries hidden scan-id markers correlating its boxes to the
   // same scans (input SQL <-> Resolved AST correspondence).
   EXPECT_THAT(result, HasSubstr("ni-scan-id"));
-  // The SQLBuilder pane is rendered too.
+  // The SQLBuilder pane is rendered as scan-tagged .rscan segment boxes too, so
+  // the regenerated pipe operators correspond to the same scans.
   EXPECT_THAT(result, HasSubstr("[SB]"));
+  std::string sb = result.substr(result.find("[SB]"));
+  EXPECT_THAT(sb, HasSubstr("class=\"rscan "));
+  EXPECT_THAT(sb, HasSubstr("data-scan-id="));
+  EXPECT_THAT(sb, HasSubstr("|&gt; WHERE"));
 }
 
 TEST(ExecuteQueryWebHandlerTest, TestQueryExecutedSimpleResult) {

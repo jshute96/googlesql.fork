@@ -1376,11 +1376,59 @@ static absl::Status UnanalyzeQuery(const ResolvedNode* resolved_node,
 }
 
 // Wraps `text` as an escaped <pre> block for one visualizer pane.  Used as a
-// placeholder rendering for the Resolved AST pane until the structured linear
-// emitter (Milestone 2) replaces it.
+// fallback when richer rendering is unavailable.
 static std::string PreBlockHtml(absl::string_view text) {
   return absl::StrCat("<pre class=\"viz-pre\">", EscapeHtmlText(text),
                       "</pre>");
+}
+
+// Renders the SQLBuilder pane: splits the formatted pipe SQL at each "|>" and
+// wraps each segment in a `.rscan` box (the same markup the Resolved AST pane
+// uses) tagged with the `data-scan-id` of the ResolvedScan that produced it, so
+// the panes line up and the client-side correspondence highlighting (keyed on
+// `.rscan[data-scan-id]`) lights up across all three panes.  The leading
+// segment (the FROM source, before the first "|>") is tagged with
+// `source_scan_id`; the segment introduced by the (k+1)-th "|>" is tagged with
+// `op_scan_ids[k]` (the SQLBuilder records one scan per emitted "|>", in output
+// order).  A box is shaded to match its scan-id's parity in the AST pane.
+static std::string SegmentPipeSqlToHtml(absl::string_view sql,
+                                        int source_scan_id,
+                                        const std::vector<int>& op_scan_ids) {
+  std::vector<absl::string_view> segments;
+  size_t start = 0;    // beginning of the current segment
+  size_t search = 0;   // where to resume searching for the next "|>"
+  while (true) {
+    size_t pipe = sql.find("|>", search);
+    if (pipe == absl::string_view::npos) {
+      segments.push_back(sql.substr(start));
+      break;
+    }
+    // segments[0] is the leading source (may be empty); each later segment
+    // begins at a "|>".
+    segments.push_back(sql.substr(start, pipe - start));
+    start = pipe;
+    search = pipe + 2;
+  }
+
+  std::string html = "<div class=\"rscan-stmt\">";
+  for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
+    const int scan_id =
+        (i == 0) ? source_scan_id
+                 : (i - 1 < static_cast<int>(op_scan_ids.size())
+                        ? op_scan_ids[i - 1]
+                        : -1);
+    const char* cls = (scan_id >= 0 && scan_id % 2 == 1) ? "scan-b" : "scan-a";
+    absl::StrAppend(&html, "<div class=\"rscan ", cls, "\"");
+    if (scan_id >= 0) {
+      absl::StrAppend(&html, " data-scan-id=\"", scan_id, "\"");
+    }
+    absl::StrAppend(
+        &html, ">",
+        EscapeHtmlText(absl::StripTrailingAsciiWhitespace(segments[i])),
+        "</div>");
+  }
+  absl::StrAppend(&html, "</div>");
+  return html;
 }
 
 // Builds the "visualize" output: the input SQL, the Resolved AST (linear pipe
@@ -1448,35 +1496,19 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   }
   data.sqlbuilder_sql = formatted_built_sql;
 
-  // Re-parse and re-analyze the regenerated SQL so its NameLists are available
-  // for the SQLBuilder pane's click-details, then render it the same way.
-  std::unique_ptr<ParserOutput> built_parser_output;
-  absl::Status built_parsed = ParseStatement(
-      formatted_built_sql,
-      ParserOptions(config.analyzer_options().language()),
-      &built_parser_output);
-  if (built_parsed.ok()) {
-    const ASTStatement* built_ast = built_parser_output->statement();
-    AnalyzerOptions built_options = config.analyzer_options();
-    built_options.set_enabled_rewrites({});
-    built_options.set_parse_location_record_type(
-        PARSE_LOCATION_RECORD_FULL_NODE_SCOPE);
-    std::unique_ptr<const AnalyzerOutput> built_analyzer_output;
-    absl::Status built_analyzed = AnalyzeStatementFromParserAST(
-        *built_ast, built_options, formatted_built_sql, config.catalog(),
-        config.type_factory(), &built_analyzer_output);
-    if (built_analyzed.ok()) {
-      absl::StatusOr<std::string> built_html = RenderBoxHtmlWithNodeInfo(
-          formatted_built_sql, built_ast, *built_analyzer_output, config);
-      if (built_html.ok()) {
-        data.sqlbuilder_sql_html = *built_html;
-      }
-    }
+  // Map the scans the SQLBuilder recorded (one per emitted "|>", in output
+  // order) to their scan-ids.
+  std::vector<int> op_scan_ids;
+  for (const ResolvedScan* op_scan : builder.pipe_operator_scan_order()) {
+    auto it = scan_ids.find(op_scan);
+    op_scan_ids.push_back(it != scan_ids.end() ? it->second : -1);
   }
-  // Fall back to a plain <pre> if box rendering was unavailable.
-  if (data.sqlbuilder_sql_html.empty()) {
-    data.sqlbuilder_sql_html = PreBlockHtml(formatted_built_sql);
-  }
+  // The leading (source) segment is the deepest source scan, which the linear
+  // emitter assigns scan-id 0.
+  const int source_scan_id = scan_order.empty() ? -1 : 0;
+  data.sqlbuilder_sql_html =
+      SegmentPipeSqlToHtml(formatted_built_sql, source_scan_id, op_scan_ids);
+
   if (data.input_sql_html.empty()) {
     data.input_sql_html = PreBlockHtml(sql);
   }

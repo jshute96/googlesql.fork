@@ -711,7 +711,16 @@ absl::StatusOr<std::unique_ptr<SQLBuilder::QueryFragment>>
 SQLBuilder::ProcessNode(const ResolvedNode* node) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
   GOOGLESQL_RET_CHECK(node != nullptr);
-  GOOGLESQL_RETURN_IF_ERROR(node->Accept(this));
+  // Track the scan currently being visited for the visualizer side-channel, so
+  // AppendPipeOperator can attribute each emitted "|>" to its ResolvedScan.
+  // Restored afterwards so nested ProcessNode calls don't clobber it.
+  const ResolvedScan* saved_scan = current_scan_;
+  if (node->IsScan()) {
+    current_scan_ = node->GetAs<ResolvedScan>();
+  }
+  absl::Status accept_status = node->Accept(this);
+  current_scan_ = saved_scan;
+  GOOGLESQL_RETURN_IF_ERROR(accept_status);
   GOOGLESQL_RET_CHECK_EQ(query_fragments_.size(), 1) << CurrentStackTrace();
   return PopQueryFragment();
 }
@@ -11948,6 +11957,13 @@ SQLBuilder::MakePipeQueryExpression(absl::string_view pipe_sql) {
 absl::StatusOr<std::unique_ptr<QueryExpression>> SQLBuilder::AppendPipeOperator(
     absl::string_view pipe_sql, absl::string_view op_sql,
     bool is_pipe_operator_chain) {
+  // Visualizer side-channel: record the scan responsible for this operator,
+  // but only when a "|>" is actually emitted (i.e. there is preceding pipe
+  // text), so the recorded sequence lines up one-to-one with the "|>"s in the
+  // output.  Passive: does not affect `out_sql`.
+  if (!pipe_sql.empty() && current_scan_ != nullptr) {
+    pipe_operator_scan_order_.push_back(current_scan_);
+  }
   std::string out_sql =
       pipe_sql.empty()
           ? std::string(op_sql)

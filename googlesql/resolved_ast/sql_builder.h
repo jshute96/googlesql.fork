@@ -292,6 +292,16 @@ class SQLBuilder : public ResolvedASTVisitor {
   // node.
   absl::StatusOr<std::string> GetSql();
 
+  // Visualizer support (pipe target mode).  As each pipe operator "|>" is
+  // appended, the ResolvedScan responsible for it is recorded here in output
+  // order (one entry per emitted "|>").  This is a passive side-channel: it does
+  // not affect the generated SQL.  Lets the execute_query visualizer correlate
+  // each operator in the regenerated pipe SQL with its ResolvedScan (and thus
+  // with the Resolved AST and input SQL panes).  Empty when not in pipe mode.
+  const std::vector<const ResolvedScan*>& pipe_operator_scan_order() const {
+    return pipe_operator_scan_order_;
+  }
+
   // This deprecated version can crash in some cases.  Use GetSql() instead.
   // This one also returns successfully with "" if no nodes have been visited,
   // which GetSql() won't do any more.
@@ -1541,6 +1551,12 @@ class SQLBuilder : public ResolvedASTVisitor {
                                       absl::string_view pipe_sql,
                                       bool is_operator_chain,
                                       absl::string_view op_sql);
+
+  // Visualizer side-channel (see pipe_operator_scan_order()).  `current_scan_`
+  // is the ResolvedScan whose Visit method is currently running, maintained by
+  // ProcessNode; AppendPipeOperator records it once per emitted "|>".
+  const ResolvedScan* current_scan_ = nullptr;
+  std::vector<const ResolvedScan*> pipe_operator_scan_order_;
 
   // Builds the comma-separated subpipeline list shared by the pipe FORK and TEE
   // operators (e.g. "( |> SELECT key ), ( |> WHERE true )"). Each subpipeline is
