@@ -62,6 +62,12 @@ class ExecuteQueryConfig {
   ExecuteQueryConfig& operator=(const ExecuteQueryConfig&) = delete;
 
   enum class ToolMode {
+    // Visualize the query: show the input SQL, the Resolved AST (in linear
+    // pipe form), and the SQLBuilder-regenerated SQL side by side, with
+    // correspondence highlighting between them.  Listed first so it is the
+    // first checkbox in the web UI.
+    kVisualize,
+
     // Parse the query, and print a debug string of the parsed AST.
     kParse,
 

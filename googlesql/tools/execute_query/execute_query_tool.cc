@@ -489,6 +489,8 @@ std::optional<ToolMode> ExecuteQueryConfig::parse_tool_mode(
     absl::string_view mode) {
   static const auto* kToolModeMap =
       new absl::flat_hash_map<absl::string_view, ToolMode>({
+          {"visualize", ToolMode::kVisualize},
+          {"visualizer", ToolMode::kVisualize},
           {"parse", ToolMode::kParse},
           {"parser", ToolMode::kParse},
           {"unparse", ToolMode::kUnparse},
@@ -518,6 +520,7 @@ std::optional<ToolMode> ExecuteQueryConfig::parse_tool_mode(
 absl::string_view ExecuteQueryConfig::tool_mode_name(ToolMode tool_mode) {
   static const auto* kToolModeNames =
       new absl::flat_hash_map<ToolMode, absl::string_view>({
+          {ToolMode::kVisualize, "visualize"},
           {ToolMode::kParse, "parse"},
           {ToolMode::kUnparse, "unparse"},
           {ToolMode::kResolve, "analyze"},
@@ -1229,13 +1232,13 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
                       "<div class=\"ni-body\">", body, "</div>");
 }
 
-// Emits the analyze-mode "query viewer": the box-formatted query with each
-// AST node's resolver info (NameLists) attached as a hover box.
-static absl::Status WriteAnalyzedQueryViewer(absl::string_view sql,
-                                             const ASTNode* ast,
-                                             const AnalyzerOutput& output,
-                                             const ExecuteQueryConfig& config,
-                                             ExecuteQueryWriter& writer) {
+// Renders SQL as box-formatted HTML (parser/box_formatter.h) with each AST
+// node's resolver info (NameLists, etc.) attached as a `.node-info` hover box,
+// using the resolution info captured in `output`'s ASTNodeResolvedInfoMap.
+// Shared by the analyze-mode query viewer and the visualizer panes.
+static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
+    absl::string_view sql, const ASTNode* ast, const AnalyzerOutput& output,
+    const ExecuteQueryConfig& config) {
   const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
   const ProductMode product_mode =
       config.analyzer_options().language().product_mode();
@@ -1244,8 +1247,19 @@ static absl::Status WriteAnalyzedQueryViewer(absl::string_view sql,
     if (it == info_map.end()) return std::string();
     return ResolvedInfoHoverHtml(it->second, product_mode);
   };
-  absl::StatusOr<std::string> html = SqlToBoxHtml(
-      sql, ast, config.analyzer_options().language(), /*width=*/80, annotate);
+  return SqlToBoxHtml(sql, ast, config.analyzer_options().language(),
+                      /*width=*/80, annotate);
+}
+
+// Emits the analyze-mode "query viewer": the box-formatted query with each
+// AST node's resolver info (NameLists) attached as a hover box.
+static absl::Status WriteAnalyzedQueryViewer(absl::string_view sql,
+                                             const ASTNode* ast,
+                                             const AnalyzerOutput& output,
+                                             const ExecuteQueryConfig& config,
+                                             ExecuteQueryWriter& writer) {
+  absl::StatusOr<std::string> html =
+      RenderBoxHtmlWithNodeInfo(sql, ast, output, config);
   if (html.ok()) {
     GOOGLESQL_RETURN_IF_ERROR(writer.formatted_analyzed_html(*html));
   }
@@ -1337,6 +1351,110 @@ static absl::Status UnanalyzeQuery(const ResolvedNode* resolved_node,
   GOOGLESQL_ASSIGN_OR_RETURN(std::string sql, builder.GetSql());
   GOOGLESQL_ASSIGN_OR_RETURN(std::string formatted_sql, LenientFormatSql(sql));
   return writer.unanalyze(formatted_sql);
+}
+
+// Wraps `text` as an escaped <pre> block for one visualizer pane.  Used as a
+// placeholder rendering for the Resolved AST pane until the structured linear
+// emitter (Milestone 2) replaces it.
+static std::string PreBlockHtml(absl::string_view text) {
+  return absl::StrCat("<pre class=\"viz-pre\">", EscapeHtmlText(text),
+                      "</pre>");
+}
+
+// Builds the "visualize" output: the input SQL, the Resolved AST (linear pipe
+// form), and the SQLBuilder-regenerated SQL (pipe syntax).  Analyzes the query
+// itself (rewriters disabled, parse locations recorded) so the Resolved AST
+// stays close to the input pipe structure, runs the SQLBuilder in pipe mode,
+// then re-analyzes the regenerated SQL so its NameLists can be shown too.
+static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
+                                   ExecuteQueryConfig& config,
+                                   ExecuteQueryWriter& writer) {
+  // Only queries are visualized for now.  In query mode the parser root is
+  // always an ASTStatement.
+  if (config.sql_mode() != ExecuteQueryConfig::SqlMode::kQuery) {
+    return absl::OkStatus();
+  }
+
+  // Analyze with rewrites disabled and parse locations recorded.  This keeps
+  // the Resolved AST close to the input pipe structure and lets us correlate
+  // ResolvedScans back to input-SQL byte ranges.
+  AnalyzerOptions viz_options = config.analyzer_options();
+  viz_options.set_enabled_rewrites({});
+  viz_options.set_parse_location_record_type(
+      PARSE_LOCATION_RECORD_FULL_NODE_SCOPE);
+  std::unique_ptr<const AnalyzerOutput> analyzer_output;
+  GOOGLESQL_RETURN_IF_ERROR(AnalyzeStatementFromParserAST(
+      *ast->GetAsOrDie<ASTStatement>(), viz_options, sql, config.catalog(),
+      config.type_factory(), &analyzer_output));
+  const ResolvedNode* resolved = analyzer_output->resolved_node();
+  GOOGLESQL_RET_CHECK_NE(resolved, nullptr);
+
+  VisualizationData data;
+  data.input_sql = std::string(sql);
+
+  // --- Input SQL pane: box HTML with node info. ---
+  absl::StatusOr<std::string> input_html =
+      RenderBoxHtmlWithNodeInfo(sql, ast, *analyzer_output, config);
+  if (input_html.ok()) {
+    data.input_sql_html = *input_html;
+  }
+
+  // --- Resolved AST pane: linear (pipe-style) DebugString. ---
+  ResolvedNode::DebugStringConfig debug_config;
+  debug_config.linear_mode = true;
+  data.resolved_ast_text = resolved->DebugString(debug_config);
+  // TODO(visualizer): replace with a structured linear emitter (one box per
+  // ResolvedScan, alternating colors, data-scan-id) in Milestone 2.
+  data.resolved_ast_html = PreBlockHtml(data.resolved_ast_text);
+
+  // --- SQLBuilder pane: regenerate SQL in pipe syntax. ---
+  SQLBuilder::SQLBuilderOptions sql_builder_options;
+  sql_builder_options.language_options = config.analyzer_options().language();
+  sql_builder_options.catalog = config.catalog();
+  sql_builder_options.target_syntax_mode = SQLBuilder::TargetSyntaxMode::kPipe;
+  SQLBuilder builder(sql_builder_options);
+  GOOGLESQL_RETURN_IF_ERROR(builder.Process(*resolved));
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string built_sql, builder.GetSql());
+  std::string formatted_built_sql = built_sql;
+  if (absl::StatusOr<std::string> f = LenientFormatSql(built_sql); f.ok()) {
+    formatted_built_sql = *f;
+  }
+  data.sqlbuilder_sql = formatted_built_sql;
+
+  // Re-parse and re-analyze the regenerated SQL so its NameLists are available
+  // for the SQLBuilder pane's click-details, then render it the same way.
+  std::unique_ptr<ParserOutput> built_parser_output;
+  absl::Status built_parsed = ParseStatement(
+      formatted_built_sql,
+      ParserOptions(config.analyzer_options().language()),
+      &built_parser_output);
+  if (built_parsed.ok()) {
+    const ASTStatement* built_ast = built_parser_output->statement();
+    AnalyzerOptions built_options = config.analyzer_options();
+    built_options.set_enabled_rewrites({});
+    built_options.set_parse_location_record_type(
+        PARSE_LOCATION_RECORD_FULL_NODE_SCOPE);
+    std::unique_ptr<const AnalyzerOutput> built_analyzer_output;
+    absl::Status built_analyzed = AnalyzeStatementFromParserAST(
+        *built_ast, built_options, formatted_built_sql, config.catalog(),
+        config.type_factory(), &built_analyzer_output);
+    if (built_analyzed.ok()) {
+      absl::StatusOr<std::string> built_html = RenderBoxHtmlWithNodeInfo(
+          formatted_built_sql, built_ast, *built_analyzer_output, config);
+      if (built_html.ok()) {
+        data.sqlbuilder_sql_html = *built_html;
+      }
+    }
+  }
+  // Fall back to a plain <pre> if box rendering was unavailable.
+  if (data.sqlbuilder_sql_html.empty()) {
+    data.sqlbuilder_sql_html = PreBlockHtml(formatted_built_sql);
+  }
+  if (data.input_sql_html.empty()) {
+    data.input_sql_html = PreBlockHtml(sql);
+  }
+
+  return writer.visualized(data);
 }
 
 static bool IsDdlStatement(const ResolvedNode* node) {
@@ -2421,6 +2539,10 @@ static absl::Status ExecuteOneQuery(absl::string_view script,
     if (macro_registered) {
       return absl::OkStatus();
     }
+  }
+
+  if (config.has_tool_mode(ToolMode::kVisualize)) {
+    GOOGLESQL_RETURN_IF_ERROR(VisualizeQuery(script, *ast, config, writer));
   }
 
   if (!IsAnalysisRequired(config)) {

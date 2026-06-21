@@ -92,6 +92,17 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
     return absl::OkStatus();
   }
 
+  absl::Status visualized(const VisualizationData& data) override {
+    current_statement_params_["result_visualized"] = true;
+    current_statement_params_["viz_input_sql_html"] = data.input_sql_html;
+    current_statement_params_["viz_resolved_ast_html"] =
+        data.resolved_ast_html;
+    current_statement_params_["viz_sqlbuilder_sql_html"] =
+        data.sqlbuilder_sql_html;
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
   absl::Status explained(const ResolvedNode &ast,
                          absl::string_view explain) override {
     current_statement_params_["result_explained"] = std::string(explain);

@@ -25,9 +25,24 @@
 #include "googlesql/public/evaluator_table_iterator.h"
 #include "googlesql/resolved_ast/resolved_node.h"
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 
 namespace googlesql {
+
+// Bundle of the three representations rendered by the "visualize" tool mode:
+// the input SQL, the Resolved AST (in linear pipe form), and the
+// SQLBuilder-regenerated SQL.  Plain-text fields are used by text output; the
+// `_html` fields are used by web output and may be empty if rendering failed.
+struct VisualizationData {
+  std::string input_sql;
+  std::string resolved_ast_text;
+  std::string sqlbuilder_sql;
+
+  std::string input_sql_html;
+  std::string resolved_ast_html;
+  std::string sqlbuilder_sql_html;
+};
 
 class ExecuteQueryWriter {
  public:
@@ -83,6 +98,18 @@ class ExecuteQueryWriter {
   }
   virtual absl::Status unanalyze(absl::string_view unanalyze_string) {
     return WriteOperationString("unanalyze", unanalyze_string);
+  }
+
+  // Output for the "visualize" tool mode.  The default (text) rendering prints
+  // the three representations as labeled sections; web mode overrides this to
+  // populate the side-by-side visualizer panes.
+  virtual absl::Status visualized(const VisualizationData& data) {
+    return WriteOperationString(
+        "visualized",
+        absl::StrCat("==== Input SQL ====\n", data.input_sql, "\n\n",
+                     "==== Resolved AST (linear) ====\n",
+                     data.resolved_ast_text, "\n\n",
+                     "==== SQLBuilder SQL ====\n", data.sqlbuilder_sql, "\n"));
   }
 
   virtual absl::Status explained(const ResolvedNode& ast,

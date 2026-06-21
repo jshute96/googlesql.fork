@@ -23,6 +23,7 @@ component doc when working on that area.
 | [components/scripting.md](components/scripting.md) | Procedural SQL scripts (control flow, variables). |
 | [components/compliance-and-testing.md](components/compliance-and-testing.md) | Conformance framework + shared test catalog/data. |
 | [components/tooling-and-bindings.md](components/tooling-and-bindings.md) | `execute_query`, formatter, `local_service`, Java bindings, examples. |
+| [execute-query-visualizer.md](execute-query-visualizer.md) | The `execute_query` query visualizer: input SQL / Resolved AST / SQLBuilder SQL side by side, with correspondence highlighting. |
 | `../CLAUDE.md` | Top-level orientation & quick pointers (repo root). |
 
 ## Component hierarchy

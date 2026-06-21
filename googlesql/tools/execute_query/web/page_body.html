@@ -14,6 +14,12 @@
               <fieldset>
                 <legend>Mode</legend>
                 <span class="mode-option">
+                  <input type="checkbox" name="mode" value="visualize" id="mode-visualize"
+                    {{#mode_visualize}}checked{{/mode_visualize}}>
+                  <label for="mode-visualize">Visualize</label>
+                </span>
+
+                <span class="mode-option">
                   <input type="checkbox" name="mode" value="execute" id="mode-execute"
                     {{#mode_execute}}checked{{/mode_execute}}>
                   <label for="mode-execute">Execute</label>
@@ -127,6 +133,40 @@
             <p>
           {{/error}}
           {{#result}}
+            {{#result_visualized}}
+            <h3>Visualize</h3>
+            <div class="viz" data-viz>
+              <div class="viz-readd-bar"></div>
+              <div class="viz-columns">
+                <div class="viz-col" data-col="input">
+                  <div class="viz-tab">
+                    <span class="viz-tab-label">Input SQL</span>
+                    <button type="button" class="viz-hide" title="Hide column">&times;</button>
+                  </div>
+                  <div class="viz-pane">{{{viz_input_sql_html}}}</div>
+                </div>
+                <div class="viz-divider" data-divider="0"></div>
+                <div class="viz-col" data-col="ast">
+                  <div class="viz-tab">
+                    <span class="viz-tab-label">Resolved AST</span>
+                    <button type="button" class="viz-hide" title="Hide column">&times;</button>
+                  </div>
+                  <div class="viz-pane">{{{viz_resolved_ast_html}}}</div>
+                </div>
+                <div class="viz-divider" data-divider="1"></div>
+                <div class="viz-col" data-col="sqlbuilder">
+                  <div class="viz-tab">
+                    <span class="viz-tab-label">SQLBuilder SQL</span>
+                    <button type="button" class="viz-hide" title="Hide column">&times;</button>
+                  </div>
+                  <div class="viz-pane">{{{viz_sqlbuilder_sql_html}}}</div>
+                </div>
+              </div>
+              <div class="viz-info-resizer" title="Drag to resize"></div>
+              <div class="viz-info"><span class="viz-info-placeholder">Details for selected node</span></div>
+            </div>
+            {{/result_visualized}}
+
             {{#result_executed}}
             <h3>Execute</h3>
               {{#result_executed_tables}}

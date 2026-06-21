@@ -588,3 +588,243 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
   background: #d2f8d2;
   color: #0a5c2b;
 }
+
+/* ==========================================================================
+   Visualize mode.
+
+   When the "Visualize" output is active, execute_query drops the two-column
+   (editor | results) layout and stacks the editor on top so the results use
+   the full window width.  Each statement renders a `.viz` block: a row of up
+   to three resizable columns (Input SQL, Resolved AST, SQLBuilder SQL) above a
+   resizable details box.  Column visibility, column widths and the details-box
+   height are linked across every `.viz` block on the page (managed by JS in
+   query_viewer.js); these rules just provide the structure and styling.
+   ========================================================================== */
+html[data-visualize] main {
+  display: block;
+  height: auto;
+}
+html[data-visualize] .right-section {
+  overflow-y: initial;
+  height: auto;
+}
+
+.viz {
+  display: flex;
+  flex-direction: column;
+  /* Cap the whole visualization at the viewport height; panes scroll inside. */
+  max-height: 100vh;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* Re-add bar: holds "+ Label" buttons for columns the user has hidden. */
+.viz-readd-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 6px;
+  min-height: 0;
+}
+.viz-readd-bar:empty {
+  display: none;
+}
+.viz-readd {
+  font: inherit;
+  font-size: 0.8em;
+  padding: 1px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #f3f3f3;
+  color: #444;
+  cursor: pointer;
+}
+.viz-readd:hover {
+  background: #e7eef7;
+}
+
+/* The columns row. */
+.viz-columns {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+}
+.viz-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Width is controlled by flex-grow via --w (linked across statements). */
+  flex: var(--w, 1) 1 0;
+  overflow: hidden;
+}
+.viz-col.hidden {
+  display: none;
+}
+/* A divider is hidden when either neighbouring column is hidden (handled in
+   JS, which toggles .hidden on the divider too). */
+.viz-divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: #e3e3e3;
+  border-left: 1px solid #ccc;
+  border-right: 1px solid #ccc;
+}
+.viz-divider.hidden {
+  display: none;
+}
+.viz-divider:hover {
+  background: #c7d6ea;
+}
+
+/* Column header tab. */
+.viz-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 8px;
+  background: #f3f3f3;
+  border-bottom: 1px solid #ccc;
+  font-size: 0.85em;
+  font-weight: bold;
+  color: #333;
+  flex: 0 0 auto;
+}
+.viz-hide {
+  font: inherit;
+  font-size: 1.1em;
+  line-height: 1;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+}
+.viz-hide:hover {
+  color: #c0392b;
+}
+
+/* Column body: scrolls both directions if content overflows. */
+.viz-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 8px;
+}
+.viz-pre {
+  margin: 0;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+/* Details box resizer (drag to change the details box height). */
+.viz-info-resizer {
+  flex: 0 0 6px;
+  cursor: row-resize;
+  background: #e3e3e3;
+  border-top: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+}
+.viz-info-resizer:hover {
+  background: #c7d6ea;
+}
+
+/* Details box: shows info for the selected node. Height linked across
+   statements; min one line, default ~10 lines, max half the viewport. */
+.viz-info {
+  flex: 0 0 auto;
+  height: var(--info-h, 15em);
+  min-height: 1.4em;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 6px 10px;
+  font-family: sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  background: #fafafa;
+  border-top: 1px solid #ccc;
+}
+.viz-info-placeholder {
+  color: #999;
+  font-style: italic;
+}
+/* The details box reuses the popup's inner markup (heading stack + NameList
+   bodies); these mirror the .node-popup rules, scoped to .viz-info. */
+.viz-info .np-heading {
+  white-space: nowrap;
+}
+.viz-info .np-heading .np-in {
+  color: #888;
+}
+.viz-info .np-heading.selected .np-title {
+  font-weight: bold;
+}
+.viz-info .np-hr {
+  border-top: 1px solid #ccc;
+  margin: 6px 0;
+}
+.viz-info .hi-h {
+  font-weight: bold;
+  margin: 14px 0 2px;
+}
+.viz-info .hi-h:first-child {
+  margin-top: 0;
+}
+.viz-info .hi-nl {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.viz-info .nl-del {
+  background: #ffd7d5;
+  color: #82071e;
+  text-decoration: line-through;
+}
+.viz-info .nl-add {
+  background: #d2f8d2;
+  color: #0a5c2b;
+}
+
+/* Cross-pane correspondence highlighting (filled in by JS in Milestone 4).
+   `.viz-selected` is the directly selected item; `.viz-corresp` are the
+   corresponding items in the other panes. */
+.viz .rect.viz-corresp,
+.viz .rscan.viz-corresp {
+  outline: 2px solid #f0a93b;
+  outline-offset: 0;
+}
+.viz .rect.viz-selected,
+.viz .rscan.viz-selected {
+  outline: 2px solid #d35400;
+  outline-offset: 0;
+  filter: brightness(1.1) saturate(1.3);
+}
+
+/* Resolved AST pane: one box per ResolvedScan, alternating shades, rendered by
+   the structured linear emitter (Milestone 2). */
+.rscan {
+  display: block;
+  border: 1px solid #cfd6df;
+  border-radius: 3px;
+  margin: 2px 0;
+  padding: 2px 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+  cursor: pointer;
+}
+.rscan.scan-a {
+  background: #eef1f5;
+}
+.rscan.scan-b {
+  background: #dde9fb;
+}
+.rscan .rscan-children {
+  margin-left: 1.5em;
+}
+.rscan-query {
+  border: 1px solid #9bb8df;
+  border-radius: 3px;
+  margin: 2px 0;
+  padding: 2px 4px;
+}
