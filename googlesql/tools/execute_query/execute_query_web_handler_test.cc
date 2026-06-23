@@ -233,6 +233,41 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeCrossRefs) {
   EXPECT_THAT(sb, HasSubstr("|&gt; WHERE"));
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeJoinPipeCorrespondence) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kPipe,
+          "FROM (SELECT 1 AS a), (SELECT 2 AS b), (SELECT 3 AS c) "
+          "|> WHERE a > 0 "
+          "|> AGGREGATE sum(b) AS s GROUP BY c "
+          "|> ORDER BY s "
+          "|> SELECT c, s",
+          "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}"
+                            "[SB]{{{viz_sqlbuilder_sql_html}}}"
+                            "{{/result_visualized}}{{/statements}}"),
+      result));
+  std::string sb = result.substr(result.find("[SB]"));
+  // The SQLBuilder regenerates the comma joins as a flat run of top-level
+  // segments (SELECT .. |> AS .. |> CROSS JOIN (..) |> SELECT .. |> AS ..).
+  // Correspondence is structural: each of the user's own pipe operators maps
+  // 1:1 to the scan it came from -- NOT to a random nested join scan (the bug
+  // this guards against).  The linear Resolved AST emits, in order, the source
+  // scans and join tree as r0..r7, then FilterScan r8, AggregateScan r9,
+  // OrderByScan r10 and the final ProjectScan r11.
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r8\">|&gt; WHERE"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r9\">|&gt; AGGREGATE"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r10\">|&gt; ORDER BY"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r11\">|&gt; SELECT c"));
+  // The whole FROM + JOIN construction maps to the *range* of every source
+  // scan, so clicking a JoinScan (r2 or r5) highlights that block and a click
+  // on the block highlights all of r0..r7 in the Resolved AST.
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r0 r1 r2 r3 r4 r5 r6 r7\">SELECT 1"));
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNonQueryStatement) {
   std::string result;
   EXPECT_TRUE(HandleRequest(

@@ -109,11 +109,21 @@ computed from it via pointer-keyed maps over the single shared analysis.
 - **Input SQL ↔ Resolved AST**: PR #8's `ASTNodeResolvedInfoMap` gives each input
   AST node the `const ResolvedScan*` it produced; the input box gets a hidden
   `.ni-ref` marker with its own `data-node-id="a<n>"` and `data-corresp="r<n>"`.
-- **Resolved AST ↔ SQLBuilder SQL**: the `SQLBuilder` (pipe mode) records the
-  original `ResolvedScan` for each emitted `|>` in output order
-  (`pipe_operator_scan_order()`); `SegmentPipeSqlToHtml` gives each segment box
-  `data-node-id="s<n>"` and `data-corresp="r<n>"`. A scan that emits two `|>`s
-  cross-references both segments to the same `r<n>`.
+- **Resolved AST ↔ SQLBuilder SQL**: `SegmentPipeSqlToHtml` splits the
+  regenerated pipe SQL at top-level `|>` into `.rscan` segment boxes
+  (`data-node-id="s<n>"`) and cross-references each to the scan(s) it came from
+  (`data-corresp`, a space-separated `r<n>` list). The mapping is **structural**,
+  not by counting emitted `|>`s: most `|>`s (range-variable wrapping, join
+  projections) are produced by `QueryExpression` paths that bypass the
+  `pipe_operator_scan_order()` side-channel, so counting drifts. Instead, since
+  the regenerated query is ordered source→output, the user's own pipe operators
+  (WHERE/AGGREGATE/ORDER BY/SELECT/…) sit *above* the FROM+JOIN construction and
+  line up 1:1 with the output end of the **outer spine** (walk `GetPipeInputScan`
+  from the output, stopping at the topmost join/set-op). The remaining leading
+  segments — the FROM source and the flat run of join/projection/`AS` segments —
+  all map to the **range** of every other scan (source scans, join tree, nested
+  subqueries), so clicking a `JoinScan` highlights the whole source block and
+  clicking the block highlights all those scans.
 
 Clicking a node marks it `.viz-selected` (primary) and walks the `data-corresp`
 edges (treated as undirected) to find the corresponding set; nodes reached in
@@ -129,12 +139,14 @@ re-add.
 - Segments split only at *top-level* `|>` (parenthesis/quote-aware), so a
   nested subquery's pipe operators stay within their enclosing segment's text
   rather than becoming bogus top-level segments. They are not yet broken out as
-  their own nested boxes (the structured model will do that), and per-operator
-  correspondence for operators nested inside *expressions* is approximate
-  because the SQLBuilder's emission order need not match textual order there.
-- The leading source segment is always cross-referenced to the source scan `r0`
-  (the deepest source); for queries whose top-level FROM is a subquery this is
-  approximate.
+  their own nested boxes (the structured model will do that).
+- The FROM+JOIN construction maps to one coarse *range* rather than attributing
+  each join/projection segment to its individual scan; clicking any of those
+  segments highlights the whole source block. Per-operator precision there
+  awaits the structured model. The 1:1 clean-tail mapping assumes each of the
+  user's pipe operators emits one top-level segment; a stray wrapper segment in
+  the tail would shift it to an adjacent *outer* operator (never to a nested
+  join), so the failure mode is bounded.
 - The SQLBuilder pane carries no NameLists of its own; clicking a segment shows
   the details of the **corresponding Resolved AST scan** ("details for the
   actual node") rather than re-analyzing the regenerated SQL.

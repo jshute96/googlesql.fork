@@ -1391,32 +1391,38 @@ static std::string PreBlockHtml(absl::string_view text) {
 // Renders the SQLBuilder pane: splits the formatted pipe SQL into `.rscan`
 // boxes (the same markup the Resolved AST pane uses), one per *top-level* pipe
 // operator.  Each segment gets its own id (s0, s1, ...) and a `data-corresp`
-// cross-reference (r<id>) to the ResolvedScan that produced it, so the panes
-// line up and the client-side correspondence highlighting lights up across all
-// three panes.
+// cross-reference to the ResolvedScan(s) that produced it, so the panes line up
+// and the client-side correspondence highlighting lights up across all three
+// panes.
 //
 // Splitting is parenthesis/quote-aware: only a "|>" at paren depth 0 (and
 // outside string/identifier literals) starts a new segment.  Operators nested
-// inside parentheses (subqueries, set-operation inputs) stay within their
-// enclosing segment's text rather than becoming bogus top-level segments.
-// Every "|>" (at any depth) advances the `op_scan_ids` cursor so top-level
-// segments map to the right scan in the SQLBuilder's emission order; the
-// leading segment (before the first top-level "|>") is cross-referenced to
-// `source_scan_id`.  Per-operator correspondence for operators nested inside
-// *expressions* is approximate (the SQLBuilder's emission order need not match
-// textual order there) and is left to the structured model.  A box is shaded to
-// match its scan's parity in the AST pane.
+// inside parentheses (join subqueries, set-operation inputs, scalar subqueries)
+// stay within the enclosing -- usually leading FROM -- segment's text rather
+// than becoming bogus top-level segments.
+//
+// Correspondence is computed *structurally*, not by counting emitted "|>"s
+// (many "|>"s -- range-variable wrapping, join projections -- are produced by
+// paths that bypass the visualizer side-channel, so counting drifts).  The
+// regenerated pipe query is, like the Resolved AST, ordered source -> output.
+// `clean_tail_ids` are the outer-spine scans *above* the source/join
+// construction (source-first): the user's own pipe operators (WHERE, AGGREGATE,
+// ORDER BY, SELECT, LIMIT, ...).  These line up one-to-one with the LAST
+// clean_tail_ids.size() segments (output-anchored).  Every earlier segment is
+// part of the FROM + JOIN construction, which the SQLBuilder emits as a flat
+// run of top-level segments (`SELECT .. |> AS .. |> CROSS JOIN (..) |> SELECT
+// .. |> AS ..`); all of those map to the same *range* -- every scan not in the
+// clean tail (the source scans, the join tree, and their nested subqueries) --
+// so clicking any of them highlights the whole source block in the Resolved
+// AST, and clicking any of those scans (e.g. a JoinScan) highlights the block
+// in reverse.  A box is shaded to match its representative scan's parity in the
+// AST pane.
 static std::string SegmentPipeSqlToHtml(absl::string_view sql,
-                                        int source_scan_id,
-                                        const std::vector<int>& op_scan_ids) {
-  struct Segment {
-    size_t start, end;
-    int scan_id;
-  };
-  std::vector<Segment> segments;
+                                        const std::vector<int>& clean_tail_ids,
+                                        int total_scans) {
+  // Split into top-level segment byte ranges at depth-0 "|>".
+  std::vector<std::pair<size_t, size_t>> ranges;
   size_t seg_start = 0;
-  int op_index = 0;     // count of "|>" seen so far, at any depth
-  int cur_scan_id = source_scan_id;
   int depth = 0;
   char quote = 0;       // open string/identifier quote char, or 0 if not in one
   for (size_t i = 0; i < sql.size(); ++i) {
@@ -1443,14 +1449,9 @@ static std::string SegmentPipeSqlToHtml(absl::string_view sql,
         break;
       case '|':
         if (i + 1 < sql.size() && sql[i + 1] == '>') {
-          const int sid = op_index < static_cast<int>(op_scan_ids.size())
-                              ? op_scan_ids[op_index]
-                              : -1;
-          ++op_index;
           if (depth == 0) {
-            segments.push_back({seg_start, i, cur_scan_id});
+            ranges.push_back({seg_start, i});
             seg_start = i;
-            cur_scan_id = sid;
           }
           ++i;           // skip the '>'
         }
@@ -1459,21 +1460,47 @@ static std::string SegmentPipeSqlToHtml(absl::string_view sql,
         break;
     }
   }
-  segments.push_back({seg_start, sql.size(), cur_scan_id});
+  ranges.push_back({seg_start, sql.size()});
+
+  // The last `n_clean` segments map 1:1 onto the clean-tail scans (output end);
+  // every earlier segment maps to the source range (all other scans).
+  const int n_seg = static_cast<int>(ranges.size());
+  const int n_clean = static_cast<int>(clean_tail_ids.size());
+  std::vector<bool> is_clean(std::max(total_scans, 0), false);
+  for (const int id : clean_tail_ids) {
+    if (id >= 0 && id < total_scans) is_clean[id] = true;
+  }
+  std::vector<int> source_ids;   // the FROM + JOIN range
+  for (int r = 0; r < total_scans; ++r) {
+    if (!is_clean[r]) source_ids.push_back(r);
+  }
+  std::string source_corresp;    // space-separated "r<n>" list, built once
+  for (const int id : source_ids) {
+    absl::StrAppend(&source_corresp, source_corresp.empty() ? "" : " ", "r", id);
+  }
 
   std::string html = "<div class=\"rscan-stmt\">";
-  for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
-    const int scan_id = segments[i].scan_id;
-    const char* cls = (scan_id >= 0 && scan_id % 2 == 1) ? "scan-b" : "scan-a";
+  for (int i = 0; i < n_seg; ++i) {
+    std::string corresp;   // space-separated "r<n>" list
+    int rep = -1;          // representative scan id for parity shading
+    const int clean_idx = i - (n_seg - n_clean);
+    if (clean_idx >= 0 && clean_idx < n_clean) {
+      absl::StrAppend(&corresp, "r", clean_tail_ids[clean_idx]);
+      rep = clean_tail_ids[clean_idx];
+    } else {
+      corresp = source_corresp;
+      rep = source_ids.empty() ? -1 : source_ids.front();
+    }
+    const char* cls = (rep >= 0 && rep % 2 == 1) ? "scan-b" : "scan-a";
     absl::StrAppend(&html, "<div class=\"rscan ", cls, "\" data-node-id=\"s", i,
                     "\"");
-    if (scan_id >= 0) {
-      absl::StrAppend(&html, " data-corresp=\"r", scan_id, "\"");
+    if (!corresp.empty()) {
+      absl::StrAppend(&html, " data-corresp=\"", corresp, "\"");
     }
     absl::StrAppend(
         &html, ">",
-        EscapeHtmlText(absl::StripTrailingAsciiWhitespace(sql.substr(
-            segments[i].start, segments[i].end - segments[i].start))),
+        EscapeHtmlText(absl::StripTrailingAsciiWhitespace(
+            sql.substr(ranges[i].first, ranges[i].second - ranges[i].first))),
         "</div>");
   }
   absl::StrAppend(&html, "</div>");
@@ -1551,18 +1578,36 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   }
   data.sqlbuilder_sql = formatted_built_sql;
 
-  // Map the scans the SQLBuilder recorded (one per emitted "|>", in output
-  // order) to their scan-ids.
-  std::vector<int> op_scan_ids;
-  for (const ResolvedScan* op_scan : builder.pipe_operator_scan_order()) {
-    auto it = scan_ids.find(op_scan);
-    op_scan_ids.push_back(it != scan_ids.end() ? it->second : -1);
+  // Outermost pipe spine, source-first.  The regenerated pipe SQL is ordered
+  // source -> output; the user's own pipe operators (WHERE/AGGREGATE/ORDER
+  // BY/SELECT/...) sit *above* the FROM + JOIN construction and line up 1:1 with
+  // the output end of the spine (see SegmentPipeSqlToHtml).  Walk pipe inputs
+  // from the statement's main output scan down, collecting this "clean tail" and
+  // stopping at the topmost join / set operation -- everything from there down
+  // (plus nested subqueries) is the source range.
+  const ResolvedScan* output_scan = nullptr;
+  if (resolved->IsScan()) {
+    output_scan = resolved->GetAs<ResolvedScan>();
+  } else {
+    std::vector<const ResolvedNode*> root_children;
+    resolved->GetChildNodes(&root_children);
+    for (const ResolvedNode* child : root_children) {
+      if (child != nullptr && child->IsScan()) {
+        output_scan = child->GetAs<ResolvedScan>();
+        break;
+      }
+    }
   }
-  // The leading (source) segment is the deepest source scan, which the linear
-  // emitter assigns scan-id 0.
-  const int source_scan_id = scan_order.empty() ? -1 : 0;
-  data.sqlbuilder_sql_html =
-      SegmentPipeSqlToHtml(formatted_built_sql, source_scan_id, op_scan_ids);
+  std::vector<int> clean_tail_ids;
+  for (const ResolvedScan* s = output_scan; s != nullptr;
+       s = s->GetPipeInputScan()) {
+    if (s->Is<ResolvedJoinScan>() || s->Is<ResolvedSetOperationScan>()) break;
+    auto it = scan_ids.find(s);
+    if (it != scan_ids.end()) clean_tail_ids.push_back(it->second);
+  }
+  std::reverse(clean_tail_ids.begin(), clean_tail_ids.end());   // source-first
+  data.sqlbuilder_sql_html = SegmentPipeSqlToHtml(
+      formatted_built_sql, clean_tail_ids, static_cast<int>(scan_order.size()));
 
   if (data.input_sql_html.empty()) {
     data.input_sql_html = PreBlockHtml(sql);
