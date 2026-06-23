@@ -619,31 +619,6 @@ html[data-visualize] .right-section {
   overflow: hidden;
 }
 
-/* Re-add bar: holds "+ Label" buttons for columns the user has hidden. */
-.viz-readd-bar {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 4px 6px;
-  min-height: 0;
-}
-.viz-readd-bar:empty {
-  display: none;
-}
-.viz-readd {
-  font: inherit;
-  font-size: 0.8em;
-  padding: 1px 8px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #f3f3f3;
-  color: #444;
-  cursor: pointer;
-}
-.viz-readd:hover {
-  background: #e7eef7;
-}
-
 /* The columns row. */
 .viz-columns {
   display: flex;
@@ -659,8 +634,41 @@ html[data-visualize] .right-section {
   flex: var(--w, 1) 1 0;
   overflow: hidden;
 }
-.viz-col.hidden {
+/* A hidden column collapses in place to a narrow, clickable vertical strip
+   (the "+ Label" button) rather than vanishing, so it stays where it lives. */
+.viz-col.collapsed {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.viz-col.collapsed > .viz-tab,
+.viz-col.collapsed > .viz-pane {
   display: none;
+}
+/* The expand strip: only shown while collapsed; vertical label. */
+.viz-show {
+  display: none;
+}
+.viz-col.collapsed > .viz-show {
+  display: block;
+  flex: 1 1 auto;
+  width: 26px;
+  min-height: 0;
+  padding: 8px 4px;
+  border: none;
+  background: #f3f3f3;
+  color: #555;
+  font: inherit;
+  font-weight: bold;
+  font-size: 0.85em;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  writing-mode: vertical-rl;
+}
+.viz-col.collapsed > .viz-show:hover {
+  background: #e7eef7;
+  color: #1a3c66;
 }
 /* A divider is hidden when either neighbouring column is hidden (handled in
    JS, which toggles .hidden on the divider too). */

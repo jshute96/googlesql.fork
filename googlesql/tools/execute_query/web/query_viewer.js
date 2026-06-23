@@ -160,11 +160,6 @@
   'use strict';
 
   var COLS = ['input', 'ast', 'sqlbuilder'];
-  var LABELS = {
-    input: 'Input SQL',
-    ast: 'Resolved AST',
-    sqlbuilder: 'SQLBuilder SQL'
-  };
 
   // Linked state shared by all `.viz` blocks.
   var state = {
@@ -201,48 +196,27 @@
     if (vis.length === 0) { vis = ['input']; state.hidden = {}; }
 
     vizBlocks().forEach(function (viz) {
-      var columnsRow = viz.querySelector('.viz-columns');
-      var readd = viz.querySelector('.viz-readd-bar');
       var infoEl = viz.querySelector('.viz-info');
 
-      // Column visibility + widths.
+      // Column visibility + widths.  A hidden column collapses in place to a
+      // narrow strip rather than disappearing.
       COLS.forEach(function (k) {
         var col = viz.querySelector('.viz-col[data-col="' + k + '"]');
         if (!col) return;
-        col.classList.toggle('hidden', !!state.hidden[k]);
+        col.classList.toggle('collapsed', !!state.hidden[k]);
         col.style.setProperty('--w', state.weights[k]);
       });
 
-      // Re-place dividers between adjacent visible columns; hide extras.
-      var dividers = Array.prototype.slice.call(
-          viz.querySelectorAll('.viz-divider'));
-      dividers.forEach(function (d) { d.classList.add('hidden'); });
-      for (var i = 0; i < vis.length - 1; i++) {
-        var d = dividers[i];
-        if (!d) break;
-        d.classList.remove('hidden');
-        d.dataset.left = vis[i];
-        d.dataset.right = vis[i + 1];
-        var leftCol = viz.querySelector('.viz-col[data-col="' + vis[i] + '"]');
-        // Insert the divider right after its left column.
-        if (leftCol && leftCol.nextSibling !== d) {
-          columnsRow.insertBefore(d, leftCol.nextSibling);
-        }
-      }
-
-      // Re-add buttons for hidden columns, in canonical order.
-      if (readd) {
-        readd.innerHTML = '';
-        COLS.forEach(function (k) {
-          if (!state.hidden[k]) return;
-          var b = document.createElement('button');
-          b.type = 'button';
-          b.className = 'viz-readd';
-          b.dataset.col = k;
-          b.textContent = '+ ' + LABELS[k];
-          readd.appendChild(b);
-        });
-      }
+      // A divider is live only between two DOM-adjacent expanded columns; it
+      // stays in its natural slot (columns no longer reorder when collapsed).
+      var pairs = [['input', 'ast'], ['ast', 'sqlbuilder']];
+      Array.prototype.slice.call(viz.querySelectorAll('.viz-divider'))
+          .forEach(function (d, i) {
+            var pair = pairs[i];
+            var live = pair && !state.hidden[pair[0]] && !state.hidden[pair[1]];
+            d.classList.toggle('hidden', !live);
+            if (live) { d.dataset.left = pair[0]; d.dataset.right = pair[1]; }
+          });
 
       // Details-box height.
       if (infoEl) {
@@ -336,7 +310,7 @@
     dragInfo = null;
   });
 
-  // --- Hide / re-add clicks. ---
+  // --- Hide / show (collapse / expand) clicks. ---
   document.addEventListener('click', function (e) {
     var hide = e.target.closest && e.target.closest('.viz-hide');
     if (hide) {
@@ -345,9 +319,10 @@
       e.stopPropagation();
       return;
     }
-    var readd = e.target.closest && e.target.closest('.viz-readd');
-    if (readd) {
-      showColumn(readd.dataset.col);
+    var show = e.target.closest && e.target.closest('.viz-show');
+    if (show) {
+      var scol = show.closest('.viz-col');
+      if (scol) showColumn(scol.dataset.col);
       e.stopPropagation();
       return;
     }
