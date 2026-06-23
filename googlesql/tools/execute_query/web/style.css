@@ -901,6 +901,13 @@ html[data-visualize] .right-section {
 }
 .rscan {
   display: block;
+  /* Text is never wrapped/truncated, so grow the box to its content width (seen
+     by scrolling horizontally) while still filling the pane when content is
+     narrow -- otherwise the fill/border would stop at the pane edge and the
+     overflowing text would sit outside the box. */
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
   border: 1px solid #cfd6df;
   border-radius: 3px;
   margin: 2px 0;
@@ -930,6 +937,9 @@ html[data-visualize] .right-section {
   margin-left: 1.2em;
 }
 .rscan-query {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
   border: 1px solid #9bb8df;
   border-radius: 3px;
   margin: 2px 0;
