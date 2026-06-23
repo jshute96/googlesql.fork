@@ -492,21 +492,6 @@
     return adj;
   }
 
-  // Ids reachable from startId (excluding startId).
-  function reachableIds(adj, startId) {
-    var seen = {}, stack = [startId], out = [];
-    seen[startId] = true;
-    while (stack.length) {
-      var ns = adj[stack.pop()] || [];
-      for (var i = 0; i < ns.length; i++) {
-        if (!seen[ns[i]]) {
-          seen[ns[i]] = true; out.push(ns[i]); stack.push(ns[i]);
-        }
-      }
-    }
-    return out;
-  }
-
   function clearHighlights(viz) {
     var marked = viz.querySelectorAll('.viz-selected, .viz-corresp');
     for (var i = 0; i < marked.length; i++) {
@@ -514,10 +499,13 @@
     }
   }
 
-  // Marks `clickedEl` as the primary selection and every node corresponding to
-  // `startId` in the *other* panes as secondary.  Nodes reached back in the
-  // clicked node's own pane are the "reflective" (tertiary) set and are left
-  // un-highlighted for now (see the visualizer doc).
+  // Marks `clickedEl` as the primary selection and every node DIRECTLY
+  // cross-referenced from `startId` in the *other* panes as secondary.  The walk
+  // is one hop only: it deliberately does NOT chase transitive links.  A
+  // transitive walk would merge a whole connected component -- e.g. every source
+  // TableScan and JoinScan, linked through the shared source-block SQLBuilder
+  // segments, plus all their input tables -- into one confusing "reflective"
+  // blob.  One hop keeps each click's highlight to its direct correspondents.
   function applyCorrespondence(viz, clickedEl, startId) {
     clearHighlights(viz);
     clickedEl.classList.add('viz-selected');
@@ -526,10 +514,14 @@
     var primaryPane = byId[startId] ? byId[startId].pane :
         (clickedEl.closest ? clickedEl.closest('.viz-pane') : null);
     var corresp = [];                                   // highlighted records
-    reachableIds(buildAdj(byId), startId).forEach(function (id) {
+    var adj = buildAdj(byId);
+    var seen = {};
+    (adj[startId] || []).forEach(function (id) {
+      if (seen[id]) return;
+      seen[id] = true;
       var rec = byId[id];
       if (!rec || rec.el === clickedEl) return;
-      if (rec.pane && rec.pane === primaryPane) return;  // reflective: defer
+      if (rec.pane && rec.pane === primaryPane) return;  // same pane: skip
       rec.el.classList.add('viz-corresp');
       corresp.push(rec);
     });

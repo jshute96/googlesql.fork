@@ -125,14 +125,17 @@ computed from it via pointer-keyed maps over the single shared analysis.
   subqueries), so clicking a `JoinScan` highlights the whole source block and
   clicking the block highlights all those scans.
 
-Clicking a node marks it `.viz-selected` (primary) and walks the `data-corresp`
-edges (treated as undirected) to find the corresponding set; nodes reached in
-*other* panes are marked `.viz-corresp` (secondary). Transitive links (input →
-SQLBuilder, two hops through the Resolved AST) fall out of the walk. Nodes
-reached back in the clicked node's *own* pane are the "reflective" (tertiary)
-set and are deliberately left un-highlighted for now (see Highlight states).
-Hidden panes are not visible; the classes are still applied so they show on
-re-add.
+Clicking a node marks it `.viz-selected` (primary) and highlights its **direct**
+`data-corresp` neighbours (one hop) in the *other* panes as `.viz-corresp`
+(secondary). The walk is deliberately **not** transitive: chasing the edges to
+their full connected component would merge every source `TableScan`/`JoinScan`
+(all linked through the shared source-block SQLBuilder segments) plus all their
+input tables into one "reflective" blob, so clicking one table lit up the whole
+initial query everywhere. One hop keeps each click's highlight to its direct
+correspondents. (The cost is that input ↔ SQLBuilder is no longer linked through
+the Resolved AST in a single click; that two-hop path was the source of the
+blob.) Hidden panes are not visible; the classes are still applied so they show
+on re-add.
 
 ### Known limitations of the segment approach
 
