@@ -264,6 +264,11 @@
   function showColumn(key) {
     delete state.hidden[key];
     applyState();
+    // Graph nodes are sized from the live DOM, so a graph built while the AST
+    // column was hidden measured zero; rebuild now that the pane is visible.
+    if (key === 'ast' && state.astView !== 'text') {
+      vizBlocks().forEach(buildGraph);
+    }
   }
 
   // --- Column divider drag (linked widths). ---
@@ -657,7 +662,10 @@
   // a fresh column to the right.  This is deliberately minimal; a
   // constraint-based layout (elkjs) and cross-view correspondence highlighting
   // are planned follow-ups.  Any error falls back to the text rendering.
-  var GCOL_W = 180, GROW_H = 64, GPAD = 16, GNODE_W = 150, GNODE_H = 36;
+  // Layout padding and the gaps between node columns/rows.  Node sizes are
+  // measured from their (variable) content rather than fixed, so these are only
+  // spacing constants plus minimums for empty nodes.
+  var GPAD = 16, GCOL_GAP = 36, GROW_GAP = 26, GNODE_MINW = 60, GNODE_MINH = 24;
   var SVGNS = 'http://www.w3.org/2000/svg';
 
   function parseGraph(viz) {
@@ -723,22 +731,97 @@
     return {colOf: colOf, rowOf: rowOf, cols: maxCol + 1, rows: maxRow + 1};
   }
 
+  // Fills graph node `d` with the per-operator Resolved AST content cloned from
+  // the hidden text `.rscan` box(es) for `memberIds` -- the same head + scalar
+  // fields the text pane shows for each operator (nested child-scan boxes are
+  // omitted: they are separate graph nodes joined by edges).  An operator node
+  // has a single member (its own id); a collapsed query node stacks all the
+  // operators it aggregates.  Falls back to the `kind` label if no box is found.
+  function fillNodeContent(viz, d, memberIds, kind) {
+    var any = false;
+    memberIds.forEach(function (id) {
+      var box = viz.querySelector('.rscan[data-node-id="' + id + '"]');
+      if (!box) return;
+      var part = document.createElement('div');
+      part.className = 'viz-gnode-op';
+      var head = directChild(box, 'rscan-head');
+      if (head) part.appendChild(head.cloneNode(true));
+      directChildren(box, 'rscan-field').forEach(function (f) {
+        part.appendChild(f.cloneNode(true));
+      });
+      d.appendChild(part);
+      any = true;
+    });
+    if (!any) d.textContent = kind;
+  }
+
   // Renders graph `g` into `pane`.  `correspOf(id)` returns the ids this node
   // corresponds to (set as `data-corresp`); operator nodes share the text box's
   // id and inherit its edges, so they pass `null`, but query nodes (ids in the
   // `b<n>` space) list the operator ids they aggregate.
+  //
+  // Nodes are sized to their content, so layout runs in two passes: build and
+  // append the nodes (assigned to a layered col/row), measure them, then size
+  // each column to its widest node and each row to its tallest and position
+  // accordingly.  Edges are drawn last from the measured geometry.
   function renderGraph(viz, pane, g, correspOf) {
     var lay = layoutGraph(g);
-    var W = GPAD * 2 + lay.cols * GCOL_W;
-    var H = GPAD * 2 + lay.rows * GROW_H;
     var canvas = document.createElement('div');
     canvas.className = 'viz-graph';
+    pane.appendChild(canvas);
+
+    // Pass 1: create + append node elements (still unpositioned) so the browser
+    // lays out their content and we can measure it.
+    var els = {};                       // id -> element
+    g.nodes.forEach(function (n) {
+      if (lay.colOf[n.id] == null) return;
+      var d = document.createElement('div');
+      d.className = 'viz-gnode';
+      d.setAttribute('data-node-id', n.id);
+      var corresp = correspOf ? correspOf(n.id) : null;
+      if (corresp && corresp.length) {
+        d.setAttribute('data-corresp', corresp.join(' '));
+      }
+      fillNodeContent(viz, d, (corresp && corresp.length) ? corresp : [n.id],
+                      n.kind);
+      canvas.appendChild(d);
+      els[n.id] = d;
+    });
+
+    // Pass 2: per-column max width and per-row max height from measurements.
+    var colW = [], rowH = [];
+    Object.keys(els).forEach(function (id) {
+      var c = lay.colOf[id], r = lay.rowOf[id];
+      colW[c] = Math.max(colW[c] || GNODE_MINW, els[id].offsetWidth);
+      rowH[r] = Math.max(rowH[r] || GNODE_MINH, els[id].offsetHeight);
+    });
+    var colX = [], x = GPAD;
+    for (var c = 0; c < lay.cols; c++) {
+      colX[c] = x;
+      x += (colW[c] || GNODE_MINW) + GCOL_GAP;
+    }
+    var rowY = [], y = GPAD;
+    for (var r = 0; r < lay.rows; r++) {
+      rowY[r] = y;
+      y += (rowH[r] || GNODE_MINH) + GROW_GAP;
+    }
+    var W = x - GCOL_GAP + GPAD, H = y - GROW_GAP + GPAD;
+
+    // Center of a column (all nodes in a column are centered in it, so a pipe
+    // spine draws as a straight vertical line); top/bottom of a node's box.
+    function midX(id) { return colX[lay.colOf[id]] + colW[lay.colOf[id]] / 2; }
+    function nodeTop(id) { return rowY[lay.rowOf[id]]; }
+    function nodeBot(id) { return nodeTop(id) + els[id].offsetHeight; }
+
+    // Position each node, centered horizontally within its column.
+    Object.keys(els).forEach(function (id) {
+      var el = els[id], cw = colW[lay.colOf[id]];
+      el.style.left = (colX[lay.colOf[id]] + (cw - el.offsetWidth) / 2) + 'px';
+      el.style.top = nodeTop(id) + 'px';
+    });
+
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
-
-    function left(id) { return GPAD + lay.colOf[id] * GCOL_W; }
-    function top(id) { return GPAD + lay.rowOf[id] * GROW_H; }
-    function midX(id) { return left(id) + GNODE_W / 2; }
 
     // Edge overlay (behind the nodes), arrowheads pointing down.
     var svg = document.createElementNS(SVGNS, 'svg');
@@ -753,34 +836,15 @@
     svg.appendChild(defs);
     g.edges.forEach(function (e) {
       if (lay.colOf[e.from] == null || lay.colOf[e.to] == null) return;
-      var x1 = midX(e.from), y1 = top(e.from) + GNODE_H;  // producer bottom
-      var x2 = midX(e.to), y2 = top(e.to);                // consumer top
+      var x1 = midX(e.from), y1 = nodeBot(e.from);  // producer bottom
+      var x2 = midX(e.to), y2 = nodeTop(e.to);       // consumer top
       var path = document.createElementNS(SVGNS, 'path');
       path.setAttribute('d', 'M' + x1 + ',' + y1 + ' L' + x2 + ',' + y2);
       path.setAttribute('class', 'viz-edge viz-edge-' + e.kind);
       path.setAttribute('marker-end', 'url(#viz-arrow)');
       svg.appendChild(path);
     });
-    canvas.appendChild(svg);
-
-    // Nodes.
-    g.nodes.forEach(function (n) {
-      if (lay.colOf[n.id] == null) return;
-      var d = document.createElement('div');
-      d.className = 'viz-gnode';
-      d.setAttribute('data-node-id', n.id);
-      var corresp = correspOf ? correspOf(n.id) : null;
-      if (corresp && corresp.length) {
-        d.setAttribute('data-corresp', corresp.join(' '));
-      }
-      d.style.left = left(n.id) + 'px';
-      d.style.top = top(n.id) + 'px';
-      d.style.width = GNODE_W + 'px';
-      d.style.height = GNODE_H + 'px';
-      d.textContent = n.kind;
-      canvas.appendChild(d);
-    });
-    pane.appendChild(canvas);
+    canvas.insertBefore(svg, canvas.firstChild);
   }
 
   // Collapses the operator graph to a query graph: one node per container that

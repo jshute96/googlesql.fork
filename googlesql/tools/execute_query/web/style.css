@@ -772,16 +772,19 @@ html[data-visualize] .right-section {
 .viz-gnode {
   position: absolute;
   box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 2px 4px;
+  padding: 3px 6px;
   border: 1px solid #999;
   border-radius: 4px;
   background: #eef3fb;
   cursor: pointer;
-  overflow: hidden;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+/* When a (collapsed query) node stacks several operators, separate them. */
+.viz-gnode-op + .viz-gnode-op {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px dashed #b9c4d4;
 }
 .viz-gnode:hover {
   border-color: #4a6fa5;

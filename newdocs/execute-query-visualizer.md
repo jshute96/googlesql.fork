@@ -433,10 +433,17 @@ consuming field name in `label`); data flows `from`→`to`, drawn downward.
       `query_viewer.js` — HTML `.viz-gnode` boxes positioned by a small layered
       layout (rows = longest path from a source so data flows down; pipe spine
       in one column, secondary inputs branch right) with an SVG edge overlay
-      (downward arrowheads; pipe edges solid, secondary inputs dashed). Query
-      mode is a client-side collapse of the operators sharing a container into
-      one node per query box (a query node corresponds to all the scans it
-      aggregates). Clicking a node shows its scan hierarchy in the details box.
+      (downward arrowheads; pipe edges solid, secondary inputs dashed). Each
+      node shows the **same per-operator Resolved AST content the text pane
+      shows** (head + scalar fields, cloned from the hidden `.rscan` boxes;
+      nested child-scan boxes are omitted since they are separate graph
+      nodes) — so the graph is the text view laid out and edge-connected, not
+      just node titles. Nodes are sized to their content, so layout is a
+      two-pass measure-then-place (each column as wide as its widest node, each
+      row as tall as its tallest). Query mode is a client-side collapse of the
+      operators sharing a container into one node per query box (which stacks
+      that box's operators and corresponds to all the scans it aggregates).
+      Clicking a node shows its scan hierarchy in the details box.
       *Pending / deferred:* **elkjs** for a constraint-based layout (vendoring
       it is a separate step — the restricted sandbox can't fetch it, so v1 is
       hermetic), and the richer join/set-op/CTE placement constraints. The
