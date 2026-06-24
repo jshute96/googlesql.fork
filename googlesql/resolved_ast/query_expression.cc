@@ -1221,27 +1221,42 @@ void QueryExpression::ClearAllClauses() {
 }
 
 // These structural checks look at the leading keyword of a SQL fragment.  The
-// leading "(?:/\\*.*?\\*/\\s*)*" skips any leading block comments so that an
-// injected comment -- e.g. the query visualizer's "/*S7*/" pipe-operator markers
-// (see SQLBuilder::record_pipe_operator_markers) -- does not hide the keyword and
-// flip the decision (which would, for instance, wrongly wrap a bare "SELECT ..."
-// as "FROM SELECT ...").  With no comments present the pattern is a no-op.
+// prefix is the original "\\s*\\(*\\s*" (leading whitespace, opening parens,
+// whitespace) with a block-comment skip inserted at the two spots an injected
+// comment can sit before the keyword: at the very start ("/*marker*/SELECT ...")
+// and just inside an opening paren ("(/*marker*/SELECT ...) UNION ...").
+// Skipping these comments stops the query visualizer's "/*S7*/" pipe-operator
+// markers (see SQLBuilder::record_pipe_operator_markers) from hiding the keyword
+// and flipping the decision (e.g. dropping a needed FROM, or adding a spurious
+// one).  The comment body "(?:[^*]|\\*[^/])*" stops at the first "*/" so it
+// cannot span across multiple comments (a naive ".*?" backtracks across
+// "/*A*/ x /*B*/" and matches a keyword after the *second* comment).  With no
+// comments present the prefix is byte-for-byte the original "\\s*\\(*\\s*", so
+// non-visualizer output is unaffected.
+//
+// The macros must stay string literals so the patterns are compile-time-constant
+// char arrays (LazyRE2 stores the pointer and builds the RE2 lazily).
+#define GOOGLESQL_QE_COMMENTS "(?:/\\*(?:[^*]|\\*[^/])*\\*/\\s*)*"
+#define GOOGLESQL_QE_LEADING_NOISE \
+  "^\\s*" GOOGLESQL_QE_COMMENTS "\\(*\\s*" GOOGLESQL_QE_COMMENTS
+
 bool StartsWithSelectOrFromOrWith(absl::string_view sql) {
   static const LazyRE2 kRegex = {
-      "^\\s*(?:/\\*.*?\\*/\\s*)*\\(*\\s*(WITH|SELECT|FROM)\\s+"};
+      GOOGLESQL_QE_LEADING_NOISE "(WITH|SELECT|FROM)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
 
 bool StartsWithSelectOrFrom(absl::string_view sql) {
-  static const LazyRE2 kRegex = {
-      "^\\s*(?:/\\*.*?\\*/\\s*)*\\(*\\s*(SELECT|FROM)\\s+"};
+  static const LazyRE2 kRegex = {GOOGLESQL_QE_LEADING_NOISE "(SELECT|FROM)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
 
 bool StartsWithWith(absl::string_view sql) {
-  static const LazyRE2 kRegex = {
-      "^\\s*(?:/\\*.*?\\*/\\s*)*\\(*\\s*(WITH)\\s+"};
+  static const LazyRE2 kRegex = {GOOGLESQL_QE_LEADING_NOISE "(WITH)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
+
+#undef GOOGLESQL_QE_LEADING_NOISE
+#undef GOOGLESQL_QE_COMMENTS
 
 }  // namespace googlesql
