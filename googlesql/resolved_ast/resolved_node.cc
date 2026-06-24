@@ -114,6 +114,19 @@ std::string HtmlEscape(absl::string_view s) {
 }
 }  // namespace
 
+// True if `node` has a ResolvedScan anywhere in its subtree (e.g. an expression
+// that contains a subquery).  Used by the HTML emitter to decide whether to
+// descend into a non-scan child to surface its nested scans as their own boxes.
+static bool SubtreeContainsScan(const ResolvedNode* node) {
+  std::vector<const ResolvedNode*> children;
+  node->GetChildNodes(&children);
+  for (const ResolvedNode* child : children) {
+    if (child == nullptr) continue;
+    if (child->IsScan() || SubtreeContainsScan(child)) return true;
+  }
+  return false;
+}
+
 std::string ResolvedNode::DebugStringHtml(
     std::vector<const ResolvedScan*>* scan_order) const {
   DebugStringConfig config;
@@ -214,6 +227,21 @@ void ResolvedNode::EmitScanFieldsHtml(
         EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,
                           scan_order, output);
         absl::StrAppend(output, "</div></div>");
+      } else if (child != nullptr && SubtreeContainsScan(child)) {
+        // A non-scan child that contains a subquery (e.g. a WHERE filter
+        // expression with a scalar subquery).  Expand it structurally so the
+        // subquery's scans become their own boxes -- clickable and correlated
+        // across panes -- rather than being buried in flat DebugString text.
+        absl::StrAppend(output, "<div class=\"rscan-children\">");
+        if (!field.name.empty()) {
+          absl::StrAppend(output, "<div class=\"rscan-field-name\">",
+                          HtmlEscape(field.name), "=</div>");
+        }
+        absl::StrAppend(output, "<div class=\"rscan-field\">",
+                        HtmlEscape(child->node_kind_string()), "</div>");
+        EmitScanFieldsHtml(child, config, /*elide=*/nullptr, scan_counter,
+                           scan_order, output);
+        absl::StrAppend(output, "</div>");
       } else {
         absl::StrAppend(output, "<div class=\"rscan-field\">");
         if (!field.name.empty()) {
