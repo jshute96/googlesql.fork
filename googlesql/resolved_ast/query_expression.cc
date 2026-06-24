@@ -1220,18 +1220,27 @@ void QueryExpression::ClearAllClauses() {
   lock_mode_.clear();
 }
 
+// These structural checks look at the leading keyword of a SQL fragment.  The
+// leading "(?:/\\*.*?\\*/\\s*)*" skips any leading block comments so that an
+// injected comment -- e.g. the query visualizer's "/*S7*/" pipe-operator markers
+// (see SQLBuilder::record_pipe_operator_markers) -- does not hide the keyword and
+// flip the decision (which would, for instance, wrongly wrap a bare "SELECT ..."
+// as "FROM SELECT ...").  With no comments present the pattern is a no-op.
 bool StartsWithSelectOrFromOrWith(absl::string_view sql) {
-  static const LazyRE2 kRegex = {"^\\s*\\(*\\s*(WITH|SELECT|FROM)\\s+"};
+  static const LazyRE2 kRegex = {
+      "^\\s*(?:/\\*.*?\\*/\\s*)*\\(*\\s*(WITH|SELECT|FROM)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
 
 bool StartsWithSelectOrFrom(absl::string_view sql) {
-  static const LazyRE2 kRegex = {"^\\s*\\(*\\s*(SELECT|FROM)\\s+"};
+  static const LazyRE2 kRegex = {
+      "^\\s*(?:/\\*.*?\\*/\\s*)*\\(*\\s*(SELECT|FROM)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
 
 bool StartsWithWith(absl::string_view sql) {
-  static const LazyRE2 kRegex = {"^\\s*\\(*\\s*(WITH)\\s+"};
+  static const LazyRE2 kRegex = {
+      "^\\s*(?:/\\*.*?\\*/\\s*)*\\(*\\s*(WITH)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
 
