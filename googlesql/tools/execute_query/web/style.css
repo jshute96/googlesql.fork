@@ -846,6 +846,14 @@ html[data-visualize] .right-section {
 .viz-info .np-heading.selected .np-title {
   font-weight: bold;
 }
+/* Ancestor headings re-select their node on click. */
+.viz-info .np-heading.np-clickable {
+  cursor: pointer;
+}
+.viz-info .np-heading.np-clickable:hover .np-title {
+  text-decoration: underline;
+  color: #1a73e8;
+}
 .viz-info .np-hr {
   border-top: 1px solid #ccc;
   margin: 6px 0;

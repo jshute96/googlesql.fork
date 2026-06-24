@@ -326,6 +326,16 @@
       e.stopPropagation();
       return;
     }
+    // Info-box ancestor heading click -> move selection to that node.
+    var heading = e.target.closest && e.target.closest('.np-heading[data-np-idx]');
+    if (heading) {
+      var hviz = heading.closest('.viz');
+      if (hviz) {
+        selectDetailNode(hviz, parseInt(heading.getAttribute('data-np-idx'), 10));
+        e.stopPropagation();
+        return;
+      }
+    }
     // Node click -> details box + cross-pane correspondence highlight.
     var pane = e.target.closest && e.target.closest('.viz-pane');
     if (pane) { handleNodeClick(pane, e); }
@@ -349,7 +359,8 @@
           var bodyEl = info.querySelector('.ni-body');
           items.push({
             title: titleEl ? titleEl.innerHTML : '',
-            body: bodyEl ? bodyEl.innerHTML : ''
+            body: bodyEl ? bodyEl.innerHTML : '',
+            el: el
           });
         }
       }
@@ -358,21 +369,40 @@
     return items;
   }
 
+  // The detail items (with their `.el` references) backing the headings most
+  // recently rendered into a viz's info box, so an ancestor heading click can
+  // re-select that node.  Keyed by viz element.
+  var lastDetailsByViz = new WeakMap();
+
   function renderDetails(viz, items) {
     var infoEl = viz ? viz.querySelector('.viz-info') : null;
     if (!infoEl) return;
     if (!items || items.length === 0) return;
+    lastDetailsByViz.set(viz, items);
     // Heading stack (innermost first, outer ones prefixed "in") + body of the
-    // selected (innermost) node.
+    // selected (innermost) node.  Each heading re-selects its node when clicked
+    // (the ancestors let you walk the selection outward).
     var html = '<div class="np-body-stack">';
     items.forEach(function (item, i) {
       var prefix = i === 0 ? '' : '<span class="np-in">in </span>';
-      html += '<div class="np-heading' + (i === 0 ? ' selected' : '') + '">' +
+      var clickable = item.el ? ' np-clickable" data-np-idx="' + i + '"' : '"';
+      html += '<div class="np-heading' + (i === 0 ? ' selected' : '') +
+          clickable + '>' +
           prefix + '<span class="np-title">' + item.title + '</span></div>';
     });
     html += '</div><div class="np-hr"></div><div class="np-body">' +
         items[0].body + '</div>';
     infoEl.innerHTML = html;
+  }
+
+  // Re-selects the node behind an ancestor heading in the info box: dispatches
+  // the same handling as a direct click on that node's box/rect/graph element.
+  function selectDetailNode(viz, idx) {
+    var items = lastDetailsByViz.get(viz);
+    if (!items || !items[idx] || !items[idx].el) return;
+    var el = items[idx].el;
+    var pane = el.closest && el.closest('.viz-pane');
+    if (pane) handleNodeClick(pane, { target: el });
   }
 
   // First / all direct children of `el` with class `cls`.
@@ -406,7 +436,7 @@
             return f.innerHTML;
           }).join('<br>');
         }
-        items.push({ title: head ? head.innerHTML : '', body: body });
+        items.push({ title: head ? head.innerHTML : '', body: body, el: el });
         innermost = false;
       }
       el = el.parentElement;
