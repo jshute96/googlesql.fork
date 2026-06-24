@@ -883,7 +883,8 @@ html[data-visualize] .right-section {
    `.viz-selected` is the directly selected item; `.viz-corresp` are the
    corresponding items in the other panes. */
 .viz .rect.viz-corresp,
-.viz .rscan.viz-corresp {
+.viz .rscan.viz-corresp,
+.viz .rscan-stmt.viz-corresp {
   outline: 2px solid #f0a93b;
   outline-offset: 0;
   /* Lift above adjacent siblings so the (outside-the-box) outline isn't
@@ -893,7 +894,8 @@ html[data-visualize] .right-section {
   z-index: 1;
 }
 .viz .rect.viz-selected,
-.viz .rscan.viz-selected {
+.viz .rscan.viz-selected,
+.viz .rscan-stmt.viz-selected {
   outline: 2px solid #d35400;
   outline-offset: 0;
   filter: brightness(1.1) saturate(1.3);

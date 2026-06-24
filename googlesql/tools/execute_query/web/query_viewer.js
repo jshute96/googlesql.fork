@@ -357,10 +357,12 @@
         if (info) {
           var titleEl = info.querySelector('.ni-title');
           var bodyEl = info.querySelector('.ni-body');
+          var refEl = info.querySelector('.ni-ref');
           items.push({
             title: titleEl ? titleEl.innerHTML : '',
             body: bodyEl ? bodyEl.innerHTML : '',
-            el: el
+            el: el,
+            id: refEl ? refEl.getAttribute('data-node-id') : null
           });
         }
       }
@@ -395,14 +397,27 @@
     infoEl.innerHTML = html;
   }
 
-  // Re-selects the node behind an ancestor heading in the info box: dispatches
-  // the same handling as a direct click on that node's box/rect/graph element.
+  // Activates one heading in the (already-rendered) details stack: bolds it,
+  // swaps the body below the divider to that item's text, and moves the
+  // cross-pane highlight to its node -- without rebuilding the stack, so every
+  // ancestor stays in the list and you can click back and forth between them.
   function selectDetailNode(viz, idx) {
     var items = lastDetailsByViz.get(viz);
-    if (!items || !items[idx] || !items[idx].el) return;
-    var el = items[idx].el;
-    var pane = el.closest && el.closest('.viz-pane');
-    if (pane) handleNodeClick(pane, { target: el });
+    if (!items || !items[idx]) return;
+    var infoEl = viz.querySelector('.viz-info');
+    if (!infoEl) return;
+    var headings = infoEl.querySelectorAll('.np-heading');
+    for (var i = 0; i < headings.length; i++) {
+      headings[i].classList.toggle('selected', i === idx);
+    }
+    var bodyEl = infoEl.querySelector('.np-body');
+    if (bodyEl) bodyEl.innerHTML = items[idx].body || '';
+    var it = items[idx];
+    if (it.el) {
+      var startId = it.id != null ? it.id
+          : (it.el.getAttribute ? it.el.getAttribute('data-node-id') : null);
+      applyCorrespondence(viz, it.el, startId);
+    }
   }
 
   // First / all direct children of `el` with class `cls`.
@@ -422,22 +437,23 @@
 
   // Builds the details stack for a Resolved AST `.rscan` / `.rscan-stmt` box:
   // the chain of enclosing scan / query boxes (title from each box's own
-  // `.rscan-head`), innermost first, with the innermost box's own
-  // `.rscan-field`s as the body.  Mirrors collectNodeInfo for the input pane.
+  // `.rscan-head`), innermost first, each with its own `.rscan-field`s as its
+  // body and its `data-node-id` for highlighting.  Mirrors collectNodeInfo for
+  // the input pane.  (Every level carries a body so clicking any heading can
+  // show that level's details without rebuilding the stack.)
   function collectScanHierarchy(box, root) {
-    var items = [], el = box, innermost = true;
+    var items = [], el = box;
     while (el && root.contains(el)) {
       if (el.classList && (el.classList.contains('rscan') ||
                            el.classList.contains('rscan-stmt'))) {
         var head = directChild(el, 'rscan-head');
-        var body = '';
-        if (innermost) {
-          body = directChildren(el, 'rscan-field').map(function (f) {
-            return f.innerHTML;
-          }).join('<br>');
-        }
-        items.push({ title: head ? head.innerHTML : '', body: body, el: el });
-        innermost = false;
+        var body = directChildren(el, 'rscan-field').map(function (f) {
+          return f.innerHTML;
+        }).join('<br>');
+        items.push({
+          title: head ? head.innerHTML : '', body: body, el: el,
+          id: el.getAttribute ? el.getAttribute('data-node-id') : null
+        });
       }
       el = el.parentElement;
     }
@@ -616,8 +632,11 @@
       applyCorrespondence(viz, gnode, gid);
       return;
     }
-    // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.
-    var rscan = e.target.closest('.rscan');
+    // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.  The
+    // statement-level `.rscan-stmt` box is selectable too (e.g. the outer
+    // "QueryStmt"); it has no cross-pane correspondence of its own, so clicking
+    // it just highlights that box and shows its details.
+    var rscan = e.target.closest('.rscan, .rscan-stmt');
     if (rscan && pane.contains(rscan)) {
       // Details: a Resolved AST box has its own head/fields; a SQLBuilder
       // segment carries only text, so show the resolved scan it corresponds to
