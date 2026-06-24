@@ -993,6 +993,20 @@ absl::Status Resolver::ResolveQuery(
                                         output_name_list));
   GOOGLESQL_RET_CHECK(*output_name_list != nullptr);
 
+  // Record info for query visualizer tooling: the initial query (the FROM/SELECT
+  // before any pipe operators) produces the scan currently in `*output`, before
+  // the pipe operators below rebuild it.  Recording it on the `query_expr` node
+  // lets the visualizer link that line (e.g. a leading standard-syntax
+  // `SELECT ...`) to its ResolvedScan, the same way each pipe operator links.
+  if (query->query_expr() != nullptr && *output != nullptr) {
+    ASTNodeResolvedInfo& expr_info =
+        ast_node_resolved_info_map_[query->query_expr()];
+    expr_info.resolved_scan_info = ResolvedScanInfo{
+        .output_name_list = *output_name_list,
+        .scan = output->get(),
+    };
+  }
+
   absl::Span<const ASTPipeOperator* const> pipe_operator_list =
       query->pipe_operator_list();
   if (options.exclude_last_pipe_operator) {
