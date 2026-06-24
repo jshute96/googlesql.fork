@@ -1609,8 +1609,20 @@ static void RenderSegmentInline(std::string& html, absl::string_view mseg,
   size_t dpos = 0;
   for (size_t k = 0; k < dgroups.size(); ++k) {
     // Display text up to and including the '(' that opens this subquery.
-    absl::StrAppend(&html, EscapeHtmlText(dseg.substr(
-                               dpos, dgroups[k].inner_start - dpos)));
+    // LenientFormatSql may have put the '(' on its own indented line (e.g.
+    // "|> WHERE\n    ("); the nested `.rscan-sub` box supplies the indentation,
+    // so collapse the whitespace before '(' to a single space -- it then reads
+    // "|> WHERE (" with the body nested under it, matching the box formatter's
+    // input-pane layout.
+    absl::string_view lead =
+        dseg.substr(dpos, dgroups[k].inner_start - dpos);  // ends with '('
+    absl::string_view before_paren =
+        absl::StripTrailingAsciiWhitespace(lead.substr(0, lead.size() - 1));
+    if (before_paren.empty()) {
+      absl::StrAppend(&html, EscapeHtmlText(lead));
+    } else {
+      absl::StrAppend(&html, EscapeHtmlText(before_paren), " (");
+    }
     absl::StrAppend(&html, "<div class=\"rscan-sub\">");
     RenderPipeChainHtml(
         html,
