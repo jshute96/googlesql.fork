@@ -420,6 +420,39 @@
     }
   }
 
+  // A SQLBuilder `.rscan` box's own leading HTML: its operator text up to (not
+  // including) any nested `.rscan-sub` subquery block.  The box's innerHTML is
+  // already HTML-escaped, so the slice is safe to re-insert.
+  function sqlBoxOwnHtml(box) {
+    var h = box.innerHTML;
+    var idx = h.indexOf('<div class="rscan-sub"');
+    return idx >= 0 ? h.slice(0, idx) : h;
+  }
+
+  // Builds the details stack for a SQLBuilder pane box: the chain of enclosing
+  // pipe-operator boxes (a nested subquery operator plus the operators that
+  // contain it), innermost first.  Unlike the Resolved AST these boxes carry no
+  // NameList -- the title is the operator's own keyword line and the body is its
+  // own SQL text (excluding nested subquery operators, which are their own
+  // items).  Mirrors collectScanHierarchy / collectNodeInfo for this pane.
+  function collectSqlBuilderHierarchy(box, root) {
+    var items = [], el = box;
+    while (el && root.contains(el)) {
+      if (el.classList && el.classList.contains('rscan')) {
+        var lead = sqlBoxOwnHtml(el);
+        var first = lead.split('\n')[0].trim();
+        items.push({
+          title: first || '(pipe operator)', body: lead, el: el,
+          id: el.getAttribute('data-node-id')
+        });
+      } else if (el.classList && el.classList.contains('rscan-stmt')) {
+        items.push({ title: 'SQLBuilder SQL', body: '', el: el, id: null });
+      }
+      el = el.parentElement;
+    }
+    return items;
+  }
+
   // First / all direct children of `el` with class `cls`.
   function directChild(el, cls) {
     for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
@@ -638,17 +671,15 @@
     // it just highlights that box and shows its details.
     var rscan = e.target.closest('.rscan, .rscan-stmt');
     if (rscan && pane.contains(rscan)) {
-      // Details: a Resolved AST box has its own head/fields; a SQLBuilder
-      // segment carries only text, so show the resolved scan it corresponds to
-      // ("details for the actual node").
-      var detailBox = rscan;
-      if (!directChild(rscan, 'rscan-head')) {
-        var ref = (rscan.getAttribute('data-corresp') || '').split(/\s+/)[0];
-        var rb = ref ? viz.querySelector('.rscan[data-node-id="' + ref + '"]')
-                     : null;
-        if (rb) detailBox = rb;
+      // Details: a Resolved AST box has its own head/fields and shows the scan
+      // hierarchy; a SQLBuilder segment carries only text, so show the
+      // SQLBuilder pane's own pipe-operator hierarchy (it has no NameList).
+      var items;
+      if (rscan.classList.contains('rscan') && !directChild(rscan, 'rscan-head')) {
+        items = collectSqlBuilderHierarchy(rscan, viz);
+      } else {
+        items = collectScanHierarchy(rscan, viz);
       }
-      var items = collectScanHierarchy(detailBox, viz);
       if (items.length > 0) renderDetails(viz, items);
       applyCorrespondence(viz, rscan, rscan.getAttribute('data-node-id'));
       return;
