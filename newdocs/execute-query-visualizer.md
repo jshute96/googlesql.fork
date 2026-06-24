@@ -49,18 +49,32 @@ formatters, #8 AST-node resolution info, #10 linear Resolved AST DebugString).
    linear emitter that produces one `.rscan` box per `ResolvedScan` (alternating
    `scan-a`/`scan-b` shading), nested `.rscan-query` blocks for non-pipe-input
    scan fields (subqueries, set-operation inputs), an enclosing `.rscan-stmt`
-   block for the statement, and a `data-node-id` (`r<n>`) per scan box. Scalar fields and
-   non-scan children render as escaped text in their box.
-4. **SQLBuilder pane**: run `SQLBuilder` in `TargetSyntaxMode::kPipe` on the
-   Resolved AST and lenient-format the result. The SQLBuilder records, as a
-   passive side-channel (`pipe_operator_scan_order()`), the original
-   `ResolvedScan` responsible for each emitted `|>` (in output order).
-   `SegmentPipeSqlToHtml` then splits the formatted SQL at each `|>` and wraps
-   each segment in a `.rscan` box — the *same* markup the Resolved AST pane uses
-   — with its own `data-node-id` (`s<n>`) and a `data-corresp` cross-reference to
-   that scan's `r<n>`. So the SQLBuilder pane lines up visually with the AST pane
-   and the correspondence highlighting works across all three panes. The leading
-   (FROM/source) segment is cross-referenced to the source scan `r0`.
+   block for the statement, and a `data-node-id` (`r<n>`) per scan box. Scalar
+   fields render as escaped text. A non-scan child that *contains* a scan (e.g. a
+   `WHERE` filter holding a scalar subquery) is **descended into**
+   (`SubtreeContainsScan`, `resolved_node.cc`) so the subquery's scans become
+   their own boxes with their own `r<n>` ids — rather than being buried in the
+   expression's flat `DebugString` text — which is what lets the inner operators
+   correspond across panes. Scan-free expressions are still rendered as compact
+   text.
+4. **SQLBuilder pane**: run `SQLBuilder` in `TargetSyntaxMode::kPipe` with
+   `record_pipe_operator_markers = true`. The SQLBuilder stamps an inline
+   `/*S<n>*/` comment marker at the **head of each emitted pipe operator's own
+   text** (`MakeScanMarker`, `sql_builder.cc`); because the marker is part of the
+   operator's text it rides through every `StrCat`/`Wrap`/paren-nesting to its
+   exact final textual position. `pipe_operator_markers()` maps each marker index
+   to the producing `ResolvedScan`. The tool then keeps **two strings**: the
+   *marked* SQL (with markers) and the *display* SQL (markers removed by
+   `StripScanMarkers`, then `LenientFormatSql`). `SegmentPipeSqlToHtml`
+   **recursively** segments both — splitting at top-level `|>` *and* descending
+   into nested pipe-subqueries (paren groups that contain a `|>`: a scalar
+   subquery, a join RHS, a set-op input) — emitting one `.rscan` box per operator
+   inside `.rscan-sub` blocks for the nesting. Each box owns **exactly** the scan
+   of its first depth-0 marker (`data-corresp="r<n>"`), so the mapping is exact
+   and 1:1 at every nesting level, not inferred by counting. Operators with no
+   producing scan (notably the synthesized final output-renaming `|> SELECT`) are
+   honestly left unlinked. Marker stripping is byte-equivalent to the normal
+   output, so non-visualizer SQLBuilder behaviour is unchanged.
 5. After the three (pre-rewrite) panes are built, run the configured rewriters
    on the tree; if they change it, include the **post-rewrite** Resolved AST as
    a separate read-only section (no cross-pane correspondence). Hand a
@@ -109,21 +123,18 @@ computed from it via pointer-keyed maps over the single shared analysis.
 - **Input SQL ↔ Resolved AST**: PR #8's `ASTNodeResolvedInfoMap` gives each input
   AST node the `const ResolvedScan*` it produced; the input box gets a hidden
   `.ni-ref` marker with its own `data-node-id="a<n>"` and `data-corresp="r<n>"`.
-- **Resolved AST ↔ SQLBuilder SQL**: `SegmentPipeSqlToHtml` splits the
-  regenerated pipe SQL at top-level `|>` into `.rscan` segment boxes
-  (`data-node-id="s<n>"`) and cross-references each to the scan(s) it came from
-  (`data-corresp`, a space-separated `r<n>` list). The mapping is **structural**,
-  not by counting emitted `|>`s: most `|>`s (range-variable wrapping, join
-  projections) are produced by `QueryExpression` paths that bypass the
-  `pipe_operator_scan_order()` side-channel, so counting drifts. Instead, since
-  the regenerated query is ordered source→output, the user's own pipe operators
-  (WHERE/AGGREGATE/ORDER BY/SELECT/…) sit *above* the FROM+JOIN construction and
-  line up 1:1 with the output end of the **outer spine** (walk `GetPipeInputScan`
-  from the output, stopping at the topmost join/set-op). The remaining leading
-  segments — the FROM source and the flat run of join/projection/`AS` segments —
-  all map to the **range** of every other scan (source scans, join tree, nested
-  subqueries), so clicking a `JoinScan` highlights the whole source block and
-  clicking the block highlights all those scans.
+- **Resolved AST ↔ SQLBuilder SQL**: the mapping is **exact**, not inferred.
+  `SegmentPipeSqlToHtml` recursively segments the regenerated pipe SQL into
+  `.rscan` boxes (`data-node-id="s<n>"`, nested in `.rscan-sub`) and gives each
+  box a `data-corresp="r<n>"` for the single scan that produced that operator —
+  read from the inline `/*S<n>*/` marker the SQLBuilder stamped at the operator's
+  head (above). Because the marker travels with the operator's own text to its
+  exact final position, this works even for operators built out of order or
+  nested inside a join RHS or scalar subquery — each maps to its **one** scan,
+  not a range. Clicking a `JoinScan` highlights its `|> JOIN` box (and nothing
+  else); clicking an inner subquery operator highlights its own box. The earlier
+  positional/range scheme (counting `|>`s and mapping the whole FROM+JOIN block
+  to a coarse range) is gone.
 
 Clicking a node marks it `.viz-selected` (primary) and highlights its **direct**
 `data-corresp` neighbours (one hop) in the *other* panes as `.viz-corresp`
@@ -139,20 +150,27 @@ on re-add.
 
 ### Known limitations of the segment approach
 
-- Segments split only at *top-level* `|>` (parenthesis/quote-aware), so a
-  nested subquery's pipe operators stay within their enclosing segment's text
-  rather than becoming bogus top-level segments. They are not yet broken out as
-  their own nested boxes (the structured model will do that).
-- The FROM+JOIN construction maps to one coarse *range* rather than attributing
-  each join/projection segment to its individual scan; clicking any of those
-  segments highlights the whole source block. Per-operator precision there
-  awaits the structured model. The 1:1 clean-tail mapping assumes each of the
-  user's pipe operators emits one top-level segment; a stray wrapper segment in
-  the tail would shift it to an adjacent *outer* operator (never to a nested
-  join), so the failure mode is bounded.
-- The SQLBuilder pane carries no NameLists of its own; clicking a segment shows
-  the details of the **corresponding Resolved AST scan** ("details for the
-  actual node") rather than re-analyzing the regenerated SQL.
+The coarse FROM+JOIN *range* mapping and the lack of nested boxes are **gone** —
+nested pipe operators are now broken out as their own `.rscan-sub` boxes and each
+maps to exactly one scan. What remains:
+
+- The display SQL is re-lexed with a **hand-rolled** quote/paren/escape scanner
+  (`SplitTopLevelPipeSegments`, `FindPipeParenGroups`) to find top-level `|>` and
+  nested pipe-subqueries. It can mis-split on lexer corners (comments,
+  raw/triple-quoted strings, backtick-identifier escapes). A robust fix
+  re-segments using the real tokenizer (`GetParseTokens`). *(The scan
+  attribution itself is exact — it comes from the markers, not from this
+  scanner.)*
+- The SQLBuilder pane carries **no NameLists** of its own (that would require
+  re-analyzing the regenerated SQL). Clicking a box shows the SQLBuilder pane's
+  **own pipe-operator hierarchy** — the chain of enclosing operator boxes, each
+  titled by its operator keyword line with its SQL text as the body
+  (`collectSqlBuilderHierarchy` in `query_viewer.js`) — not the AST scan's
+  NameList.
+- A leaf table scan used as a join/subquery operand is rendered by the SQLBuilder
+  as three boxes (`FROM t`, `|> SELECT <cols>`, `|> AS a`), all mapping to the
+  same `r<n>`. The deferred "locality" refactor would collapse these to a single
+  `FROM t AS a` box — see [pipe-sql-builder.md](pipe-sql-builder.md) §C.
 
 ### Structured ids + cross-references (implemented)
 
@@ -365,23 +383,52 @@ noted but not initially built).
 - [x] Resolved AST / SQLBuilder pane details content: clicking a Resolved AST
       box or SQLBuilder segment shows the scan's parent hierarchy + fields in the
       info box (SQLBuilder via its corresponding scan), entirely client-side.
-- [x] Nested-subquery-aware segmentation in the SQLBuilder pane: split only at
-      top-level `|>` (paren/quote-aware) so nested pipe operators don't create
-      bogus top-level segments. (Rendering nested operators as their own boxes,
-      and exact correspondence for ops nested in expressions, await the
-      structured model.)
-- [ ] Robust SQLBuilder-pane segmentation: `SegmentPipeSqlToHtml` currently
-      re-lexes the formatted SQL with a hand-rolled quote/paren/escape scanner
-      to find top-level `|>`, and zips the i-th textual `|>` to the i-th scan in
-      `pipe_operator_scan_order()`. Both are approximations: the ad-hoc scanner
-      can mis-split on lexer corners (comments, raw/triple-quoted strings,
-      backtick-identifier escapes), and the positional zip mislabels operators
-      whose SQLBuilder emission order differs from their textual order (ops
-      nested in expressions). A robust fix re-segments using the real tokenizer
-      (`GetParseTokens`) and carries each operator's scan id structurally rather
-      than by position — which the structured SQLBuilder model in the next phase
-      provides. (Note: `LenientFormatSql` re-flows the text, so boundary offsets
-      can't simply be recorded at emission time and reused.)
+- [x] **Exact, structural** Resolved AST ↔ SQLBuilder correspondence via inline
+      `/*S<n>*/` markers (replacing the old positional `pipe_operator_scan_order`
+      zip): the SQLBuilder stamps a marker at each operator's head
+      (`record_pipe_operator_markers` / `MakeScanMarker` /
+      `pipe_operator_markers()`), the tool keeps a *marked* and a marker-stripped
+      *display* string, and `SegmentPipeSqlToHtml` attributes each operator to the
+      single scan of its marker. Backed by a round-trip guard in
+      `run_analyzer_test` (build with markers, strip, assert equal to unmarked) so
+      markers can never perturb the generated SQL — see
+      [pipe-sql-builder.md](pipe-sql-builder.md).
+- [x] Nested pipe operators rendered as their own boxes: `SegmentPipeSqlToHtml`
+      recurses into parenthesized pipe-subqueries (scalar subquery, join RHS,
+      set-op input) and emits each operator as a nested `.rscan-sub` box owning
+      its own scan — so an inner `|> EXTEND` in a `|> WHERE (subquery)`
+      corresponds 1:1 across all three panes. The AST pane descends into
+      expression subqueries to surface those scans as boxes
+      (`SubtreeContainsScan`); the input pane links them via the resolver's
+      per-node scan info.
+- [x] SQLBuilder-pane details show the pane's **own** pipe-operator hierarchy
+      (`collectSqlBuilderHierarchy`), and info-box ancestor headings are
+      **clickable** to re-select that level in place (bold + body swap + cross-pane
+      highlight, without rebuilding the stack); the statement-level box is also a
+      selectable target.
+- [x] Cleaner SQLBuilder-pane formatting: a nested subquery renders `|> WHERE (`
+      with its body indented under it and `)` on its own line (the `.rscan-sub`
+      box supplies indentation), and the box formatter takes a
+      `break_pipe_operators` option so the input pane always uses the multi-line
+      pipe form (`SqlToBoxHtml`, `box_formatter.cc`).
+- [ ] Robust SQLBuilder-pane *segmentation*: the scan attribution is now exact
+      (markers), but `SegmentPipeSqlToHtml` still finds the top-level `|>` and
+      nested pipe-subqueries by re-lexing the formatted SQL with a hand-rolled
+      quote/paren/escape scanner (`SplitTopLevelPipeSegments`,
+      `FindPipeParenGroups`), which can mis-split on lexer corners (comments,
+      raw/triple-quoted strings, backtick-identifier escapes). A robust fix
+      re-segments using the real tokenizer (`GetParseTokens`). (Note:
+      `LenientFormatSql` re-flows the text, so boundary offsets can't simply be
+      recorded at emission time and reused — but the markers are part of the text
+      and survive the reflow.)
+- [ ] **Deferred: pipe SQLBuilder "locality" refactor.** Today a leaf table scan
+      used as a join/subquery operand renders as three boxes
+      (`FROM t` / `|> SELECT <cols>` / `|> AS a`), all → the same scan. The
+      locality refactor would emit a single `FROM t AS a` (and prefer `JOIN ON`
+      over `USING`), giving a much cleaner SQLBuilder pane. Validated for regular
+      SQL but blocked on GQL graph joins + alias reservation — see
+      [pipe-sql-builder.md](pipe-sql-builder.md) §C. The markers already attribute
+      the collapsed `FROM t AS a` to its scan, so the visualizer needs no change.
 - [x] Non-query statements: any statement is visualized like a query (the gate
       now skips only non-statement roots such as bare expressions in expression
       mode). Scripts get best-effort per-statement visualization — each

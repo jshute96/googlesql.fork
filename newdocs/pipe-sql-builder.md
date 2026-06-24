@@ -163,6 +163,85 @@ append-as-you-go path (strategy 2) is the structural fix.
 
 ---
 
+## C. Column aliasing is *non-local* (and the deferred locality refactor)
+
+### The current behaviour
+
+A leaf `TableScan` used as a **join/subquery operand** (not the pipe spine) is
+wrapped by `WrapQueryExpression` (`sql_builder.cc`) into the verbose, three-
+operator form:
+
+```sql
+FROM Customer
+|> SELECT Customer.C_CUSTKEY, Customer.C_NAME, ...   -- re-lists the table's own columns
+|> AS customer_1
+```
+
+The column-listing `|> SELECT` exists mainly to give every column a globally
+**unique, bare** alias (`GetColumnAlias` / `UpdateColumnAlias`, `sql_builder.cc:150`,
+`:198`), so later operators can reference columns *unqualified*. When two scans
+expose a column of the same name (a self-join, or `a JOIN b USING(key)`), one
+side is renamed (`key` → `key_2`) so the bare names stay unique. That rename is
+**non-local**: a scan's emitted column names depend on what the *other* operands
+of the join contain.
+
+`JOIN … USING` is the sharpest case. `USING(k)` *merges* the two `k` columns into
+a single output column, so the SQLBuilder renames the right operand's columns to
+the left's ids (`right_to_left_column_id_mapping`, `VisitResolvedJoinScan`) and
+emits `USING(<renamed>)`. `USING` is emitted only to mirror that the *source*
+query used `USING` (`build_using = node->has_using() && ValidateUsingScan(node)`);
+there is already an `ON` fallback for shapes `USING` can't reconstruct.
+
+### Readable aliases in pipe mode
+
+In pipe target mode `GetColumnAlias` prefers a **readable** alias derived from the
+column's own name (e.g. `k`, `int32`) over an opaque `a_<id>`, falling back to the
+generated name for anonymous/`$`-prefixed/non-UTF-8 names
+(`sql_builder.cc:150`). Uniqueness is preserved by suffixing
+(`MakeUniqueColumnAlias`). *Fixed bug:* this branch read the column name through a
+dangling `absl::string_view` bound to the by-value temporary `column.name()`
+returns — a use-after-free that surfaced as a corrupted alias. It now owns the
+name in a `std::string`.
+
+### Deferred: the "locality" refactor
+
+The goal of pipe rewrites is that **every operator can be emitted from itself
+alone**, never depending on another operator's naming. That argues for:
+
+1. **Leaf scans emit `FROM <table> AS <alias>`** directly, exposing columns as
+   `alias.<col>` (range-var-qualified, locally determined) — dropping the
+   redundant column-listing `SELECT`.
+2. **Prefer `JOIN ON <qualified> = <qualified>` over `JOIN USING`**, so neither
+   operand renames to match the other (the `ON` path already references columns
+   qualified; no merge, no rename).
+3. **Qualify the remaining bare references** (e.g. the TVF table-argument
+   `SELECT`, `VisitResolvedTVFScan`) by `GetColumnPath` instead of the bare
+   `GetColumnAlias`.
+
+This was prototyped and **validated for regular SQL** (joins, `USING` joins,
+TVFs, subqueries, set-ops all round-trip through re-analysis), but **deferred**.
+Known blockers for a future dedicated effort:
+
+- **GQL graph joins**: graph element columns (`GRAPH_NODE`/`GRAPH_EDGE`) have no
+  `=` operator, so `USING` is *semantically required* there — step 2 must keep
+  `USING` when the join columns are graph-element types.
+- **Alias reservation**: step 1 must also reserve an alias per column the way
+  `TryUseLeafTableScanColumns` does (`for col: GetColumnAlias(col)`,
+  `sql_builder.cc`), so columns later derived from the scan stay globally unique.
+  Omitting it is what exposed the use-after-free above.
+- **Scope**: ~17 analyzer `[SQLBUILDER_OUTPUT]` goldens regenerate (pipe mode
+  only; standard-mode output is untouched); the final semantic gate is the
+  compliance suite.
+
+A round-trip guard now backs this work: `run_analyzer_test` (default
+`sqlbuilder_target_syntax_mode=both`) re-analyzes every SQLBuilder output, and
+additionally builds it **with inline pipe-operator markers** enabled (see
+[execute-query-visualizer.md](execute-query-visualizer.md)) and asserts the
+marker-stripped result equals the unmarked one — catching any change that
+perturbs the generated SQL structure.
+
+---
+
 ## Summary
 
 - **A1, A2**: pipe syntax genuinely can't express the query (SELECT hints;
@@ -179,3 +258,9 @@ append-as-you-go path (strategy 2) is the structural fix.
 - **B.3**: canonical clause ordering, the implicit trailing `|> SELECT`, and
   synthetic `|> AS` wraps are artifacts of the accumulate path; the structural fix
   is to prefer the append path.
+- **C**: join/subquery operands are rendered verbosely (`FROM t |> SELECT … |> AS
+  a`) and their column names are assigned *non-locally* (cross-operand renaming
+  for `USING`). A "locality" refactor (leaf `FROM t AS a`, prefer `ON` over
+  `USING`, qualify references) is validated for regular SQL but **deferred** —
+  blocked on GQL graph joins (need `USING`) and alias reservation. A
+  use-after-free in `GetColumnAlias`'s readable-alias path was fixed.
