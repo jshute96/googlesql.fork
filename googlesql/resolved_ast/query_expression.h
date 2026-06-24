@@ -164,8 +164,11 @@ class QueryExpression {
   //
   // 2. After calling Wrap("alias", kPipe), FromClause() will return:
   // "KeyValue |> SELECT Key |> AS alias"
-  void Wrap(absl::string_view alias) {
-    WrapImpl(alias, target_syntax_mode_, target_syntax_mode_);
+  // `pipe_marker` is an opaque visualizer marker (see SetGroupByMarker) stamped
+  // at the head of the emitted `|> AS alias` operator in pipe mode; empty and
+  // inert unless the SQLBuilder is recording markers.
+  void Wrap(absl::string_view alias, absl::string_view pipe_marker = "") {
+    WrapImpl(alias, target_syntax_mode_, target_syntax_mode_, pipe_marker);
   }
 
   // Mutates the QueryExpression, wrapping its previous form as a subquery in
@@ -341,6 +344,13 @@ class QueryExpression {
     group_by_marker_ = std::string(marker);
   }
 
+  // Visualizer side-channel: an opaque marker stamped at the head of the pipe
+  // SELECT operator this query expression renders, identifying the producing
+  // ResolvedScan.  See SetGroupByMarker().
+  void SetSelectMarker(absl::string_view marker) {
+    select_marker_ = std::string(marker);
+  }
+
   absl::Status SetGroupByAllClause(
       const std::map<int, std::string>& group_by_list,
       absl::string_view group_by_hints);
@@ -431,7 +441,8 @@ class QueryExpression {
   // return: "(SELECT Key FROM KeyValue) |> AS alias"
   void WrapImpl(absl::string_view alias,
                 TargetSyntaxMode subquery_target_syntax_mode,
-                TargetSyntaxMode target_syntax_mode);
+                TargetSyntaxMode target_syntax_mode,
+                absl::string_view pipe_marker = "");
 
   void ClearAllClauses();
 
@@ -448,6 +459,9 @@ class QueryExpression {
   std::vector<std::pair<std::string /* select column */,
                         std::string /* select alias */>>
       select_list_;
+
+  // Visualizer marker (see SetSelectMarker()); empty unless recording markers.
+  std::string select_marker_;
 
   // The output columns of the set operations with column_match_mode =
   // CORRESPONDING or CORRESPONDING_BY. This field is needed because for those

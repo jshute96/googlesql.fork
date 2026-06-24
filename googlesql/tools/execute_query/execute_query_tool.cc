@@ -1537,14 +1537,15 @@ static std::string StripScanMarkers(absl::string_view sql) {
 // join RHS or set-op input -- so clicking the segment highlights exactly its
 // operator's scan plus any subquery scans it contains, and vice versa.
 //
-// Segments with no marker (the leading FROM and any clause still emitted through
-// the legacy QueryExpression path) fall back to the "source range": every scan
-// not claimed as some segment's primary.  marker_to_rid maps a marker index to
-// its Resolved-AST scan id ("r<id>"), or -1 if the scan isn't in the pane.
+// A segment with no marker maps to nothing (no correspondence): the SQLBuilder
+// emits a few operators with no corresponding ResolvedScan -- notably the
+// statement's final output-renaming `|> SELECT` synthesized to match the output
+// column names.  We deliberately leave those unlinked rather than mapping them
+// to a range of scans.  marker_to_rid maps a marker index to its Resolved-AST
+// scan id ("r<id>"), or -1 if the scan isn't in the pane.
 static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
                                         absl::string_view display_sql,
-                                        const std::vector<int>& marker_to_rid,
-                                        int total_scans) {
+                                        const std::vector<int>& marker_to_rid) {
   auto rid_of = [&](int marker_index) -> int {
     return (marker_index >= 0 &&
             marker_index < static_cast<int>(marker_to_rid.size()))
@@ -1552,21 +1553,20 @@ static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
                : -1;
   };
 
-  // Per top-level segment of the marked SQL: its primary scan id and the set of
-  // all scan ids whose markers fall within it.
+  // Per top-level segment of the marked SQL: its primary scan id (the operator's
+  // own scan, used for parity shading) and the set of all scan ids whose markers
+  // fall within it (the primary plus any nested-subquery scans -- e.g. a join
+  // RHS -- so clicking the segment highlights its operator and the subquery it
+  // contains).
   std::vector<std::pair<size_t, size_t>> marked_ranges =
       SplitTopLevelPipeSegments(marked_sql);
   std::vector<int> seg_primary(marked_ranges.size(), -1);
   std::vector<std::vector<int>> seg_members(marked_ranges.size());
-  std::vector<bool> claimed(std::max(total_scans, 0), false);
   for (size_t i = 0; i < marked_ranges.size(); ++i) {
     SegmentMarkers m = ParseSegmentMarkers(marked_sql.substr(
         marked_ranges[i].first,
         marked_ranges[i].second - marked_ranges[i].first));
     seg_primary[i] = rid_of(m.primary);
-    if (seg_primary[i] >= 0 && seg_primary[i] < total_scans) {
-      claimed[seg_primary[i]] = true;
-    }
     std::vector<int> rids;
     for (const int mi : m.members) {
       const int rid = rid_of(mi);
@@ -1576,18 +1576,6 @@ static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
       }
     }
     seg_members[i] = std::move(rids);
-  }
-
-  // The "source range": scans not owned by any marked operator (the leading
-  // FROM and any legacy-path clause).  Unmarked segments map here.
-  std::string source_corresp;
-  int source_rep = -1;
-  for (int r = 0; r < total_scans; ++r) {
-    if (!claimed[r]) {
-      if (source_rep < 0) source_rep = r;
-      absl::StrAppend(&source_corresp, source_corresp.empty() ? "" : " ", "r",
-                      r);
-    }
   }
 
   std::vector<std::pair<size_t, size_t>> display_ranges =
@@ -1608,9 +1596,6 @@ static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
         absl::StrAppend(&corresp, corresp.empty() ? "" : " ", "r", rid);
       }
       rep = primary >= 0 ? primary : members->front();
-    } else {
-      corresp = source_corresp;
-      rep = source_rep;
     }
 
     const char* cls = (rep >= 0 && rep % 2 == 1) ? "scan-b" : "scan-a";
@@ -1712,9 +1697,8 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
     display_sql = *f;
   }
   data.sqlbuilder_sql = display_sql;
-  data.sqlbuilder_sql_html = SegmentPipeSqlToHtml(
-      marked_sql, display_sql, marker_to_rid,
-      static_cast<int>(scan_order.size()));
+  data.sqlbuilder_sql_html =
+      SegmentPipeSqlToHtml(marked_sql, display_sql, marker_to_rid);
 
   if (data.input_sql_html.empty()) {
     data.input_sql_html = PreBlockHtml(sql);

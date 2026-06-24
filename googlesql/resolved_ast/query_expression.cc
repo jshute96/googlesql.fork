@@ -142,6 +142,8 @@ bool QueryExpression::TryAppendSelectClause(
 
   ABSL_DCHECK(set_op_type_.empty() && set_op_modifier_.empty() &&
          set_op_scan_list_.empty());
+  // Visualizer: stamp the marker at the head of this SELECT operator.
+  absl::StrAppend(&sql, select_marker_);
   absl::StrAppend(
       &sql, "SELECT ",
       anonymization_options_.empty()
@@ -799,7 +801,8 @@ std::string QueryExpression::GetPipeSQLQuery() const {
 
 void QueryExpression::WrapImpl(absl::string_view alias,
                                TargetSyntaxMode subquery_target_syntax_mode,
-                               TargetSyntaxMode target_syntax_mode) {
+                               TargetSyntaxMode target_syntax_mode,
+                               absl::string_view pipe_marker) {
   ABSL_DCHECK(CanFormSQLQuery());
   ABSL_DCHECK(!alias.empty());
 
@@ -826,7 +829,7 @@ void QueryExpression::WrapImpl(absl::string_view alias,
       if (absl::StartsWith(sql, "FROM ")) {
         sql.erase(0, 5);
       }
-      from_ = absl::StrCat(sql, kPipe, "AS ", alias);
+      from_ = absl::StrCat(sql, kPipe, pipe_marker, "AS ", alias);
       break;
     }
   }
@@ -1188,6 +1191,7 @@ absl::Status QueryExpression::SetGroupByOnlyAggregateColumns(
 void QueryExpression::ClearAllClauses() {
   with_list_.clear();
   select_list_.clear();
+  select_marker_.clear();
   select_as_modifier_.clear();
   query_hints_.clear();
   from_.clear();

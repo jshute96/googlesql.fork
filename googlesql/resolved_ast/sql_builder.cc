@@ -2561,8 +2561,11 @@ absl::Status SQLBuilder::VisitResolvedGetRowField(
 absl::Status SQLBuilder::WrapQueryExpression(
     const ResolvedScan* node, QueryExpression* query_expression) {
   const std::string alias = GetScanAlias(node);
-  GOOGLESQL_RETURN_IF_ERROR(AddSelectListIfNeeded(node->column_list(), query_expression));
-  query_expression->Wrap(alias);
+  GOOGLESQL_RETURN_IF_ERROR(
+      AddSelectListIfNeeded(node->column_list(), query_expression, node));
+  // Visualizer: attribute the `|> AS alias` range-variable wrap to the scan
+  // being aliased.
+  query_expression->Wrap(alias, MakeScanMarker(node));
   SetPathForColumnList(node->column_list(), alias);
   return absl::OkStatus();
 }
@@ -2687,12 +2690,15 @@ absl::Status SQLBuilder::GetSelectList(const ResolvedColumnList& column_list,
 }
 
 absl::Status SQLBuilder::AddSelectListIfNeeded(
-    const ResolvedColumnList& column_list, QueryExpression* query_expression) {
+    const ResolvedColumnList& column_list, QueryExpression* query_expression,
+    const ResolvedScan* marker_scan) {
   if (!query_expression->CanFormSQLQuery()) {
     SQLAliasPairList select_list;
     GOOGLESQL_RETURN_IF_ERROR(GetSelectList(column_list, query_expression, &select_list));
     GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(select_list,
                                                    "" /* no select hints */));
+    // Visualizer: attribute this synthesized `|> SELECT` to the requested scan.
+    query_expression->SetSelectMarker(MakeScanMarker(marker_scan));
   }
   return absl::OkStatus();
 }
@@ -2726,6 +2732,9 @@ absl::Status SQLBuilder::VisitResolvedTableScan(const ResolvedTableScan* node) {
                      ProcessNode(node->for_system_time_expr()));
     absl::StrAppend(&from, " FOR SYSTEM_TIME AS OF ", result->GetSQL());
   }
+  // Visualizer: stamp the marker at the head of the `FROM <table>` so this base
+  // scan maps to its own leading segment.
+  from = absl::StrCat(MakeScanMarker(node), from);
   GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
 
   SQLAliasPairList select_list;
@@ -3364,6 +3373,9 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
   GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &select_hints));
 
   GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(select_list, select_hints));
+  // Visualizer: attribute the pipe SELECT operator this scan emits (rendered
+  // later by QueryExpression) back to this scan.
+  query_expression->SetSelectMarker(MakeScanMarker(node));
 
   // For queries that have only aggregate columns but no group-by columns, eg.
   // `select count(*) from table`, the following condition become true, and we
@@ -4478,9 +4490,14 @@ absl::Status SQLBuilder::VisitResolvedJoinScan(const ResolvedJoinScan* node) {
     return absl::OkStatus();
   }
 
+  // Visualizer: in pipe mode the join becomes a `|> JOIN` operator; stamp the
+  // marker at its head so it maps to this JoinScan.
   std::string from = absl::StrCat(
       left_join_operand,
-      IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ", join_op);
+      IsPipeSyntaxTargetMode()
+          ? absl::StrCat(QueryExpression::kPipe, MakeScanMarker(node))
+          : " ",
+      join_op);
   GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();

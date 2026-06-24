@@ -1018,8 +1018,12 @@ class SQLBuilder : public ResolvedASTVisitor {
 
   // Adds select_list for columns present in <column_list> inside the
   // <query_expression>, if not present.
+  // `marker_scan`, when non-null and a select clause is actually added,
+  // attributes the resulting pipe SELECT operator to that scan for the
+  // visualizer (see pipe_operator_markers()).
   absl::Status AddSelectListIfNeeded(const ResolvedColumnList& column_list,
-                                     QueryExpression* query_expression);
+                                     QueryExpression* query_expression,
+                                     const ResolvedScan* marker_scan = nullptr);
 
   // Merges the <type> and the <annotations> trees and prints the column
   // schema to <text>.
