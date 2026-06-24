@@ -11983,20 +11983,27 @@ SQLBuilder::MakePipeQueryExpression(absl::string_view pipe_sql) {
   return query_expression;
 }
 
+std::string SQLBuilder::MakeScanMarker(const ResolvedScan* scan) {
+  if (!options_.record_pipe_operator_markers || scan == nullptr) {
+    return "";
+  }
+  const int index = static_cast<int>(marker_scans_.size());
+  marker_scans_.push_back(scan);
+  return absl::StrCat("/*S", index, "*/");
+}
+
 absl::StatusOr<std::unique_ptr<QueryExpression>> SQLBuilder::AppendPipeOperator(
     absl::string_view pipe_sql, absl::string_view op_sql,
     bool is_pipe_operator_chain) {
-  // Visualizer side-channel: record the scan responsible for this operator,
-  // but only when a "|>" is actually emitted (i.e. there is preceding pipe
-  // text), so the recorded sequence lines up one-to-one with the "|>"s in the
-  // output.  Passive: does not affect `out_sql`.
-  if (!pipe_sql.empty() && current_scan_ != nullptr) {
-    pipe_operator_scan_order_.push_back(current_scan_);
-  }
+  // Visualizer side-channel: stamp an inline marker identifying the scan
+  // responsible for this operator at the head of its SQL, so the marker travels
+  // to the operator's exact final textual position.  No-op (empty marker) when
+  // recording is disabled; see pipe_operator_markers().
+  const std::string marker = MakeScanMarker(current_scan_);
   std::string out_sql =
       pipe_sql.empty()
-          ? std::string(op_sql)
-          : absl::StrCat(pipe_sql, QueryExpression::kPipe, op_sql);
+          ? absl::StrCat(marker, op_sql)
+          : absl::StrCat(pipe_sql, QueryExpression::kPipe, marker, op_sql);
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> query_expression,
                    MakePipeQueryExpression(out_sql));
   if (is_pipe_operator_chain) {

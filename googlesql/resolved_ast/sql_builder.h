@@ -274,6 +274,13 @@ class SQLBuilder : public ResolvedASTVisitor {
     // TODO: Remove once all engines are updated to use FLOAT32 in
     // the external mode.
     bool use_external_float32 = false;
+
+    // Visualizer support (pipe target mode only).  When true, AppendPipeOperator
+    // embeds an inline "/*S<n>*/" marker comment at the head of each emitted
+    // pipe operator; <n> indexes pipe_operator_markers() back to the producing
+    // ResolvedScan.  See pipe_operator_markers().  The caller must strip the
+    // markers before the SQL is formatted, lexed, or displayed.
+    bool record_pipe_operator_markers = false;
   };
 
   explicit SQLBuilder(const SQLBuilderOptions& options = SQLBuilderOptions());
@@ -292,14 +299,18 @@ class SQLBuilder : public ResolvedASTVisitor {
   // node.
   absl::StatusOr<std::string> GetSql();
 
-  // Visualizer support (pipe target mode).  As each pipe operator "|>" is
-  // appended, the ResolvedScan responsible for it is recorded here in output
-  // order (one entry per emitted "|>").  This is a passive side-channel: it does
-  // not affect the generated SQL.  Lets the execute_query visualizer correlate
-  // each operator in the regenerated pipe SQL with its ResolvedScan (and thus
-  // with the Resolved AST and input SQL panes).  Empty when not in pipe mode.
-  const std::vector<const ResolvedScan*>& pipe_operator_scan_order() const {
-    return pipe_operator_scan_order_;
+  // Visualizer support (pipe target mode).  When
+  // `options_.record_pipe_operator_markers` is set, each pipe operator emitted
+  // via AppendPipeOperator is prefixed in the generated SQL with an inline
+  // marker comment "/*S<n>*/", where <n> indexes this table back to the
+  // ResolvedScan that produced the operator.  Because the marker is embedded in
+  // the operator's own SQL text, it ends up in the operator's exact final
+  // textual position (surviving concatenation, range-variable wrapping, and
+  // parenthesized nesting), giving the execute_query visualizer an exact,
+  // hierarchy-safe operator -> ResolvedScan mapping with no positional guessing.
+  // The caller strips the markers before display.  Empty when not recording.
+  const std::vector<const ResolvedScan*>& pipe_operator_markers() const {
+    return marker_scans_;
   }
 
   // This deprecated version can crash in some cases.  Use GetSql() instead.
@@ -1552,11 +1563,17 @@ class SQLBuilder : public ResolvedASTVisitor {
                                       bool is_operator_chain,
                                       absl::string_view op_sql);
 
-  // Visualizer side-channel (see pipe_operator_scan_order()).  `current_scan_`
-  // is the ResolvedScan whose Visit method is currently running, maintained by
-  // ProcessNode; AppendPipeOperator records it once per emitted "|>".
+  // Visualizer side-channel (see pipe_operator_markers()).  `current_scan_` is
+  // the ResolvedScan whose Visit method is currently running, maintained by
+  // ProcessNode.  When recording is enabled, MakeScanMarker allocates a marker
+  // index for a scan and AppendPipeOperator stamps it into the operator's SQL.
   const ResolvedScan* current_scan_ = nullptr;
-  std::vector<const ResolvedScan*> pipe_operator_scan_order_;
+  std::vector<const ResolvedScan*> marker_scans_;
+
+  // Allocates a marker for `scan` and returns the inline marker comment
+  // ("/*S<n>*/") to embed at the head of its pipe operator's SQL, or "" when
+  // recording is disabled or `scan` is null.  See pipe_operator_markers().
+  std::string MakeScanMarker(const ResolvedScan* scan);
 
   // Builds the comma-separated subpipeline list shared by the pipe FORK and TEE
   // operators (e.g. "( |> SELECT key ), ( |> WHERE true )"). Each subpipeline is
