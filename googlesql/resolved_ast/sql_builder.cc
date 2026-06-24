@@ -2775,6 +2775,8 @@ absl::Status SQLBuilder::VisitResolvedTableScan(const ResolvedTableScan* node) {
     }
   }
   GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(select_list, ""));
+  // Visualizer: attribute the column-listing `|> SELECT` to this table scan.
+  query_expression->SetSelectMarker(MakeScanMarker(node));
 
   if (node->lock_mode() != nullptr) {
     GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
