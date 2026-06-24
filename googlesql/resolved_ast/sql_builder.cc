@@ -160,7 +160,11 @@ std::string SQLBuilder::GetColumnAlias(const ResolvedColumn& column) {
   // aggregates, which cannot be emitted as a valid identifier). Uniqueness is
   // preserved by suffixing.
   std::string alias;
-  const absl::string_view name = column.name();
+  // ResolvedColumn::name() returns a std::string by value, so this must own the
+  // string -- binding it to a string_view would dangle into the destroyed
+  // temporary, and the reads below would be a use-after-free (observed as a
+  // corrupted alias under pipe target syntax).
+  const std::string name = column.name();
   if (IsPipeSyntaxTargetMode() && !name.empty() &&
       !absl::StartsWith(name, "$") && IsWellFormedUTF8(name)) {
     alias = MakeUniqueColumnAlias(name);
