@@ -451,6 +451,16 @@ bool QueryExpression::TryAppendGroupByClause(
       }
     }
 
+    // Visualizer: stamp the marker at the very head of this pipe operator (the
+    // EXTEND, or the AGGREGATE when there is no EXTEND) so it lands in the
+    // operator's segment.  Only when something is actually emitted, so we never
+    // leave an orphan marker with no "|>".
+    if (!group_by_marker_.empty() &&
+        (!extend_columns.empty() || group_by_required ||
+         !aggregate_columns.empty())) {
+      absl::StrAppend(&sql, group_by_marker_);
+    }
+
     if (!extend_columns.empty()) {
       absl::StrAppend(&sql, "EXTEND ",
                       JoinListWithAliases(extend_columns, ", ",
@@ -1193,6 +1203,7 @@ void QueryExpression::ClearAllClauses() {
   group_by_only_aggregate_columns_ = false;
   group_by_list_.clear();
   group_by_hints_.clear();
+  group_by_marker_.clear();
   order_by_list_.clear();
   order_by_hints_.clear();
   limit_.clear();

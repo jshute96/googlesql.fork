@@ -332,6 +332,15 @@ class QueryExpression {
     group_by_forced_extend_columns_ = std::move(column_ids);
   }
 
+  // Visualizer side-channel: an opaque marker string the SQLBuilder stamps at
+  // the head of the pipe AGGREGATE/GROUP BY operator this query expression
+  // renders, identifying the producing ResolvedScan (see
+  // SQLBuilder::pipe_operator_markers()).  Empty (and inert) unless the
+  // SQLBuilder is recording markers in pipe mode.
+  void SetGroupByMarker(absl::string_view marker) {
+    group_by_marker_ = std::string(marker);
+  }
+
   absl::Status SetGroupByAllClause(
       const std::map<int, std::string>& group_by_list,
       absl::string_view group_by_hints);
@@ -500,6 +509,9 @@ class QueryExpression {
   absl::flat_hash_set<int> group_by_forced_extend_columns_;
 
   std::string group_by_hints_;
+
+  // Visualizer marker (see SetGroupByMarker()); empty unless recording markers.
+  std::string group_by_marker_;
 
   std::vector<std::string> order_by_list_;
   std::string order_by_hints_;

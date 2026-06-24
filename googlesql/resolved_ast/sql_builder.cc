@@ -5739,6 +5739,9 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
   }
   query_expression->SetGroupByForcedExtendColumns(
       ComputePipeGroupByForcedExtendColumns(node));
+  // Visualizer: attribute the pipe AGGREGATE/GROUP BY operator this scan emits
+  // (rendered later by QueryExpression) back to this scan.
+  query_expression->SetGroupByMarker(MakeScanMarker(current_scan_));
   if (!scans_to_collapse_.contains(node)) {
     // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY` emits an output column
     // for every grouping key. When the aggregate groups by columns that the
