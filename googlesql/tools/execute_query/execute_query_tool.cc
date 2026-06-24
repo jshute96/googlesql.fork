@@ -1518,99 +1518,195 @@ static std::string StripScanMarkers(absl::string_view sql) {
   return out;
 }
 
+// The [inner_start, inner_end) byte range of one parenthesized pipe-subquery
+// found within a segment: the content *between* the parentheses (inner_end is
+// the index of the ')').
+struct PipeParenGroup {
+  size_t inner_start;
+  size_t inner_end;
+};
+
+// Finds the top-level parenthesized groups within `seg` whose content is itself
+// a pipe chain (contains a depth-0 "|>") -- a scalar subquery in WHERE, a join
+// RHS, a set-operation input.  Parenthesized expressions that are not pipe
+// chains (e.g. "(1 - x)") are skipped.  Quote/paren-aware.  Because the
+// discriminator depends only on parentheses and "|>" -- identical in the marked
+// and display SQL (formatting never adds/removes either) -- the group lists line
+// up by index across the two strings, which is what lets the recursive renderer
+// descend both in lockstep.
+static std::vector<PipeParenGroup> FindPipeParenGroups(absl::string_view seg) {
+  std::vector<PipeParenGroup> out;
+  int depth = 0;
+  char quote = 0;
+  size_t inner_start = 0;
+  for (size_t i = 0; i < seg.size(); ++i) {
+    const char c = seg[i];
+    if (quote != 0) {
+      if (c == '\\') {
+        ++i;
+      } else if (c == quote) {
+        quote = 0;
+      }
+      continue;
+    }
+    if (c == '\'' || c == '"' || c == '`') {
+      quote = c;
+      continue;
+    }
+    if (c == '(') {
+      if (depth == 0) inner_start = i + 1;
+      ++depth;
+      continue;
+    }
+    if (c == ')' && depth > 0) {
+      --depth;
+      if (depth == 0) {
+        absl::string_view inner = seg.substr(inner_start, i - inner_start);
+        if (SplitTopLevelPipeSegments(inner).size() > 1) {
+          out.push_back({inner_start, i});
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// Forward declaration: the renderer is mutually recursive (a pipe chain renders
+// its operators, an operator may contain nested pipe chains).
+static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
+                                absl::string_view display,
+                                const std::vector<int>& marker_to_rid,
+                                int& s_counter);
+
+// The Resolved-AST scan id ("r<id>") of the operator that owns segment `mseg`:
+// the first marker emitted at paren-depth 0 in the marked segment.  -1 if the
+// operator has no producing ResolvedScan (e.g. the synthesized final SELECT).
+static int FirstTopLevelMarkerRid(absl::string_view mseg,
+                                  const std::vector<int>& marker_to_rid) {
+  const int marker = ParseSegmentMarkers(mseg).primary;
+  return (marker >= 0 && marker < static_cast<int>(marker_to_rid.size()))
+             ? marker_to_rid[marker]
+             : -1;
+}
+
+// Emits the body of one pipe-operator box: the display text of `dseg`, with each
+// nested pipe-subquery (`(... |> ... )`) replaced by a `.rscan-sub` block that
+// recursively renders the subquery's own operator boxes.  `mseg`/`dseg` are the
+// marked/display text of the same operator and share paren structure, so their
+// nested-group lists align by index.
+static void RenderSegmentInline(std::string& html, absl::string_view mseg,
+                                absl::string_view dseg,
+                                const std::vector<int>& marker_to_rid,
+                                int& s_counter) {
+  std::vector<PipeParenGroup> mgroups = FindPipeParenGroups(mseg);
+  std::vector<PipeParenGroup> dgroups = FindPipeParenGroups(dseg);
+  if (mgroups.size() != dgroups.size()) {
+    // Structure mismatch (should not happen): fall back to flat display text.
+    absl::StrAppend(&html, EscapeHtmlText(dseg));
+    return;
+  }
+  size_t dpos = 0;
+  for (size_t k = 0; k < dgroups.size(); ++k) {
+    // Display text up to and including the '(' that opens this subquery.
+    absl::StrAppend(&html, EscapeHtmlText(dseg.substr(
+                               dpos, dgroups[k].inner_start - dpos)));
+    absl::StrAppend(&html, "<div class=\"rscan-sub\">");
+    RenderPipeChainHtml(
+        html,
+        mseg.substr(mgroups[k].inner_start,
+                    mgroups[k].inner_end - mgroups[k].inner_start),
+        dseg.substr(dgroups[k].inner_start,
+                    dgroups[k].inner_end - dgroups[k].inner_start),
+        marker_to_rid, s_counter);
+    absl::StrAppend(&html, "</div>");
+    dpos = dgroups[k].inner_end;  // resume at the ')'
+  }
+  absl::StrAppend(&html, EscapeHtmlText(dseg.substr(dpos)));
+}
+
+// Emits one `.rscan` box for a single pipe operator (segment `mseg`/`dseg`),
+// owning exactly its producing scan (`data-corresp="r<id>"`, used both for the
+// cross-pane highlight and for parity shading).  Nested subqueries become nested
+// boxes with their own ids/correspondences -- never folded into this box.
+static void RenderSegmentBox(std::string& html, absl::string_view mseg,
+                             absl::string_view dseg,
+                             const std::vector<int>& marker_to_rid,
+                             int& s_counter) {
+  // Trim outer whitespace so each box hugs its operator text (internal newlines
+  // are preserved by the `white-space: pre` styling).
+  mseg = absl::StripAsciiWhitespace(mseg);
+  dseg = absl::StripAsciiWhitespace(dseg);
+  const int rid = FirstTopLevelMarkerRid(mseg, marker_to_rid);
+  const int sid = s_counter++;
+  const char* cls = (rid >= 0 && rid % 2 == 1) ? "scan-b" : "scan-a";
+  absl::StrAppend(&html, "<div class=\"rscan ", cls, "\" data-node-id=\"s", sid,
+                  "\"");
+  if (rid >= 0) {
+    absl::StrAppend(&html, " data-corresp=\"r", rid, "\"");
+  }
+  absl::StrAppend(&html, ">");
+  RenderSegmentInline(html, mseg, dseg, marker_to_rid, s_counter);
+  absl::StrAppend(&html, "</div>");
+}
+
+// Renders one pipe chain (a leading source segment plus its `|>` operators) as a
+// sequence of `.rscan` boxes.  The marked and display SQL share top-level pipe
+// structure (formatting never adds/removes a "|>"), so their segments align by
+// index; structure (scan ownership, nesting) comes from `marked`, visible text
+// from `display`.
+static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
+                                absl::string_view display,
+                                const std::vector<int>& marker_to_rid,
+                                int& s_counter) {
+  std::vector<std::pair<size_t, size_t>> msegs =
+      SplitTopLevelPipeSegments(marked);
+  std::vector<std::pair<size_t, size_t>> dsegs =
+      SplitTopLevelPipeSegments(display);
+  if (msegs.size() != dsegs.size()) {
+    // Structure mismatch (should not happen): render display operators as
+    // unlinked boxes so the text still shows, just without correspondence.
+    for (const auto& d : dsegs) {
+      absl::string_view dseg = absl::StripAsciiWhitespace(
+          display.substr(d.first, d.second - d.first));
+      absl::StrAppend(&html, "<div class=\"rscan scan-a\" data-node-id=\"s",
+                      s_counter++, "\">", EscapeHtmlText(dseg), "</div>");
+    }
+    return;
+  }
+  for (size_t i = 0; i < dsegs.size(); ++i) {
+    RenderSegmentBox(
+        html, marked.substr(msegs[i].first, msegs[i].second - msegs[i].first),
+        display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first),
+        marker_to_rid, s_counter);
+  }
+}
+
 // Renders the SQLBuilder pane: splits the formatted pipe SQL into `.rscan` boxes
-// (the same markup the Resolved AST pane uses), one per *top-level* pipe
-// operator, each with its own id (s0, s1, ...) and a `data-corresp`
-// cross-reference to the ResolvedScan(s) that produced it, so the panes line up
-// and the client-side correspondence highlighting lights up across all panes.
+// (the same markup the Resolved AST pane uses), one per pipe operator -- nested
+// recursively, so a pipe operator inside a subquery (a scalar subquery in WHERE,
+// a join RHS, a set-op input) becomes its own nested box rather than being
+// folded into the enclosing operator.  Each box has its own id (s0, s1, ...) and
+// a `data-corresp` cross-reference to the single ResolvedScan that produced it,
+// so the panes line up and the client-side correspondence highlighting lights up
+// 1:1 across all panes (and works at every nesting level).
 //
 // The mapping is *exact*, not inferred: the SQLBuilder stamped an inline marker
 // at the head of each pipe operator naming its producing ResolvedScan (see
 // SQLBuilder::pipe_operator_markers()).  `marked_sql` is the raw built SQL still
 // carrying those markers; `display_sql` is the same SQL with markers stripped
-// and reformatted (what the user sees).  Both have identical top-level pipe
-// structure (formatting never adds/removes a "|>"), so splitting each into
-// top-level segments yields a 1:1 correspondence by index.  For display segment
-// i we read the markers from marked segment i: `primary` is the scan that owns
-// the operator (used for parity shading), and `members` are all scans whose
-// markers fall in that segment -- including those nested inside a parenthesized
-// join RHS or set-op input -- so clicking the segment highlights exactly its
-// operator's scan plus any subquery scans it contains, and vice versa.
+// and reformatted (what the user sees).  marker_to_rid maps a marker index to
+// its Resolved-AST scan id ("r<id>"), or -1 if the scan isn't in the pane.
 //
-// A segment with no marker maps to nothing (no correspondence): the SQLBuilder
-// emits a few operators with no corresponding ResolvedScan -- notably the
-// statement's final output-renaming `|> SELECT` synthesized to match the output
-// column names.  We deliberately leave those unlinked rather than mapping them
-// to a range of scans.  marker_to_rid maps a marker index to its Resolved-AST
-// scan id ("r<id>"), or -1 if the scan isn't in the pane.
+// A box with no marker maps to nothing (no correspondence): the SQLBuilder emits
+// a few operators with no corresponding ResolvedScan -- notably the statement's
+// final output-renaming `|> SELECT` synthesized to match the output column
+// names.  We deliberately leave those unlinked.
 static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
                                         absl::string_view display_sql,
                                         const std::vector<int>& marker_to_rid) {
-  auto rid_of = [&](int marker_index) -> int {
-    return (marker_index >= 0 &&
-            marker_index < static_cast<int>(marker_to_rid.size()))
-               ? marker_to_rid[marker_index]
-               : -1;
-  };
-
-  // Per top-level segment of the marked SQL: its primary scan id (the operator's
-  // own scan, used for parity shading) and the set of all scan ids whose markers
-  // fall within it (the primary plus any nested-subquery scans -- e.g. a join
-  // RHS -- so clicking the segment highlights its operator and the subquery it
-  // contains).
-  std::vector<std::pair<size_t, size_t>> marked_ranges =
-      SplitTopLevelPipeSegments(marked_sql);
-  std::vector<int> seg_primary(marked_ranges.size(), -1);
-  std::vector<std::vector<int>> seg_members(marked_ranges.size());
-  for (size_t i = 0; i < marked_ranges.size(); ++i) {
-    SegmentMarkers m = ParseSegmentMarkers(marked_sql.substr(
-        marked_ranges[i].first,
-        marked_ranges[i].second - marked_ranges[i].first));
-    seg_primary[i] = rid_of(m.primary);
-    std::vector<int> rids;
-    for (const int mi : m.members) {
-      const int rid = rid_of(mi);
-      if (rid >= 0 &&
-          std::find(rids.begin(), rids.end(), rid) == rids.end()) {
-        rids.push_back(rid);
-      }
-    }
-    seg_members[i] = std::move(rids);
-  }
-
-  std::vector<std::pair<size_t, size_t>> display_ranges =
-      SplitTopLevelPipeSegments(display_sql);
-
   std::string html = "<div class=\"rscan-stmt\">";
-  for (size_t i = 0; i < display_ranges.size(); ++i) {
-    // Marked and display SQL share top-level structure, so segment i lines up.
-    // Guard against any mismatch by treating overflow segments as unmarked.
-    const std::vector<int>* members =
-        i < seg_members.size() ? &seg_members[i] : nullptr;
-    const int primary = i < seg_primary.size() ? seg_primary[i] : -1;
-
-    std::string corresp;
-    int rep = -1;
-    if (members != nullptr && !members->empty()) {
-      for (const int rid : *members) {
-        absl::StrAppend(&corresp, corresp.empty() ? "" : " ", "r", rid);
-      }
-      rep = primary >= 0 ? primary : members->front();
-    }
-
-    const char* cls = (rep >= 0 && rep % 2 == 1) ? "scan-b" : "scan-a";
-    absl::StrAppend(&html, "<div class=\"rscan ", cls, "\" data-node-id=\"s", i,
-                    "\"");
-    if (!corresp.empty()) {
-      absl::StrAppend(&html, " data-corresp=\"", corresp, "\"");
-    }
-    absl::StrAppend(&html, ">",
-                    EscapeHtmlText(absl::StripTrailingAsciiWhitespace(
-                        display_sql.substr(display_ranges[i].first,
-                                           display_ranges[i].second -
-                                               display_ranges[i].first))),
-                    "</div>");
-  }
+  int s_counter = 0;
+  RenderPipeChainHtml(html, marked_sql, display_sql, marker_to_rid, s_counter);
   absl::StrAppend(&html, "</div>");
   return html;
 }

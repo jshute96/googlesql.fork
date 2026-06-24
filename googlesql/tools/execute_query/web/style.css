@@ -946,3 +946,10 @@ html[data-visualize] .right-section {
   padding: 2px 4px;
   background: rgba(255, 255, 255, 0.4);
 }
+/* SQLBuilder pane: a nested pipe-subquery (scalar subquery, join RHS, set-op
+   input) rendered as its own indented stack of operator boxes inside the
+   enclosing operator's box. */
+.rscan-sub {
+  display: block;
+  margin-left: 1.2em;
+}
