@@ -4646,10 +4646,39 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
 
+  // In Pipe syntax mode, emit a single pipe-native `|> LIMIT ... OFFSET ...`
+  // operator via AppendPipeOperator (which records the producing scan for the
+  // visualizer), rather than setting a QueryExpression clause.  Inside a
+  // subpipeline body the target mode is forced to Pipe, so this also covers the
+  // operator-chain input case.
+  if (IsPipeSyntaxTargetMode()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    std::string op = "LIMIT ";
+    if (node->limit() != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(node->limit()));
+      absl::StrAppend(&op, result->GetSQL());
+    } else {
+      absl::StrAppend(&op, "ALL");
+    }
+    if (node->offset() != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(node->offset()));
+      absl::StrAppend(&op, " OFFSET ", result->GetSQL());
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op,
+                           query_expression->IsPipeOperatorChain()));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   // The accumulate path below sets a LIMIT/OFFSET clause on the QueryExpression
-  // and lets GetPipeSQLQuery render `|> LIMIT ... OFFSET ...` in Pipe syntax
-  // mode. CanSetLimitClause does not require a FROM clause, so this also works
-  // over a subpipeline's operator-chain input.
+  // and lets GetSQLQuery render LIMIT ... OFFSET ... in Standard syntax mode.
+  // CanSetLimitClause does not require a FROM clause.
   if (!query_expression->CanSetLimitClause()) {
     GOOGLESQL_RETURN_IF_ERROR(
         WrapQueryExpression(node->input_scan(), query_expression.get()));
