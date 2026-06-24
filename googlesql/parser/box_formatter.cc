@@ -406,8 +406,11 @@ const absl::flat_hash_map<absl::string_view, Layout>& LayoutConfig() {
 
 class Builder {
  public:
-  Builder(absl::string_view sql, BoxAnnotator annotate)
-      : sql_(sql), annotate_(std::move(annotate)) {}
+  Builder(absl::string_view sql, BoxAnnotator annotate,
+          bool break_pipe_operators)
+      : sql_(sql),
+        annotate_(std::move(annotate)),
+        break_pipe_operators_(break_pipe_operators) {}
 
   // ctx.flatten_query: whether a Query may be laid out inline (true inside a
   // subquery's parentheses) vs. always stacked (false at the top level).
@@ -1104,7 +1107,15 @@ class Builder {
     int seg = 0;
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
-        if (!first) parts.push_back(ClauseSep(ctx));
+        if (!first) {
+          // A pipe operator always starts on its own line when
+          // `break_pipe_operators_` is set -- a HardLine breaks every enclosing
+          // group, so even a short parenthesized pipe subquery is multi-line.
+          const bool is_pipe =
+              StartsWith(p.child->GetNodeKindString(), "Pipe");
+          parts.push_back(break_pipe_operators_ && is_pipe ? HardLine()
+                                                           : ClauseSep(ctx));
+        }
         if (has_pipe) {
           // Alternate darker/lighter, starting with the darker shade ("-b").
           std::string cls =
@@ -1383,6 +1394,7 @@ class Builder {
 
   absl::string_view sql_;
   BoxAnnotator annotate_;
+  bool break_pipe_operators_ = false;
 };
 
 }  // namespace
@@ -1390,7 +1402,8 @@ class Builder {
 absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
                                          const ASTNode* root,
                                          const LanguageOptions& language_options,
-                                         int width, BoxAnnotator annotate) {
+                                         int width, BoxAnnotator annotate,
+                                         bool break_pipe_operators) {
   GOOGLESQL_RET_CHECK_NE(root, nullptr);
   const int root_start = root->start_location().GetByteOffset();
   const int root_end = root->end_location().GetByteOffset();
@@ -1399,7 +1412,7 @@ absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
   GOOGLESQL_RET_CHECK_LE(root_end, static_cast<int>(sql.size()));
   (void)language_options;  // Comments are detected directly from gap text.
 
-  Builder builder(sql, std::move(annotate));
+  Builder builder(sql, std::move(annotate), break_pipe_operators);
   Builder::Ctx ctx;
   ctx.flatten_query = false;
   DocPtr doc = builder.Build(root, ctx);

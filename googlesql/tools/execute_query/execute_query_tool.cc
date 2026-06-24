@@ -1276,7 +1276,8 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
     return html;
   };
   return SqlToBoxHtml(sql, ast, config.analyzer_options().language(),
-                      /*width=*/80, annotate);
+                      /*width=*/80, annotate,
+                      /*break_pipe_operators=*/true);
 }
 
 // Emits the analyze-mode "query viewer": the box-formatted query with each

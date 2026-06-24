@@ -63,20 +63,23 @@ LanguageOptions Pipes() {
 
 // Returns the raw HTML rendering.
 std::string BoxHtml(absl::string_view sql, int width = 60,
-                    const LanguageOptions& options = Pipes()) {
+                    const LanguageOptions& options = Pipes(),
+                    bool break_pipe_operators = false) {
   ParserOptions parser_options(options);
   std::unique_ptr<ParserOutput> parser_output;
   GOOGLESQL_QCHECK_OK(ParseStatement(sql, parser_options, &parser_output));
   absl::StatusOr<std::string> html =
-      SqlToBoxHtml(sql, parser_output->statement(), options, width);
+      SqlToBoxHtml(sql, parser_output->statement(), options, width,
+                   /*annotate=*/nullptr, break_pipe_operators);
   GOOGLESQL_QCHECK_OK(html.status());
   return *html;
 }
 
 // Returns the computed text layout (tags stripped).
 std::string Box(absl::string_view sql, int width = 60,
-                const LanguageOptions& options = Pipes()) {
-  return PlainText(BoxHtml(sql, width, options));
+                const LanguageOptions& options = Pipes(),
+                bool break_pipe_operators = false) {
+  return PlainText(BoxHtml(sql, width, options, break_pipe_operators));
 }
 
 TEST(BoxFormatterTest, JoinChainEachJoinOnOwnLineUnderFrom) {
@@ -110,6 +113,21 @@ TEST(BoxFormatterTest, StandardClausesEachOnOwnLine) {
 TEST(BoxFormatterTest, PipeOperatorsStack) {
   EXPECT_THAT(Box("FROM t |> WHERE x > 1 |> SELECT y"),
               Eq("FROM t\n|> WHERE x > 1\n|> SELECT y"));
+}
+
+TEST(BoxFormatterTest, ShortPipeSubqueryStaysInlineByDefault) {
+  // A short pipe subquery fits on one line, so it is laid out inline.
+  EXPECT_THAT(Box("SELECT * FROM (FROM t |> WHERE x > 1) AS s"),
+              Eq("SELECT *\nFROM (FROM t |> WHERE x > 1) AS s"));
+}
+
+TEST(BoxFormatterTest, BreakPipeOperatorsForcesMultilineSubquery) {
+  // With break_pipe_operators, even a short pipe subquery uses the multi-line
+  // form: each |> on its own line.  (Visual indentation comes from the inline-
+  // block box, so the stripped text shows the breaks without absolute indent.)
+  EXPECT_THAT(Box("SELECT * FROM (FROM t |> WHERE x > 1) AS s", 60, Pipes(),
+                  /*break_pipe_operators=*/true),
+              HasSubstr("FROM t\n|> WHERE x > 1"));
 }
 
 TEST(BoxFormatterTest, OriginalWhitespaceIsDropped) {

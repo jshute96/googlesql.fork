@@ -57,11 +57,17 @@ using BoxAnnotator = std::function<std::string(const ASTNode*)>;
 // `root` must come from a parse of `sql`. `language_options` is used when
 // re-tokenizing to find comments. Best-effort: unrecognized nodes fall back to
 // an inline rendering of their original text.
+//
+// When `break_pipe_operators` is true, every pipe operator "|>" starts on its
+// own line (the multi-line pipe form) even when the (sub)query would otherwise
+// fit on one line -- including pipe operators inside a parenthesized subquery.
+// When false (default), a short pipe (sub)query may be laid out inline.
 absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
                                          const ASTNode* root,
                                          const LanguageOptions& language_options,
                                          int width = 80,
-                                         BoxAnnotator annotate = nullptr);
+                                         BoxAnnotator annotate = nullptr,
+                                         bool break_pipe_operators = false);
 
 }  // namespace googlesql
 
