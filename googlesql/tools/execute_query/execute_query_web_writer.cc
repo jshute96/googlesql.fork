@@ -26,6 +26,8 @@
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "googlesql/resolved_ast/resolved_node.h"
 #include "googlesql/tools/execute_query/output_query_result.h"
+#include "absl/flags/declare.h"
+#include "absl/flags/flag.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -34,6 +36,11 @@
 #include "mstch/mstch.hpp"
 #include "re2/re2.h"
 #include "googlesql/base/status_macros.h"
+
+// Defined in execute_query_tool.cc; honoured here so the web Analyze output uses
+// the same linear/tree rendering choice as the command-line tool.
+ABSL_DECLARE_FLAG(bool, linear_resolved_ast);
+ABSL_DECLARE_FLAG(bool, linear_and_tree_resolved_ast);
 
 namespace googlesql {
 
@@ -248,11 +255,29 @@ absl::Status ExecuteQueryWebWriter::resolved(const ResolvedNode& ast,
   // `result_analyzed` in a triple mustache to disable HTML escaping.
   // We make sure that the string is HTML-escaped before inserting it into the
   // template.
+  const bool linear_and_tree =
+      absl::GetFlag(FLAGS_linear_and_tree_resolved_ast);
+  const bool linear = absl::GetFlag(FLAGS_linear_resolved_ast);
+  std::string debug_string;
+  if (linear_and_tree) {
+    // Both renderings: the nested tree first, then the linear version.
+    debug_string = absl::StrCat(
+        ast.DebugString(ResolvedNode::DebugStringConfig{
+            .print_created_columns = true, .use_box_glyphs = true}),
+        "\nLinear:\n",
+        ast.DebugString(ResolvedNode::DebugStringConfig{
+            .print_created_columns = true,
+            .use_box_glyphs = true,
+            .linear_mode = true}));
+  } else {
+    debug_string = ast.DebugString(ResolvedNode::DebugStringConfig{
+        .print_created_columns = true,
+        .use_box_glyphs = true,
+        .linear_mode = linear});
+  }
   current_statement_params_[absl::StrCat("result_analyzed",
                                          post_rewrite ? "_post_rewrite" : "")] =
-      DecorateASTDebugStringWithHTMLTags(
-          ast.DebugString(ResolvedNode::DebugStringConfig{
-              .print_created_columns = true, .use_box_glyphs = true}));
+      DecorateASTDebugStringWithHTMLTags(debug_string);
   got_results_ = true;
   return absl::OkStatus();
 }
