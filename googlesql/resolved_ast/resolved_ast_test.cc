@@ -346,13 +346,15 @@ TEST_F(ResolvedASTTest, DebugStringLinearMode) {
                   {.linear_mode = true, .omit_pipe_input_scan_field = false}),
               HasSubstr("input_scan=<pipe_input>"));
 
-  // DebugStringHtml emits one box per ResolvedScan (alternating shading) inside
-  // a statement block, with nested query blocks for non-pipe-input scans.
+  // DebugStringHtml emits one box per ResolvedScan inside a statement block,
+  // with nested query blocks for non-pipe-input scans.  Each box is coloured by
+  // its query's family (blue at the top level) with the initial scan / pipe
+  // operators alternating darker ("-b", first) then lighter ("-a") shades.
   const std::string html = query_stmt->DebugStringHtml();
   EXPECT_THAT(html, HasSubstr("rscan-stmt"));
   EXPECT_THAT(html, HasSubstr("data-node-id=\"r0\""));
-  EXPECT_THAT(html, HasSubstr("class=\"rscan scan-a\""));
-  EXPECT_THAT(html, HasSubstr("class=\"rscan scan-b\""));
+  EXPECT_THAT(html, HasSubstr("class=\"rscan seg-blue-b\""));
+  EXPECT_THAT(html, HasSubstr("class=\"rscan seg-blue-a\""));
   EXPECT_THAT(html, HasSubstr("rscan-query"));
   EXPECT_THAT(html, HasSubstr("|&gt; ProjectScan"));
   // The pipe operator name is escaped; raw "<" must not appear unescaped.

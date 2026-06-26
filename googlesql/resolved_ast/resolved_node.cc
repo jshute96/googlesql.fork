@@ -133,7 +133,7 @@ std::string ResolvedNode::DebugStringHtml(
   config.linear_mode = true;
   int scan_counter = 0;
   std::string output;
-  EmitNodeHtml(this, config, &scan_counter, scan_order, &output);
+  EmitNodeHtml(this, config, &scan_counter, scan_order, &output, /*depth=*/0);
   return output;
 }
 
@@ -141,14 +141,14 @@ void ResolvedNode::EmitNodeHtml(const ResolvedNode* node,
                                 const DebugStringConfig& config,
                                 int* scan_counter,
                                 std::vector<const ResolvedScan*>* scan_order,
-                                std::string* output) {
+                                std::string* output, int depth) {
   if (node == nullptr) {
     absl::StrAppend(output, "<div class=\"rscan-stmt\">&lt;nullptr&gt;</div>");
     return;
   }
   if (node->IsScan()) {
     EmitScanChainHtml(node->GetAs<ResolvedScan>(), config, scan_counter,
-                      scan_order, output);
+                      scan_order, output, depth);
     return;
   }
   // A non-scan node (typically the statement): render as a labeled block whose
@@ -156,14 +156,14 @@ void ResolvedNode::EmitNodeHtml(const ResolvedNode* node,
   absl::StrAppend(output, "<div class=\"rscan-stmt\"><div class=\"rscan-head\">",
                   HtmlEscape(node->node_kind_string()), "</div>");
   EmitScanFieldsHtml(node, config, /*elide=*/nullptr, scan_counter, scan_order,
-                     output);
+                     output, depth);
   absl::StrAppend(output, "</div>");
 }
 
 void ResolvedNode::EmitScanChainHtml(
     const ResolvedScan* scan, const DebugStringConfig& config,
     int* scan_counter, std::vector<const ResolvedScan*>* scan_order,
-    std::string* output) {
+    std::string* output, int depth) {
   // Collect the pipe spine: spine.back() is the source (leaf) scan, spine[0]
   // is the top of the chain.  A leaf scan with no pipe input is a one-element
   // spine.
@@ -171,20 +171,25 @@ void ResolvedNode::EmitScanChainHtml(
   for (const ResolvedScan* s = scan; s != nullptr; s = s->GetPipeInputScan()) {
     spine.push_back(s);
   }
+  // This whole chain is one query: colour it by family (blue/green alternating
+  // by subquery `depth`), and within it the initial source then each pipe
+  // operator alternate a darker ("-b", first) then lighter ("-a") shade.
+  const char* family = (depth % 2 == 0) ? "blue" : "green";
   // Emit source first, then each operator stacked below it.
-  for (int i = static_cast<int>(spine.size()) - 1; i >= 0; --i) {
+  int pos = 0;
+  for (int i = static_cast<int>(spine.size()) - 1; i >= 0; --i, ++pos) {
     const ResolvedScan* s = spine[i];
     const bool is_operator = (i != static_cast<int>(spine.size()) - 1);
     const int id = (*scan_counter)++;
     if (scan_order != nullptr) scan_order->push_back(s);
-    absl::StrAppend(output, "<div class=\"rscan ",
-                    (id % 2 == 0 ? "scan-a" : "scan-b"),
+    const char* shade = (pos % 2 == 0) ? "b" : "a";
+    absl::StrAppend(output, "<div class=\"rscan seg-", family, "-", shade,
                     "\" data-node-id=\"r", id, "\"><div class=\"rscan-head\">",
                     (is_operator ? "|&gt; " : ""),
                     HtmlEscape(s->node_kind_string()), "</div>");
     EmitScanFieldsHtml(s, config,
                        /*elide=*/is_operator ? s->GetPipeInputScan() : nullptr,
-                       scan_counter, scan_order, output);
+                       scan_counter, scan_order, output, depth);
     absl::StrAppend(output, "</div>");
   }
 }
@@ -192,7 +197,8 @@ void ResolvedNode::EmitScanChainHtml(
 void ResolvedNode::EmitScanFieldsHtml(
     const ResolvedNode* scan, const DebugStringConfig& config,
     const ResolvedNode* elide, int* scan_counter,
-    std::vector<const ResolvedScan*>* scan_order, std::string* output) {
+    std::vector<const ResolvedScan*>* scan_order, std::string* output,
+    int depth) {
   std::vector<DebugStringField> fields;
   scan->CollectDebugStringFields(&fields);
 
@@ -224,8 +230,9 @@ void ResolvedNode::EmitScanFieldsHtml(
                           HtmlEscape(field.name), "=</div>");
         }
         absl::StrAppend(output, "<div class=\"rscan-query\">");
+        // A nested scan child is a subquery: deeper nesting → next colour family.
         EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,
-                          scan_order, output);
+                          scan_order, output, depth + 1);
         absl::StrAppend(output, "</div></div>");
       } else if (child != nullptr && SubtreeContainsScan(child)) {
         // A non-scan child that contains a subquery (e.g. a WHERE filter
@@ -239,8 +246,10 @@ void ResolvedNode::EmitScanFieldsHtml(
         }
         absl::StrAppend(output, "<div class=\"rscan-field\">",
                         HtmlEscape(child->node_kind_string()), "</div>");
+        // Still expanding the same expression (the subquery scan inside it picks
+        // up depth+1 when EmitScanChainHtml reaches it), so keep `depth`.
         EmitScanFieldsHtml(child, config, /*elide=*/nullptr, scan_counter,
-                           scan_order, output);
+                           scan_order, output, depth);
         absl::StrAppend(output, "</div>");
       } else {
         absl::StrAppend(output, "<div class=\"rscan-field\">");

@@ -884,7 +884,7 @@ class Builder {
   // The colour class for a subquery at the given depth: blue and green
   // alternate by nesting depth so each level contrasts with its parent.
   const char* SubqueryColor(int depth) const {
-    return (depth % 2 == 1) ? "subq-blue" : "subq-green";
+    return (depth % 2 == 0) ? "subq-blue" : "subq-green";
   }
 
   DocPtr BuildParenQuery(const ASTNode* query, Ctx ctx) {
@@ -1096,12 +1096,11 @@ class Builder {
         break;
       }
     }
-    // Segment tints are a lighter/darker pair of the enclosing query's colour
-    // family, chosen by subquery depth (depth 0 = grey, then blue/green
-    // alternating to match the subquery wrapper colours).
-    const char* family = ctx.subquery_depth == 0  ? "grey"
-                         : ctx.subquery_depth % 2  ? "blue"
-                                                   : "green";
+    // Segment tints are a darker/lighter pair of the enclosing query's colour
+    // family, chosen by subquery depth: blue and green alternate by depth
+    // (depth 0 = blue), matching the subquery wrapper colours and the Resolved
+    // AST / SQLBuilder panes.
+    const char* family = ctx.subquery_depth % 2 == 0 ? "blue" : "green";
     std::vector<DocPtr> parts;
     bool first = true;
     int seg = 0;

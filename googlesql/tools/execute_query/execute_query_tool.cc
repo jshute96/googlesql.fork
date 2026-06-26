@@ -1577,7 +1577,15 @@ static std::vector<PipeParenGroup> FindPipeParenGroups(absl::string_view seg) {
 static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
                                 absl::string_view display,
                                 const std::vector<int>& marker_to_rid,
-                                int& s_counter);
+                                int& s_counter, int depth);
+
+// The query-band CSS class for a box: blue/green family alternating by subquery
+// `depth` (depth 0 = blue), darker ("-b") for the initial segment then lighter
+// ("-a"), alternating by `pos` -- matching the Resolved AST and input panes.
+static std::string PipeBandClass(int depth, int pos) {
+  return absl::StrCat("seg-", (depth % 2 == 0) ? "blue" : "green", "-",
+                      (pos % 2 == 0) ? "b" : "a");
+}
 
 // The Resolved-AST scan id ("r<id>") of the operator that owns segment `mseg`:
 // the first marker emitted at paren-depth 0 in the marked segment.  -1 if the
@@ -1598,7 +1606,7 @@ static int FirstTopLevelMarkerRid(absl::string_view mseg,
 static void RenderSegmentInline(std::string& html, absl::string_view mseg,
                                 absl::string_view dseg,
                                 const std::vector<int>& marker_to_rid,
-                                int& s_counter) {
+                                int& s_counter, int depth) {
   std::vector<PipeParenGroup> mgroups = FindPipeParenGroups(mseg);
   std::vector<PipeParenGroup> dgroups = FindPipeParenGroups(dseg);
   if (mgroups.size() != dgroups.size()) {
@@ -1624,13 +1632,14 @@ static void RenderSegmentInline(std::string& html, absl::string_view mseg,
       absl::StrAppend(&html, EscapeHtmlText(before_paren), " (");
     }
     absl::StrAppend(&html, "<div class=\"rscan-sub\">");
+    // A nested pipe-subquery is one level deeper -> next colour family.
     RenderPipeChainHtml(
         html,
         mseg.substr(mgroups[k].inner_start,
                     mgroups[k].inner_end - mgroups[k].inner_start),
         dseg.substr(dgroups[k].inner_start,
                     dgroups[k].inner_end - dgroups[k].inner_start),
-        marker_to_rid, s_counter);
+        marker_to_rid, s_counter, depth + 1);
     absl::StrAppend(&html, "</div>");
     dpos = dgroups[k].inner_end;  // resume at the ')'
   }
@@ -1644,21 +1653,20 @@ static void RenderSegmentInline(std::string& html, absl::string_view mseg,
 static void RenderSegmentBox(std::string& html, absl::string_view mseg,
                              absl::string_view dseg,
                              const std::vector<int>& marker_to_rid,
-                             int& s_counter) {
+                             int& s_counter, int depth, int pos) {
   // Trim outer whitespace so each box hugs its operator text (internal newlines
   // are preserved by the `white-space: pre` styling).
   mseg = absl::StripAsciiWhitespace(mseg);
   dseg = absl::StripAsciiWhitespace(dseg);
   const int rid = FirstTopLevelMarkerRid(mseg, marker_to_rid);
   const int sid = s_counter++;
-  const char* cls = (rid >= 0 && rid % 2 == 1) ? "scan-b" : "scan-a";
-  absl::StrAppend(&html, "<div class=\"rscan ", cls, "\" data-node-id=\"s", sid,
-                  "\"");
+  absl::StrAppend(&html, "<div class=\"rscan ", PipeBandClass(depth, pos),
+                  "\" data-node-id=\"s", sid, "\"");
   if (rid >= 0) {
     absl::StrAppend(&html, " data-corresp=\"r", rid, "\"");
   }
   absl::StrAppend(&html, ">");
-  RenderSegmentInline(html, mseg, dseg, marker_to_rid, s_counter);
+  RenderSegmentInline(html, mseg, dseg, marker_to_rid, s_counter, depth);
   absl::StrAppend(&html, "</div>");
 }
 
@@ -1670,7 +1678,7 @@ static void RenderSegmentBox(std::string& html, absl::string_view mseg,
 static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
                                 absl::string_view display,
                                 const std::vector<int>& marker_to_rid,
-                                int& s_counter) {
+                                int& s_counter, int depth) {
   std::vector<std::pair<size_t, size_t>> msegs =
       SplitTopLevelPipeSegments(marked);
   std::vector<std::pair<size_t, size_t>> dsegs =
@@ -1678,11 +1686,12 @@ static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
   if (msegs.size() != dsegs.size()) {
     // Structure mismatch (should not happen): render display operators as
     // unlinked boxes so the text still shows, just without correspondence.
-    for (const auto& d : dsegs) {
+    for (size_t i = 0; i < dsegs.size(); ++i) {
       absl::string_view dseg = absl::StripAsciiWhitespace(
-          display.substr(d.first, d.second - d.first));
-      absl::StrAppend(&html, "<div class=\"rscan scan-a\" data-node-id=\"s",
-                      s_counter++, "\">", EscapeHtmlText(dseg), "</div>");
+          display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first));
+      absl::StrAppend(&html, "<div class=\"rscan ", PipeBandClass(depth, i),
+                      "\" data-node-id=\"s", s_counter++, "\">",
+                      EscapeHtmlText(dseg), "</div>");
     }
     return;
   }
@@ -1690,7 +1699,7 @@ static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
     RenderSegmentBox(
         html, marked.substr(msegs[i].first, msegs[i].second - msegs[i].first),
         display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first),
-        marker_to_rid, s_counter);
+        marker_to_rid, s_counter, depth, static_cast<int>(i));
   }
 }
 
@@ -1719,7 +1728,8 @@ static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
                                         const std::vector<int>& marker_to_rid) {
   std::string html = "<div class=\"rscan-stmt\">";
   int s_counter = 0;
-  RenderPipeChainHtml(html, marked_sql, display_sql, marker_to_rid, s_counter);
+  RenderPipeChainHtml(html, marked_sql, display_sql, marker_to_rid, s_counter,
+                      /*depth=*/0);
   absl::StrAppend(&html, "</div>");
   return html;
 }

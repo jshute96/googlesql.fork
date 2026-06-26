@@ -467,34 +467,37 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
   box-sizing: border-box;
 }
 
-/* Region colours.
-   - A standard query (q-whole) and a top-level pipe chain use the grey family.
-   - Subqueries alternate blue / green by nesting depth.
-   - Pipe segments are a darker ("-b", first/odd) / lighter ("-a") pair of the
-     enclosing query's family, so a pipe chain reads as alternating bands. */
-.rect.q-whole,
-.rect.seg-grey-a {
-  background: #eef1f5;
+/* Query band colours.  Every query / subquery is coloured by one family — blue
+   and green, alternating by nesting depth (depth 0 = blue) — across all three
+   panes (input SQL, Resolved AST, SQLBuilder SQL).  Within a query the initial
+   query and each following pipe operator alternate a darker ("-b", first) then
+   lighter ("-a") shade of the family, so a pipe chain reads as alternating bands
+   of the query's colour.  These classes are element-agnostic so they apply to
+   the input pane's `.rect` segments and the AST / SQLBuilder `.rscan` boxes
+   alike. */
+.viz .seg-blue-a {
+  background: #dbe7fb;
 }
-.rect.seg-grey-b {
-  background: #bfc6d0;
+.viz .seg-blue-b {
+  background: #a9c8f0;
 }
-.rect.subq-blue,
-.rect.seg-blue-a {
-  background: #dde9fb;
+.viz .seg-green-a {
+  background: #dcf1dc;
 }
-.rect.seg-blue-b {
-  background: #b1bdc9;
-}
-.rect.subq-green,
-.rect.seg-green-a {
-  background: #e1f2e1;
-}
-.rect.seg-green-b {
-  background: #b4c2b4;
+.viz .seg-green-b {
+  background: #a6daa6;
 }
 
-/* Clickable regions get a 1px border. */
+/* A query / subquery wrapper region: a faint family tint + a family-coloured
+   border, so the box boundary reads even where the alternating bands inside
+   don't reach (padding, the leading "("). */
+.rect.q-whole,
+.rect.subq-blue {
+  background: #eef5ff;
+}
+.rect.subq-green {
+  background: #eff8ef;
+}
 .rect.subq-blue {
   border: 1px solid #9bb8df;
 }
@@ -926,12 +929,8 @@ html[data-visualize] .right-section {
   white-space: pre;
   cursor: pointer;
 }
-.rscan.scan-a {
-  background: #eef1f5;
-}
-.rscan.scan-b {
-  background: #dde9fb;
-}
+/* Each `.rscan` box's background is a query-band colour (`.seg-<family>-<a|b>`,
+   above); boxes that map to no scan stay unfilled. */
 .rscan-head {
   font-weight: bold;
 }
@@ -950,11 +949,12 @@ html[data-visualize] .right-section {
   box-sizing: border-box;
   width: max-content;
   min-width: 100%;
-  border: 1px solid #9bb8df;
+  /* A neutral wrapper border; the family colour is carried by the bands inside
+     (a nested scan is a subquery, so its bands switch family). */
+  border: 1px solid #cfd6df;
   border-radius: 3px;
   margin: 2px 0;
   padding: 2px 4px;
-  background: rgba(255, 255, 255, 0.4);
 }
 /* SQLBuilder pane: a nested pipe-subquery (scalar subquery, join RHS, set-op
    input) rendered as its own indented stack of operator boxes inside the

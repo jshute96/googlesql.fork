@@ -495,15 +495,18 @@ class ResolvedNode {
   // data-scan-id attribute and alternating colors).  `EmitNodeHtml` renders an
   // arbitrary node as a block (used for the statement and for query roots);
   // `EmitScanChainHtml` flattens a scan's pipe spine into a column of boxes.
+  // `depth` is the subquery nesting depth (0 at the top level, +1 per nested
+   // query block), used to colour each query/subquery by family (blue/green
+   // alternating) to match the input-SQL and SQLBuilder panes.
   static void EmitNodeHtml(const ResolvedNode* node,
                            const DebugStringConfig& config, int* scan_counter,
                            std::vector<const ResolvedScan*>* scan_order,
-                           std::string* output);
+                           std::string* output, int depth);
   static void EmitScanChainHtml(const ResolvedScan* scan,
                                 const DebugStringConfig& config,
                                 int* scan_counter,
                                 std::vector<const ResolvedScan*>* scan_order,
-                                std::string* output);
+                                std::string* output, int depth);
   // Renders a single scan box's own fields: scalar fields and non-scan child
   // nodes become escaped text; scan child nodes become nested query boxes.
   // `elide` is the pipe-input scan to skip (already shown as the box above).
@@ -511,7 +514,7 @@ class ResolvedNode {
                                  const DebugStringConfig& config,
                                  const ResolvedNode* elide, int* scan_counter,
                                  std::vector<const ResolvedScan*>* scan_order,
-                                 std::string* output);
+                                 std::string* output, int depth);
 
   // DebugString on these call protected methods.
   friend class ResolvedComputedColumn;
