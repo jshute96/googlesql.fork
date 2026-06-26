@@ -355,6 +355,9 @@ constexpr int kDefaultIndent = 2;
 //   kParen     A parenthesized subquery/expression: inline "(...)" if it fits,
 //              else its contents indent between the parentheses.
 //   kPipeOp    A "|>" pipe operator.
+//   kSubpipeline  A `(|> ... |> ...)` subpipeline (e.g. a `|> FORK` branch):
+//              its own parenthesized block (like a subquery) with each pipe
+//              operator on its own line.
 //   kStatements  A statement list (scripts): one statement per line.
 //   kCall      A function call: callee + parenthesized argument list that
 //              breaks one-argument-per-line when it doesn't fit.
@@ -374,6 +377,7 @@ enum class Layout {
   kSelect,
   kParen,
   kPipeOp,
+  kSubpipeline,
   kStatements,
   kCall,
   kSetOp,
@@ -389,6 +393,7 @@ const absl::flat_hash_map<absl::string_view, Layout>& LayoutConfig() {
   static const auto* const config =
       new absl::flat_hash_map<absl::string_view, Layout>{
           {"Query", Layout::kVertical},
+          {"Subpipeline", Layout::kSubpipeline},
           {"Select", Layout::kSelect},
           {"ExpressionSubquery", Layout::kParen},
           {"TableSubquery", Layout::kParen},
@@ -766,6 +771,8 @@ class Builder {
         return BuildStatementList(ps, ctx);
       case Layout::kPipeOp:
         return BuildPipe(ps, ctx);
+      case Layout::kSubpipeline:
+        return BuildSubpipeline(node, ps, ctx);
       case Layout::kClause:
         return BuildClause(ps, ctx);
       case Layout::kList:
@@ -1015,6 +1022,8 @@ class Builder {
     inner_ctx.clause_cont = 1;  // +3 (pipe) + 1 = 4 columns of content indent
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
+        // A subpipeline child (e.g. a `|> FORK` branch) lays itself out as its
+        // own parenthesized block (see BuildSubpipeline).
         parts.push_back(Nest(3, Build(p.child, inner_ctx)));
       } else {
         // The leading "|>" marker (and any stray punctuation/keywords). Always
@@ -1027,6 +1036,25 @@ class Builder {
       }
     }
     return Concat(std::move(parts));
+  }
+
+  // A `(|> ... |> ...)` subpipeline (e.g. a `|> FORK` branch): its own
+  // parenthesized block, coloured like a subquery, with each pipe operator on
+  // its own line. The parentheses live inside the subpipeline node's own range
+  // (not the surrounding gaps) and are dropped by BuildVertical, so they are
+  // synthesised here, exactly as BuildParenQuery does for a subquery.
+  DocPtr BuildSubpipeline(const ASTNode* node, const std::vector<Piece>& ps,
+                          Ctx ctx) {
+    Ctx inner = ctx;
+    inner.flatten_query = true;
+    inner.subquery_depth = ctx.subquery_depth + 1;
+    // Only the pipe operators are coloured (alternating shades of the deeper
+    // subquery family); the parentheses stay the parent's colour.
+    DocPtr body = RegionAnnotated(SubqueryColor(inner.subquery_depth), node,
+                                  BuildVertical(node, ps, inner));
+    return Group(Concat({Esc("("),
+                         Nest(kDefaultIndent, Concat({Line(""), body})),
+                         Line(""), Esc(")")}));
   }
 
   // Parenthesized subquery: inline "(...)" if it fits, else the contents indent

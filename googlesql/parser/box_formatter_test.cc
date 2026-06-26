@@ -130,6 +130,26 @@ TEST(BoxFormatterTest, BreakPipeOperatorsForcesMultilineSubquery) {
               HasSubstr("FROM t\n|> WHERE x > 1"));
 }
 
+LanguageOptions PipesAndFork() {
+  LanguageOptions options = Pipes();
+  options.EnableLanguageFeature(FEATURE_PIPE_FORK);
+  return options;
+}
+
+TEST(BoxFormatterTest, SubpipelineLaidOutLikeSubquery) {
+  // A `|> FORK` branch subpipeline gets its own parenthesised block, coloured
+  // as a (deeper) subquery, with each pipe operator on its own line -- just like
+  // a pipe subquery.  The deeper family is green (parent query is blue).
+  std::string html = BoxHtml(
+      "FROM t |> FORK (|> WHERE x > 1 |> SELECT y), (|> SELECT z)", 60,
+      PipesAndFork(), /*break_pipe_operators=*/true);
+  EXPECT_THAT(html, HasSubstr("rect subq-green"));
+  // The synthesised parentheses wrap the coloured body.
+  EXPECT_THAT(html, HasSubstr("(<div class=\"rect subq-green\">"));
+  // Inside the branch, the operators break onto their own lines.
+  EXPECT_THAT(PlainText(html), HasSubstr("|> WHERE x > 1\n|> SELECT y"));
+}
+
 TEST(BoxFormatterTest, OriginalWhitespaceIsDropped) {
   // Messy input whitespace is replaced by the computed layout.
   EXPECT_THAT(Box("SELECT    a  ,   b\n\n  FROM     t"),
