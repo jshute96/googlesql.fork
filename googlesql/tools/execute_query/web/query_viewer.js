@@ -684,8 +684,9 @@
       applyCorrespondence(viz, rscan, rscan.getAttribute('data-node-id'));
       return;
     }
-    // Input box: show details, and drive correspondence from the innermost
-    // enclosing `.rect` that carries a `.ni-ref` marker.
+    // Input box: show details for the clicked node, and drive cross-pane
+    // correspondence from the innermost enclosing `.rect` that carries a
+    // `.ni-ref` marker (its producing scan).
     var rect = e.target.closest('.rect');
     if (!rect || !pane.contains(rect)) return;
     var items = collectNodeInfo(rect, pane);
@@ -698,7 +699,13 @@
       }
       idRect = idRect.parentElement;
     }
-    applyCorrespondence(viz, (id != null ? idRect : rect), id);
+    // The primary selection (red box) is the clicked node's *own* box -- the
+    // innermost box whose details we show -- not the marker-bearing ancestor
+    // scan box.  A non-scan node like a function call has its own `.rect` (and
+    // info) but no marker, so its marker id resolves to the enclosing scan;
+    // without this the red box would jump out to that enclosing operator.
+    var primaryEl = (items.length > 0 && items[0].el) ? items[0].el : rect;
+    applyCorrespondence(viz, primaryEl, id);
   }
 
   // --- Graph view (operator mode) -----------------------------------------
