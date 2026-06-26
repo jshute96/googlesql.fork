@@ -1400,6 +1400,20 @@ absl::Status Resolver::ResolvePipeOperatorList(
     // Record information about this pipe operator for query visualizer tooling,
     // including the names in scope before and after the operator.  For terminal
     // operators, the output name list is null because they produce no table.
+    const ResolvedScan* operator_scan = current_scan->get();
+    // `|> MATCH_RECOGNIZE` resolves to a MatchRecognizeScan wrapped in a
+    // ProjectScan (which re-exposes the partitioning / measure columns).
+    // Attribute the operator to the MatchRecognizeScan -- the scan that *is* the
+    // operator -- so the visualizer links it to that scan (matching the
+    // SQLBuilder's `|> MATCH_RECOGNIZE`), not to the output projection.
+    if (pipe_operator->Is<ASTPipeMatchRecognize>() && operator_scan != nullptr &&
+        operator_scan->Is<ResolvedProjectScan>()) {
+      const ResolvedScan* inner =
+          operator_scan->GetAs<ResolvedProjectScan>()->input_scan();
+      if (inner != nullptr && inner->Is<ResolvedMatchRecognizeScan>()) {
+        operator_scan = inner;
+      }
+    }
     ASTNodeResolvedInfo& resolved_info =
         ast_node_resolved_info_map_[pipe_operator];
     resolved_info.node_title = PipeOperatorTitle(pipe_operator);
@@ -1407,7 +1421,7 @@ absl::Status Resolver::ResolvePipeOperatorList(
         .is_pipe_operator = true,
         .output_name_list = *current_name_list,
         .input_name_list = std::move(input_name_list),
-        .scan = current_scan->get(),
+        .scan = operator_scan,
     };
   }
 

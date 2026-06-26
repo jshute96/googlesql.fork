@@ -351,6 +351,13 @@ class QueryExpression {
     select_marker_ = std::string(marker);
   }
 
+  // Visualizer side-channel: an opaque marker stamped at the head of the pipe
+  // MATCH_RECOGNIZE operator this query expression renders, identifying the
+  // producing ResolvedScan.  See SetGroupByMarker().
+  void SetMatchRecognizeMarker(absl::string_view marker) {
+    match_recognize_marker_ = std::string(marker);
+  }
+
   absl::Status SetGroupByAllClause(
       const std::map<int, std::string>& group_by_list,
       absl::string_view group_by_hints);
@@ -526,6 +533,9 @@ class QueryExpression {
 
   // Visualizer marker (see SetGroupByMarker()); empty unless recording markers.
   std::string group_by_marker_;
+
+  // Visualizer marker (see SetMatchRecognizeMarker()); empty unless recording.
+  std::string match_recognize_marker_;
 
   std::vector<std::string> order_by_list_;
   std::string order_by_hints_;

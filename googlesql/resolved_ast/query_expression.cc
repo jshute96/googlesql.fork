@@ -288,7 +288,8 @@ bool QueryExpression::TryAppendMatchRecognizeClause(std::string& sql) const {
     return false;
   }
 
-  absl::StrAppend(&sql, match_recognize_);
+  // Visualizer: stamp the marker at the head of this MATCH_RECOGNIZE operator.
+  absl::StrAppend(&sql, match_recognize_marker_, match_recognize_);
   return true;
 }
 
@@ -1217,6 +1218,7 @@ void QueryExpression::ClearAllClauses() {
   pivot_.clear();
   unpivot_.clear();
   match_recognize_.clear();
+  match_recognize_marker_.clear();
   lock_mode_.clear();
 }
 

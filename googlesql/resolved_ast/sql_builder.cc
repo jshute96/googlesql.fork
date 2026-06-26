@@ -3098,6 +3098,8 @@ absl::Status SQLBuilder::VisitResolvedMatchRecognizeScan(
   absl::StrAppend(&match_recognize, "\n) AS ", scan_alias);
 
   GOOGLESQL_RET_CHECK(query_expr->TrySetMatchRecognizeClause(match_recognize));
+  // Visualizer: attribute the `|> MATCH_RECOGNIZE` operator to this scan.
+  query_expr->SetMatchRecognizeMarker(MakeScanMarker(node));
   PushSQLForQueryExpression(node, query_expr.release());
 
   // Partitionining columns are visible downstream, but have already been named
