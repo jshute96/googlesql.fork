@@ -94,20 +94,35 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
 
   absl::Status visualized(const VisualizationData& data) override {
     current_statement_params_["result_visualized"] = true;
-    current_statement_params_["viz_input_sql_html"] = data.input_sql_html;
-    current_statement_params_["viz_resolved_ast_html"] =
-        data.resolved_ast_html;
-    current_statement_params_["viz_sqlbuilder_sql_html"] =
-        data.sqlbuilder_sql_html;
+    // One or two full visualizer UIs ("viz blocks"): the pre-rewrite state, plus
+    // the post-rewrite state when the rewriters changed the tree.
+    auto make_block = [](absl::string_view title, bool no_input_links,
+                         const std::string& input_html,
+                         const std::string& ast_html,
+                         const std::string& sqlbuilder_html,
+                         const std::string& graph_json) {
+      mstch::map block;
+      if (!title.empty()) block["viz_title"] = std::string(title);
+      if (no_input_links) block["viz_no_input_links"] = true;
+      block["viz_input_sql_html"] = input_html;
+      block["viz_resolved_ast_html"] = ast_html;
+      block["viz_sqlbuilder_sql_html"] = sqlbuilder_html;
+      if (!graph_json.empty()) block["viz_resolved_graph_json"] = graph_json;
+      return block;
+    };
+    mstch::array viz_blocks;
+    viz_blocks.push_back(make_block(/*title=*/"", /*no_input_links=*/false,
+                                    data.input_sql_html, data.resolved_ast_html,
+                                    data.sqlbuilder_sql_html,
+                                    data.resolved_graph_json));
     if (!data.post_rewrite_ast_html.empty()) {
-      current_statement_params_["viz_has_post_rewrite"] = true;
-      current_statement_params_["viz_post_rewrite_ast_html"] =
-          data.post_rewrite_ast_html;
+      viz_blocks.push_back(make_block(
+          "After rewrites", /*no_input_links=*/true,
+          data.post_rewrite_input_sql_html, data.post_rewrite_ast_html,
+          data.post_rewrite_sqlbuilder_sql_html,
+          data.post_rewrite_resolved_graph_json));
     }
-    if (!data.resolved_graph_json.empty()) {
-      current_statement_params_["viz_resolved_graph_json"] =
-          data.resolved_graph_json;
-    }
+    current_statement_params_["viz_blocks"] = viz_blocks;
     got_results_ = true;
     return absl::OkStatus();
   }

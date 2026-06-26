@@ -730,20 +730,20 @@ html[data-visualize] .right-section {
   white-space: pre;
 }
 
-/* Post-rewrite Resolved AST: a standalone read-only section below the panes
-   (no cross-pane correspondence). */
-.viz-postrewrite {
-  margin-top: 12px;
-}
-.viz-postrewrite-title {
-  margin: 0 0 6px;
+/* Title above a visualizer block (e.g. "After rewrites" for the second,
+   post-rewrite UI). */
+.viz-block-title {
+  margin: 16px 0 6px;
   font-size: 13px;
   font-weight: 600;
 }
-.viz-postrewrite-pane {
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  max-height: 40vh;
+/* "(no links)" note in the Input SQL tab of the post-rewrite block, where the
+   input<->Resolved-AST correspondence is unavailable. */
+.viz-tab-note {
+  margin-left: 6px;
+  font-size: 0.8em;
+  font-weight: normal;
+  color: #888;
 }
 
 /* Resolved AST view-mode selector (text vs operator graph). */

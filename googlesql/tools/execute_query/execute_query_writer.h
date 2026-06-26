@@ -38,20 +38,27 @@ struct VisualizationData {
   std::string input_sql;
   std::string resolved_ast_text;
   std::string sqlbuilder_sql;
-  // Post-rewrite Resolved AST, populated only when applying the configured
-  // rewriters changes the tree.  Shown as a separate read-only section (it can
-  // be transformed in ways disconnected from the input SQL, so it carries no
-  // cross-pane correspondence).
-  std::string post_rewrite_ast_text;
 
   std::string input_sql_html;
   std::string resolved_ast_html;
   std::string sqlbuilder_sql_html;
-  std::string post_rewrite_ast_html;
 
   // Structured QueryGraph model (JSON) for the Resolved AST, consumed by the
   // web graph view.  Web-only; the text writer ignores it.
   std::string resolved_graph_json;
+
+  // Post-rewrite panes, populated only when applying the configured rewriters
+  // changes the tree.  Rendered as a *second* full visualizer UI: the same input
+  // SQL, but the post-rewrite Resolved AST and a SQLBuilder regeneration of it.
+  // The input pane carries no cross-pane correspondence here, because the
+  // input<->scan mapping is lost across rewrites (the AST<->SQLBuilder mapping
+  // within the post-rewrite tree is still exact).
+  std::string post_rewrite_ast_text;
+  std::string post_rewrite_sqlbuilder_sql;
+  std::string post_rewrite_input_sql_html;
+  std::string post_rewrite_ast_html;
+  std::string post_rewrite_sqlbuilder_sql_html;
+  std::string post_rewrite_resolved_graph_json;
 };
 
 class ExecuteQueryWriter {
@@ -121,7 +128,9 @@ class ExecuteQueryWriter {
                      "==== SQLBuilder SQL ====\n", data.sqlbuilder_sql, "\n");
     if (!data.post_rewrite_ast_text.empty()) {
       absl::StrAppend(&out, "\n==== Post-rewrite Resolved AST (linear) ====\n",
-                      data.post_rewrite_ast_text, "\n");
+                      data.post_rewrite_ast_text, "\n",
+                      "\n==== Post-rewrite SQLBuilder SQL ====\n",
+                      data.post_rewrite_sqlbuilder_sql, "\n");
     }
     return WriteOperationString("visualized", out);
   }

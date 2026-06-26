@@ -135,12 +135,15 @@
           {{#result}}
             {{#result_visualized}}
             <h3>Visualize</h3>
+            {{#viz_blocks}}
+            {{#viz_title}}<h4 class="viz-block-title">{{viz_title}}</h4>{{/viz_title}}
             <div class="viz" data-viz>
               <div class="viz-columns">
                 <div class="viz-col" data-col="input">
                   <button type="button" class="viz-show" title="Show column">+ Input SQL</button>
                   <div class="viz-tab">
                     <span class="viz-tab-label">Input SQL</span>
+                    {{#viz_no_input_links}}<span class="viz-tab-note" title="Input&ndash;AST correspondence is not available after rewrites">(no links)</span>{{/viz_no_input_links}}
                     <button type="button" class="viz-hide" title="Hide column">&times;</button>
                   </div>
                   <div class="viz-pane">{{{viz_input_sql_html}}}</div>
@@ -175,12 +178,7 @@
               <script type="application/json" class="viz-graph-data" data-graph="ast">{{{viz_resolved_graph_json}}}</script>
               {{/viz_resolved_graph_json}}
             </div>
-            {{#viz_has_post_rewrite}}
-            <div class="viz-postrewrite">
-              <h4 class="viz-postrewrite-title">Post-rewrite Resolved AST</h4>
-              <div class="viz-pane viz-postrewrite-pane">{{{viz_post_rewrite_ast_html}}}</div>
-            </div>
-            {{/viz_has_post_rewrite}}
+            {{/viz_blocks}}
             {{/result_visualized}}
 
             {{#result_executed}}

@@ -1833,25 +1833,63 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
     data.input_sql_html = PreBlockHtml(sql);
   }
 
-  // Also compute the post-rewrite Resolved AST.  When the configured rewriters
-  // change the tree, show it as a separate read-only section.  The rewriters
-  // can transform the tree in ways disconnected from the input SQL, so this
-  // section carries no cross-pane correspondence (a best-effort mapping through
-  // the rewriter is future work).  All pre-rewrite panes above are already
-  // built, so rewriting the output in place here is safe.
+  // Also compute the post-rewrite state.  When the configured rewriters change
+  // the tree, show it as a *second* full visualizer UI (same input SQL, the
+  // post-rewrite Resolved AST, and a SQLBuilder regeneration of it).  Build the
+  // input box now, before rewriting, while the pre-rewrite analyzer info is
+  // valid; it carries no scan-id correspondence (scan_ids = nullptr) because the
+  // input<->scan mapping does not survive rewrites.  All pre-rewrite panes above
+  // are already built, so rewriting the output in place here is safe.
+  std::string post_input_html;
+  if (absl::StatusOr<std::string> h = RenderBoxHtmlWithNodeInfo(
+          sql, ast, *analyzer_output, config, /*scan_ids=*/nullptr);
+      h.ok()) {
+    post_input_html = *h;
+  }
   if (RewriteResolvedAst(config.analyzer_options(), sql, config.catalog(),
                          config.type_factory(),
                          const_cast<AnalyzerOutput&>(*analyzer_output))
           .ok()) {
     const ResolvedNode* post = analyzer_output->resolved_node();
-    if (post != nullptr) {
-      // Compare (and display) in the same linear form: `data.resolved_ast_text`
-      // already holds the pre-rewrite tree in this form, so reuse it rather than
-      // recomputing a separate DebugString just for the changed-or-not check.
-      std::string post_text = post->DebugString(debug_config);
-      if (post_text != data.resolved_ast_text) {
-        data.post_rewrite_ast_text = std::move(post_text);
-        data.post_rewrite_ast_html = post->DebugStringHtml();
+    // Compare in the same linear form `data.resolved_ast_text` already holds.
+    std::string post_text =
+        post != nullptr ? post->DebugString(debug_config) : "";
+    if (post != nullptr && post_text != data.resolved_ast_text) {
+      data.post_rewrite_ast_text = std::move(post_text);
+      data.post_rewrite_input_sql_html = std::move(post_input_html);
+
+      std::vector<const ResolvedScan*> scan_order2;
+      data.post_rewrite_ast_html = post->DebugStringHtml(&scan_order2);
+      absl::flat_hash_map<const ResolvedScan*, int> scan_ids2;
+      for (int i = 0; i < static_cast<int>(scan_order2.size()); ++i) {
+        scan_ids2[scan_order2[i]] = i;
+      }
+      data.post_rewrite_resolved_graph_json =
+          BuildResolvedAstQueryGraph(post, scan_ids2).ToJson();
+
+      // SQLBuilder on the post-rewrite tree.  Its inline markers tie each
+      // emitted operator back to a post-rewrite scan, so the AST<->SQLBuilder
+      // correspondence within this second UI is exact, just like the first.
+      SQLBuilder post_builder(sql_builder_options);
+      if (post_builder.Process(*post).ok()) {
+        if (absl::StatusOr<std::string> s = post_builder.GetSql(); s.ok()) {
+          const std::string marked2 = *s;
+          std::vector<int> marker_to_rid2(
+              post_builder.pipe_operator_markers().size(), -1);
+          for (size_t i = 0; i < post_builder.pipe_operator_markers().size();
+               ++i) {
+            auto it = scan_ids2.find(post_builder.pipe_operator_markers()[i]);
+            if (it != scan_ids2.end()) marker_to_rid2[i] = it->second;
+          }
+          std::string display2 = StripScanMarkers(marked2);
+          if (absl::StatusOr<std::string> f = LenientFormatSql(display2);
+              f.ok()) {
+            display2 = *f;
+          }
+          data.post_rewrite_sqlbuilder_sql = display2;
+          data.post_rewrite_sqlbuilder_sql_html =
+              SegmentPipeSqlToHtml(marked2, display2, marker_to_rid2);
+        }
       }
     }
   }
