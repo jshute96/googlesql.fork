@@ -1683,23 +1683,33 @@ static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
       SplitTopLevelPipeSegments(marked);
   std::vector<std::pair<size_t, size_t>> dsegs =
       SplitTopLevelPipeSegments(display);
+  // A bare subpipeline (e.g. a `|> FORK` branch body) is a sequence of pipe
+  // operators with no `FROM` source -- it starts directly with `|>`, so its
+  // leading segment is empty (the SubpipelineInputScan produces no operator
+  // text).  Skip that empty leading segment so the first box is the first real
+  // pipe operator; `pos` (the darker/lighter band index) counts only the boxes
+  // actually emitted.
+  int pos = 0;
   if (msegs.size() != dsegs.size()) {
     // Structure mismatch (should not happen): render display operators as
     // unlinked boxes so the text still shows, just without correspondence.
     for (size_t i = 0; i < dsegs.size(); ++i) {
       absl::string_view dseg = absl::StripAsciiWhitespace(
           display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first));
-      absl::StrAppend(&html, "<div class=\"rscan ", PipeBandClass(depth, i),
+      if (dseg.empty()) continue;
+      absl::StrAppend(&html, "<div class=\"rscan ", PipeBandClass(depth, pos++),
                       "\" data-node-id=\"s", s_counter++, "\">",
                       EscapeHtmlText(dseg), "</div>");
     }
     return;
   }
   for (size_t i = 0; i < dsegs.size(); ++i) {
+    absl::string_view dseg =
+        display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first);
+    if (absl::StripAsciiWhitespace(dseg).empty()) continue;
     RenderSegmentBox(
         html, marked.substr(msegs[i].first, msegs[i].second - msegs[i].first),
-        display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first),
-        marker_to_rid, s_counter, depth, static_cast<int>(i));
+        dseg, marker_to_rid, s_counter, depth, pos++);
   }
 }
 
