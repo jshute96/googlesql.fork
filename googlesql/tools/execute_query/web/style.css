@@ -960,6 +960,15 @@ html[data-visualize] .right-section {
    input) rendered as its own indented stack of operator boxes inside the
    enclosing operator's box. */
 .rscan-sub {
+  /* A visible nested box (like the Resolved AST pane's .rscan-query) so a nested
+     subquery in the SQLBuilder pane reads as a box-within-a-box rather than a
+     run of indented lines. */
   display: block;
-  margin-left: 1.2em;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  border: 1px solid #cfd6df;
+  border-radius: 3px;
+  margin: 2px 0 2px 1.2em;
+  padding: 2px 4px;
 }
