@@ -1787,6 +1787,22 @@ static std::string StripScanMarkersWithOffsets(absl::string_view sql,
   return out;
 }
 
+// True if `node` is a pipe-operator segment the box formatter annotates -- a
+// real `|>` operator (kind starts with "Pipe"), excluding the internal "Pipe*"
+// sub-nodes that are not standalone operators (e.g. the JOIN LHS placeholder,
+// or a RENAME/SET item), which would otherwise shadow their parent operator.
+static bool IsPipeSegmentNode(const ASTNode* node) {
+  switch (node->node_kind()) {
+    case AST_PIPE_JOIN_LHS_PLACEHOLDER:
+    case AST_PIPE_RENAME_ITEM:
+    case AST_PIPE_SET_ITEM:
+    case AST_PIPE_IF_CASE:
+      return false;
+    default:
+      return absl::StartsWith(node->GetNodeKindString(), "Pipe");
+  }
+}
+
 // Finds the smallest-range pipe-operator (or initial FROM-query) AST node whose
 // byte range contains `offset`.  Each inline marker sits at such an operator's
 // head, so this resolves a marker position to the operator node the box
@@ -1796,12 +1812,8 @@ static const ASTNode* FindSmallestSegmentNode(const ASTNode* node, int offset) {
   const int start = node->start_location().GetByteOffset();
   const int end = node->end_location().GetByteOffset();
   if (offset < start || offset >= end) return nullptr;
-  // A pipe operator (the box formatter detects these the same way, by the node
-  // kind string starting with "Pipe") or the initial FROM query is a segment the
-  // box formatter annotates.
   const ASTNode* best =
-      (absl::StartsWith(node->GetNodeKindString(), "Pipe") ||
-       node->node_kind() == AST_FROM_QUERY)
+      (IsPipeSegmentNode(node) || node->node_kind() == AST_FROM_QUERY)
           ? node
           : nullptr;
   for (int i = 0; i < node->num_children(); ++i) {
@@ -1889,7 +1901,7 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
   BoxAnnotator annotate = [&node_to_rid, &s_counter,
                            clean_sql](const ASTNode* node) -> std::string {
     const absl::string_view kind = node->GetNodeKindString();
-    const bool is_pipe = absl::StartsWith(kind, "Pipe");
+    const bool is_pipe = IsPipeSegmentNode(node);
     const bool is_from = node->node_kind() == AST_FROM_QUERY;
     const bool is_subpipeline = (kind == "Subpipeline");
     if (!is_pipe && !is_from && !is_subpipeline) return std::string();
