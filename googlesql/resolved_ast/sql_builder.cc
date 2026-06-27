@@ -12080,12 +12080,23 @@ absl::Status SQLBuilder::VisitResolvedStaticDescribeScan(
                    ProcessNode(node->input_scan()));
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
-  GOOGLESQL_RETURN_IF_ERROR(WrapQueryExpression(node->input_scan(), query_expr.get()));
 
-  // TODO We just lose |> STATIC_DESCRIBE for now.
-  // When the SQLBuilder supports adding a pipe operator, we should add it.
-  PushSQLForQueryExpression(node, query_expr.release());
+  GOOGLESQL_RETURN_IF_ERROR(
+      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
 
+  // STATIC_DESCRIBE is a no-op pass-through; its describe_text is produced at
+  // analysis time and is not part of the syntax, so the operator takes no
+  // arguments.  The new `|> STATIC_DESCRIBE` will recompute it when re-analyzed.
+  // Construct the SQL for the pipe operator as follows:
+  //   <input_scan> |> STATIC_DESCRIBE
+  std::string sql =
+      absl::StrCat(query_expr->GetSQLQuery(TargetSyntaxMode::kPipe),
+                   QueryExpression::kPipe, "STATIC_DESCRIBE");
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> new_query_expr,
+                   MaybeWrapPipeQueryAsStandardQuery(*node, sql));
+
+  PushSQLForQueryExpression(node, new_query_expr.release());
   return absl::OkStatus();
 }
 

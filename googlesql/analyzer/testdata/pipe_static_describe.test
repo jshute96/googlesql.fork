@@ -423,8 +423,9 @@ QueryStmt
       +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
 ==
 
-# TODO SQLBuilder currently loses the STATIC_DESCRIBE, since it can't
-# generate pipe operators yet.
+# The SQLBuilder emits the pipe `|> STATIC_DESCRIBE` operator (in pipe target
+# mode it appears directly; in standard target mode it is wrapped in a pipe
+# subquery).
 [show_sqlbuilder_output]
 from KeyValue
 |> static_describe
@@ -454,16 +455,24 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  keyvalue_3.a_1 AS Key,
-  keyvalue_3.a_2 AS Value
+  staticdescribescan_4.a_1 AS Key,
+  staticdescribescan_4.a_2 AS Value
 FROM
   (
     SELECT
-      KeyValue.Key AS a_1,
-      KeyValue.Value AS a_2
+      keyvalue_3.a_1 AS a_1,
+      keyvalue_3.a_2 AS a_2
     FROM
-      KeyValue
-  ) AS keyvalue_3;
+      (
+        SELECT
+          KeyValue.Key AS a_1,
+          KeyValue.Value AS a_2
+        FROM
+          KeyValue
+        |> AS keyvalue_3
+        |> STATIC_DESCRIBE
+      )
+  ) AS staticdescribescan_4;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
@@ -473,6 +482,7 @@ FROM
      KeyValue.Key,
      KeyValue.Value
 |> AS keyvalue_1
+|> STATIC_DESCRIBE
 |> SELECT
      keyvalue_1.Key,
      keyvalue_1.Value;
