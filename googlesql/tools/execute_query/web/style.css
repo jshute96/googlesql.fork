@@ -846,10 +846,15 @@ main.visualize-main > #header {
   min-height: 0;
   display: flex;
 }
+/* min-width:0 is essential: the active statement is a flex item in the
+   horizontal #visualize-statements row, so without it its default min-width:auto
+   lets wide pane content (long SQL lines) push the row past the viewport,
+   leaving only the first column visible. Same reasoning down the chain. */
 .visualize-statement {
   display: none;
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
 }
 .visualize-statement.active {
   display: flex;
@@ -859,6 +864,7 @@ main.visualize-main > #header {
   display: none;
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
 }
 .visualize-block.active {
   display: flex;
@@ -870,6 +876,7 @@ main.visualize-main > #header {
 html[data-visualize-page] .visualize-block .viz {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
   max-height: none;
   border: none;
   border-radius: 0;
