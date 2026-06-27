@@ -184,8 +184,12 @@ void ResolvedNode::EmitScanChainHtml(
     const int id = (*scan_counter)++;
     if (scan_order != nullptr) scan_order->push_back(s);
     const char* shade = (pos % 2 == 0) ? "b" : "a";
+    // An operator box is headed by "|> <Scan>"; tag it so its field tree indents
+    // by the width of the "|> " prefix to line up under the scan name (matching
+    // the textual linear DebugString).
     absl::StrAppend(output, "<div class=\"rscan seg-", family, "-", shade,
-                    "\" data-node-id=\"r", id, "\"><div class=\"rscan-head\">",
+                    (is_operator ? " rscan-op" : ""), "\" data-node-id=\"r", id,
+                    "\"><div class=\"rscan-head\">",
                     (is_operator ? "|&gt; " : ""),
                     HtmlEscape(s->node_kind_string()), "</div>");
     EmitScanFieldsHtml(s, config,

@@ -942,6 +942,13 @@ html[data-visualize] .right-section {
 .rscan-tree {
   color: #333;
 }
+/* An operator box is headed by "|> <Scan>"; indent its field tree (and any
+   nested query boxes) by the width of the "|> " prefix so the connector lines
+   start under the scan name, matching the textual linear DebugString. */
+.rscan-op > .rscan-tree,
+.rscan-op > .rscan-children {
+  margin-left: 3ch;
+}
 .rscan-field-name {
   color: #555;
   font-weight: bold;
