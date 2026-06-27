@@ -1052,6 +1052,10 @@ absl::Status Resolver::ResolveQuery(
     if (*output_name_list != nullptr) {
       query_info.resolved_scan_info = ResolvedScanInfo{
           .output_name_list = *output_name_list,
+          // The query's final scan, so the visualizer can cross-link this query
+          // layer (e.g. "Expression subquery") to the same ResolvedScan in the
+          // Resolved AST and SQLBuilder panes.
+          .scan = output->get(),
       };
     }
   }

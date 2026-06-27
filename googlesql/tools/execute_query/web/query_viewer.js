@@ -499,10 +499,13 @@
         var body = directChildren(el, 'rscan-field').map(function (f) {
           return f.innerHTML;
         }).join('<br>');
-        items.push({
-          title: title, body: body, el: el,
-          id: el.getAttribute ? el.getAttribute('data-node-id') : null
-        });
+        // A subquery wrapper has no scan id of its own; it borrows its result
+        // scan's id (data-corresp) so clicking it cross-links to that scan's
+        // layer in the other panes.
+        var id = isQueryBox ? el.getAttribute('data-corresp')
+                            : (el.getAttribute ? el.getAttribute('data-node-id')
+                                               : null);
+        items.push({ title: title, body: body, el: el, id: id });
       }
       el = el.parentElement;
     }

@@ -117,6 +117,17 @@ std::string HtmlEscape(absl::string_view s) {
 // True if `node` has a ResolvedScan anywhere in its subtree (e.g. an expression
 // that contains a subquery).  Used by the HTML emitter to decide whether to
 // descend into a non-scan child to surface its nested scans as their own boxes.
+// The data-node-id ("r<n>") that EmitScanChainHtml will assign to `top` -- the
+// chain's top (result) scan.  EmitScanChainHtml emits the spine source-first, so
+// the top scan (passed as the chain head) gets the last id of the run.
+static int ScanChainTopId(const ResolvedScan* top, int scan_counter_start) {
+  int spine_len = 0;
+  for (const ResolvedScan* s = top; s != nullptr; s = s->GetPipeInputScan()) {
+    ++spine_len;
+  }
+  return scan_counter_start + spine_len - 1;
+}
+
 static bool SubtreeContainsScan(const ResolvedNode* node) {
   std::vector<const ResolvedNode*> children;
   node->GetChildNodes(&children);
@@ -282,10 +293,14 @@ void ResolvedNode::EmitScanFieldsHtml(
       if (subpipeline_scan != nullptr) {
         // The `data-layer` label (no visible heading) makes the box a selectable
         // hierarchy layer like the input pane's, so a pipe operator inside it
-        // reads as "in Subpipeline".
-        absl::StrAppend(output,
-                        "<div class=\"rscan-children\">"
-                        "<div class=\"rscan-query\" data-layer=\"Subpipeline\">");
+        // reads as "in Subpipeline".  `data-corresp` is the subpipeline's result
+        // scan (its top scan), so clicking the box cross-links to the same
+        // subpipeline layer in the other panes.
+        absl::StrAppend(
+            output, "<div class=\"rscan-children\">"
+                    "<div class=\"rscan-query\" data-layer=\"Subpipeline\""
+                    " data-corresp=\"r",
+            ScanChainTopId(subpipeline_scan, *scan_counter), "\">");
         EmitScanChainHtml(subpipeline_scan, config, scan_counter, scan_order,
                           output, nested_depth);
         absl::StrAppend(output, "</div></div>");
@@ -293,10 +308,14 @@ void ResolvedNode::EmitScanFieldsHtml(
         // The `data-layer` label (no visible heading) makes the box a selectable
         // hierarchy layer.  The statement's own query (top_level) is "Query with
         // pipe operators"; a scan-child of another scan is a "Subquery" (matching
-        // the input pane's layers).
+        // the input pane's layers).  `data-corresp` is the query's result scan
+        // (its top scan), so clicking it cross-links to the same query layer in
+        // the other panes.
         absl::StrAppend(
             output, "<div class=\"rscan-children\"><div class=\"rscan-query\" data-layer=\"",
-            top_level ? "Query with pipe operators" : "Subquery", "\">");
+            top_level ? "Query with pipe operators" : "Subquery",
+            "\" data-corresp=\"r",
+            ScanChainTopId(child->GetAs<ResolvedScan>(), *scan_counter), "\">");
         // A nested scan child is a subquery: deeper nesting → next colour family.
         EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,
                           scan_order, output, nested_depth);

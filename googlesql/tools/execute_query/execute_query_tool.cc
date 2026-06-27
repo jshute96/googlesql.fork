@@ -1915,10 +1915,34 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
       return std::string();
     }
 
-    std::string ref;
+    // Correspondence id: an operator carries its own marker; a query/subpipeline
+    // layer carries no marker, so it borrows its result operator's id (its last
+    // pipe operator, or the FROM source) -- the same ResolvedScan the input and
+    // AST panes use for that layer, so the subquery box cross-links.
+    int rid = -1;
     if (auto it = node_to_rid.find(node); it != node_to_rid.end()) {
+      rid = it->second;
+    } else if (is_query || is_subpipeline) {
+      const ASTNode* result = nullptr;
+      if (const ASTQuery* q = node->GetAsOrNull<ASTQuery>(); q != nullptr) {
+        result = q->pipe_operator_list().empty()
+                     ? static_cast<const ASTNode*>(q->query_expr())
+                     : static_cast<const ASTNode*>(q->pipe_operator_list().back());
+      } else if (const ASTSubpipeline* sp =
+                     node->GetAsOrNull<ASTSubpipeline>();
+                 sp != nullptr && !sp->pipe_operator_list().empty()) {
+        result = sp->pipe_operator_list().back();
+      }
+      if (result != nullptr) {
+        if (auto it = node_to_rid.find(result); it != node_to_rid.end()) {
+          rid = it->second;
+        }
+      }
+    }
+    std::string ref;
+    if (rid >= 0) {
       ref = absl::StrCat("<span class=\"ni-ref\" data-node-id=\"s", s_counter++,
-                         "\" data-corresp=\"r", it->second, "\"></span>");
+                         "\" data-corresp=\"r", rid, "\"></span>");
     }
 
     std::string title;
