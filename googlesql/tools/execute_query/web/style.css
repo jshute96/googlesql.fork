@@ -184,22 +184,23 @@ input[type='checkbox'] {
   vertical-align: bottom;
 }
 
-input[type='submit'] {
-  background-color: #0f73b5;;
+input[type='submit'],
+#visualize-btn {
+  background-color: #0f73b5;
   border-radius: 0.5em;
   border: 1px solid #0f73b5;
   color: #fff;
   cursor: pointer;
+  font: inherit;
   font-size: 1.1em;
-  margin-left: 1em;
   margin-top: 0.5em;
   max-height: 2.5em;
-  max-width: 6em;
   min-width: 5em;
   padding: 0.5em;
 }
 
-input[type='submit']:hover {
+input[type='submit']:hover,
+#visualize-btn:hover {
   background-color: #1597ec;
   border-color: #1597ec;
 }
@@ -603,11 +604,15 @@ html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
    height are linked across every `.viz` block on the page (managed by JS in
    query_viewer.js); these rules just provide the structure and styling.
    ========================================================================== */
-html[data-visualize] main {
+/* These rescope the *main page* into a stacked editor-over-results layout when
+   visualize output is shown.  They must NOT apply to the dedicated full-window
+   /visualize page (which sets data-visualize-page and has its own layout, and
+   whose query_viewer.js also sets data-visualize). */
+html[data-visualize]:not([data-visualize-page]) main {
   display: block;
   height: auto;
 }
-html[data-visualize] .right-section {
+html[data-visualize]:not([data-visualize-page]) .right-section {
   overflow-y: initial;
   height: auto;
 }
@@ -763,22 +768,13 @@ html[data-visualize] .right-section {
    toggle) are fixed, and the three-pane + info-box view fills the rest. Only
    the panes scroll internally.
    ========================================================================== */
+/* The Submit and Visualize buttons share one row.  Both are styled by the
+   input[type=submit], #visualize-btn rule above so they look identical. */
 .submit-buttons {
   display: inline-flex;
   align-items: center;
-  gap: 0.5em;
-}
-#visualize-btn {
-  font: inherit;
-  padding: 0.25em 0.8em;
-  border: 1px solid #0f73b5;
-  border-radius: 0.3em;
-  background: #1597ec;
-  color: #fff;
-  cursor: pointer;
-}
-#visualize-btn:hover {
-  background: #0f73b5;
+  gap: 0.75em;
+  margin-left: 1em;
 }
 
 html[data-visualize-page],

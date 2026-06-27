@@ -75,8 +75,11 @@
     return r.text();
   }).then(function (html) {
     root.innerHTML = html;
-    if (window.googlesqlInitVisualize) window.googlesqlInitVisualize();
+    // Make the initial statement/rewrite block visible BEFORE initializing the
+    // panes, so the viz layout is measured while it is displayed (the column
+    // sizing logic in query_viewer.js needs a laid-out, non-hidden block).
     wireControls();
+    if (window.googlesqlInitVisualize) window.googlesqlInitVisualize();
   }).catch(function (e) {
     root.innerHTML = '<div class="visualize-placeholder">Failed to load ' +
         'visualization: ' + String(e) + '</div>';
@@ -102,7 +105,7 @@
         Array.prototype.slice.call(root.querySelectorAll('.visualize-statement'));
     if (statements.length === 0) return;
 
-    function showStatement(idx) {
+    function showStatement(idx, skipReflow) {
       var active = null;
       statements.forEach(function (s) {
         var on = s.getAttribute('data-stmt-index') === String(idx);
@@ -121,7 +124,7 @@
               'active', tabs[i].getAttribute('data-rewrite') === 'pre');
         }
       }
-      reflow();
+      if (!skipReflow) reflow();
     }
 
     if (select) {
@@ -143,6 +146,8 @@
       });
     }
 
-    showStatement(statements[0].getAttribute('data-stmt-index'));
+    // Initial activation runs before pane init, which performs the reflow.
+    showStatement(statements[0].getAttribute('data-stmt-index'),
+                  /*skipReflow=*/true);
   }
 })();
