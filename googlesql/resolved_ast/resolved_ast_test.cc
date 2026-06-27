@@ -349,12 +349,14 @@ TEST_F(ResolvedASTTest, DebugStringLinearMode) {
   // DebugStringHtml emits one box per ResolvedScan inside a statement block,
   // with nested query blocks for non-pipe-input scans.  Each box is coloured by
   // its query's family (blue at the top level) with the initial scan / pipe
-  // operators alternating darker ("-b", first) then lighter ("-a") shades.
+  // operators alternating darker ("-b", first) then lighter ("-a") shades.  A
+  // pipe-operator box also carries the `rscan-op` class (its field tree indents
+  // under the scan name), so match the band class as a prefix.
   const std::string html = query_stmt->DebugStringHtml();
   EXPECT_THAT(html, HasSubstr("rscan-stmt"));
   EXPECT_THAT(html, HasSubstr("data-node-id=\"r0\""));
   EXPECT_THAT(html, HasSubstr("class=\"rscan seg-blue-b\""));
-  EXPECT_THAT(html, HasSubstr("class=\"rscan seg-blue-a\""));
+  EXPECT_THAT(html, HasSubstr("class=\"rscan seg-blue-a rscan-op\""));
   EXPECT_THAT(html, HasSubstr("rscan-query"));
   EXPECT_THAT(html, HasSubstr("|&gt; ProjectScan"));
   // The pipe operator name is escaped; raw "<" must not appear unescaped.

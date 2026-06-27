@@ -525,13 +525,14 @@ class ResolvedNode {
                                  std::vector<const ResolvedScan*>* scan_order,
                                  std::string* output, int depth,
                                  bool top_level = false);
-  // Renders a contiguous run of "leaf" fields (scalars and non-scan child
-  // subtrees, i.e. no nested scans) as a single box-glyph tree fragment that
-  // matches the textual DebugString form, appended as a `<div class="rscan-
-  // tree">`.
-  static void EmitFieldsTreeHtml(
-      const std::vector<DebugStringField>& fields,
-      const DebugStringConfig& config, std::string* output);
+  // Appends one field's box-glyph tree text (matching the textual DebugString:
+  // connector, name/value, multi-line values, and non-scan child subtrees) to
+  // `text`. `is_last` selects the "last child" connector/indent so a caller can
+  // lay out a field's position within the full sibling list. Scan-child fields
+  // are handled by EmitScanFieldsHtml (rendered as nested boxes), not here.
+  static void AppendFieldTreeText(const DebugStringField& field, bool is_last,
+                                  const DebugStringConfig& config,
+                                  std::string* text);
 
   // DebugString on these call protected methods.
   friend class ResolvedComputedColumn;

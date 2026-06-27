@@ -942,20 +942,26 @@ html[data-visualize] .right-section {
 .rscan-tree {
   color: #333;
 }
-/* An operator box is headed by "|> <Scan>"; indent its field tree (and any
-   nested query boxes) by the width of the "|> " prefix so the connector lines
-   start under the scan name, matching the textual linear DebugString. */
-.rscan-op > .rscan-tree,
-.rscan-op > .rscan-children {
+/* An operator box is headed by "|> <Scan>"; indent its field tree by the width
+   of the "|> " prefix so the connector lines start under the scan name,
+   matching the textual linear DebugString. */
+.rscan-op > .rscan-tree {
   margin-left: 3ch;
+}
+/* The scan field's name is shown as a tree node ("|-name=") in the tree above;
+   indent its box under that name (past the 2-char connector). For an operator
+   box the whole tree is already shifted by the 3ch "|> " prefix. */
+.rscan-op > .rscan-children {
+  margin-left: 5ch;
 }
 .rscan-field-name {
   color: #555;
   font-weight: bold;
 }
-/* Nested query block: a scan field that begins a new query/subquery. */
+/* Nested query block: a scan field that begins a new query/subquery. Indented
+   under its tree-node field name (past the 2-char box-glyph connector). */
 .rscan-children {
-  margin-left: 1.2em;
+  margin-left: 2ch;
 }
 .rscan-query {
   box-sizing: border-box;
