@@ -2190,32 +2190,44 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
       // SQLBuilder on the post-rewrite tree.  Its inline markers tie each
       // emitted operator back to a post-rewrite scan, so the AST<->SQLBuilder
       // correspondence within this second UI is exact, just like the first.
+      // Some rewritten trees (e.g. |> TEE becomes a generalized statement) are
+      // not yet supported by SQLBuilder; show that error in the pane rather than
+      // leaving it blank.
       SQLBuilder post_builder(sql_builder_options);
-      if (post_builder.Process(*post).ok()) {
-        if (absl::StatusOr<std::string> s = post_builder.GetSql(); s.ok()) {
-          const std::string marked2 = *s;
-          std::vector<int> marker_to_rid2(
-              post_builder.pipe_operator_markers().size(), -1);
-          for (size_t i = 0; i < post_builder.pipe_operator_markers().size();
-               ++i) {
-            auto it = scan_ids2.find(post_builder.pipe_operator_markers()[i]);
-            if (it != scan_ids2.end()) marker_to_rid2[i] = it->second;
-          }
-          std::string display2 = StripScanMarkers(marked2);
-          if (absl::StatusOr<std::string> f = LenientFormatSql(display2);
-              f.ok()) {
-            display2 = *f;
-          }
-          data.post_rewrite_sqlbuilder_sql = display2;
-          if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
-                  marked2, marker_to_rid2,
-                  config.analyzer_options().language());
-              h.ok()) {
-            data.post_rewrite_sqlbuilder_sql_html = *std::move(h);
-          } else {
-            data.post_rewrite_sqlbuilder_sql_html =
-                SegmentPipeSqlToHtml(marked2, display2, marker_to_rid2);
-          }
+      absl::Status post_sb_status = post_builder.Process(*post);
+      std::string marked2;
+      if (post_sb_status.ok()) {
+        absl::StatusOr<std::string> s = post_builder.GetSql();
+        if (s.ok()) {
+          marked2 = *std::move(s);
+        } else {
+          post_sb_status = s.status();
+        }
+      }
+      if (!post_sb_status.ok()) {
+        data.post_rewrite_sqlbuilder_sql_html =
+            ErrorPaneHtml("SQLBuilder error", post_sb_status.message());
+      } else {
+        std::vector<int> marker_to_rid2(
+            post_builder.pipe_operator_markers().size(), -1);
+        for (size_t i = 0; i < post_builder.pipe_operator_markers().size();
+             ++i) {
+          auto it = scan_ids2.find(post_builder.pipe_operator_markers()[i]);
+          if (it != scan_ids2.end()) marker_to_rid2[i] = it->second;
+        }
+        std::string display2 = StripScanMarkers(marked2);
+        if (absl::StatusOr<std::string> f = LenientFormatSql(display2);
+            f.ok()) {
+          display2 = *f;
+        }
+        data.post_rewrite_sqlbuilder_sql = display2;
+        if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
+                marked2, marker_to_rid2, config.analyzer_options().language());
+            h.ok()) {
+          data.post_rewrite_sqlbuilder_sql_html = *std::move(h);
+        } else {
+          data.post_rewrite_sqlbuilder_sql_html =
+              SegmentPipeSqlToHtml(marked2, display2, marker_to_rid2);
         }
       }
     }

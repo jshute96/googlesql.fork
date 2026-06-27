@@ -443,6 +443,23 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentParseError) {
   EXPECT_THAT(result, HasSubstr("did not parse"));
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizePostRewriteSqlBuilderError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "FROM (SELECT 1 AS x) |> TEE (|> WHERE x > 0) |> SELECT x", "none",
+          "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // |> TEE rewrites into a generalized (multi-)statement that SQLBuilder cannot
+  // yet regenerate. The post-rewrite SQLBuilder pane shows that error instead of
+  // being left blank.
+  EXPECT_THAT(result, HasSubstr("data-has-post=\"1\""));
+  EXPECT_THAT(result, HasSubstr("SQLBuilder error"));
+  EXPECT_THAT(result, HasSubstr("generalized statements not supported"));
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {
   std::string result;
   EXPECT_TRUE(HandleRequest(
