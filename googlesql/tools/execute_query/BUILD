@@ -375,10 +375,36 @@ cc_test(
 )
 
 cc_library(
+    name = "viz_node_mapping",
+    srcs = ["viz_node_mapping.cc"],
+    hdrs = ["viz_node_mapping.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//googlesql/parser:parse_tree",
+        "//googlesql/resolved_ast",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_test(
+    name = "viz_node_mapping_test",
+    srcs = ["viz_node_mapping_test.cc"],
+    deps = [
+        ":viz_node_mapping",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_library(
     name = "query_graph",
     srcs = ["query_graph.cc"],
     hdrs = ["query_graph.h"],
     deps = [
+        ":viz_node_mapping",
         "//googlesql/resolved_ast",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings",
@@ -391,6 +417,7 @@ cc_test(
     srcs = ["query_graph_test.cc"],
     deps = [
         ":query_graph",
+        ":viz_node_mapping",
         "//googlesql/base:status",
         "//googlesql/base/testing:googlesql_gtest_main",
         "//googlesql/base/testing:status_matchers",
@@ -426,6 +453,7 @@ cc_library(
         ":simple_proto_evaluator_table_iterator",
         ":string_error_collector",
         ":value_as_table_adapter",
+        ":viz_node_mapping",
         "//googlesql/base",
         "//googlesql/base:check",
         "//googlesql/base:file_util",

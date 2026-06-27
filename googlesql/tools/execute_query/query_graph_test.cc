@@ -64,19 +64,17 @@ class QueryGraphTest : public ::testing::Test {
     const ResolvedNode* root = output_->resolved_statement();
     std::vector<const ResolvedScan*> scan_order;
     root->DebugStringHtml(&scan_order);
-    scan_ids_.clear();
-    for (int i = 0; i < static_cast<int>(scan_order.size()); ++i) {
-      scan_ids_[scan_order[i]] = i;
-    }
+    node_ids_ = ResolvedNodeIds();
+    node_ids_.AssignInOrder<const ResolvedScan>(scan_order);
     scan_count_ = static_cast<int>(scan_order.size());
-    return BuildResolvedAstQueryGraph(root, scan_ids_);
+    return BuildResolvedAstQueryGraph(root, node_ids_);
   }
 
   AnalyzerOptions options_;
   SimpleCatalog catalog_;
   TypeFactory type_factory_;
   std::unique_ptr<const AnalyzerOutput> output_;
-  absl::flat_hash_map<const ResolvedScan*, int> scan_ids_;
+  ResolvedNodeIds node_ids_;
   int scan_count_ = 0;
 };
 

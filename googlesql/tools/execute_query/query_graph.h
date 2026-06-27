@@ -22,6 +22,7 @@
 
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "googlesql/resolved_ast/resolved_node.h"
+#include "googlesql/tools/execute_query/viz_node_mapping.h"
 #include "absl/container/flat_hash_map.h"
 
 namespace googlesql {
@@ -77,13 +78,12 @@ struct QueryGraph {
 };
 
 // Builds the operator-mode graph for the Resolved AST rooted at `root`.
-// `scan_ids` maps each `ResolvedScan` to its per-pane index `n` (the same map
-// the other panes use), so emitted node ids ("r<n>") line up across panes.
-// Scans absent from `scan_ids` (e.g. ones nested inside expression subqueries,
-// which the linear panes also don't surface yet) are skipped.
-QueryGraph BuildResolvedAstQueryGraph(
-    const ResolvedNode* root,
-    const absl::flat_hash_map<const ResolvedScan*, int>& scan_ids);
+// `node_ids` is the shared visualizer identity space (the same one the other
+// panes use), so emitted node ids ("r<n>") line up across panes.  Scans absent
+// from `node_ids` (e.g. ones nested inside expression subqueries, which the
+// linear panes also don't surface yet) are skipped.
+QueryGraph BuildResolvedAstQueryGraph(const ResolvedNode* root,
+                                      const ResolvedNodeIds& node_ids);
 
 }  // namespace googlesql
 

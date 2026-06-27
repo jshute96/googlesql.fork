@@ -80,6 +80,7 @@
 #include "googlesql/tools/execute_query/query_graph.h"
 #include "googlesql/tools/execute_query/selectable_catalog.h"
 #include "googlesql/tools/execute_query/value_as_table_adapter.h"
+#include "googlesql/tools/execute_query/viz_node_mapping.h"
 #include "googlesql/base/case.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
@@ -1240,15 +1241,16 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
 static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
     absl::string_view sql, const ASTNode* ast, const AnalyzerOutput& output,
     const ExecuteQueryConfig& config,
-    const absl::flat_hash_map<const ResolvedScan*, int>* scan_ids = nullptr) {
+    const ResolvedNodeIds* node_ids = nullptr) {
   const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
   const ProductMode product_mode =
       config.analyzer_options().language().product_mode();
-  // Counter for assigning input-pane nodes their own ids (a0, a1, ...).
-  int input_node_counter = 0;
+  // Hidden ".ni-ref" markers tying each input box to the resolved node(s) it
+  // produced; the input pane's own-id namespace is "a".
+  NodeRefMarkers input_refs("a");
   BoxAnnotator annotate =
-      [&info_map, product_mode, scan_ids,
-       &input_node_counter](const ASTNode* node) -> std::string {
+      [&info_map, product_mode, node_ids,
+       &input_refs](const ASTNode* node) -> std::string {
     auto it = info_map.find(node);
     if (it == info_map.end()) return std::string();
     std::string html = ResolvedInfoHoverHtml(it->second, product_mode);
@@ -1257,7 +1259,7 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
     // panes can be correlated.  Carried in a hidden `.ni-ref` marker inside the
     // node-info (the box itself is wrapped by the box formatter, so we cannot
     // set an attribute on it directly).
-    if (scan_ids != nullptr) {
+    if (node_ids != nullptr) {
       const ResolvedScan* scan = nullptr;
       if (it->second.resolved_scan_info.has_value()) {
         scan = it->second.resolved_scan_info->scan;
@@ -1265,12 +1267,8 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
         scan = it->second.table_scan_info->scan;
       }
       if (scan != nullptr) {
-        auto sid = scan_ids->find(scan);
-        if (sid != scan_ids->end()) {
-          html = absl::StrCat("<span class=\"ni-ref\" data-node-id=\"a",
-                              input_node_counter++, "\" data-corresp=\"r",
-                              sid->second, "\"></span>", html);
-        }
+        input_refs.Add(node, node_ids->Lookup(scan));
+        html = absl::StrCat(input_refs.Emit(node), html);
       }
     }
     return html;
@@ -1902,25 +1900,28 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
       clean_sql, ParserOptions(language_options), &parser_output));
   const ASTNode* root = parser_output->statement();
 
-  // Map each marked operator node to its Resolved-AST scan id.
-  absl::flat_hash_map<const ASTNode*, int> node_to_rid;
+  // Map each marked operator node to the Resolved-AST node id(s) it corresponds
+  // to.  Several markers can resolve to the same operator node -- one scan emits
+  // more than one operator, or nested operators share a head offset -- so this
+  // is a *set* per node (a union), not last-writer-wins, and an element may
+  // therefore carry several "r<id>" cross-references.
+  NodeRefMarkers sql_refs("s");
   for (size_t k = 0; k < marker_offsets.size(); ++k) {
     if (marker_offsets[k] < 0 || k >= marker_to_rid.size() ||
         marker_to_rid[k] < 0) {
       continue;
     }
     const ASTNode* node = FindSmallestSegmentNode(root, marker_offsets[k]);
-    if (node != nullptr) node_to_rid[node] = marker_to_rid[k];
+    if (node != nullptr) sql_refs.Add(node, marker_to_rid[k]);
   }
 
   // Annotate each segment (a pipe operator, the initial FROM query, or a
   // subpipeline) with a title for the info-box hierarchy -- mirroring the input
-  // pane -- plus, where the operator maps to a ResolvedScan, a hidden `.ni-ref`
-  // carrying its own id ("s<n>") and a cross-reference ("r<id>") for the
+  // pane -- plus, where the operator maps to ResolvedNode(s), a hidden `.ni-ref`
+  // carrying its own id ("s<n>") and the cross-references ("r<id> ...") for the
   // cross-pane highlight (the box formatter wraps the box, so we can't set an
   // attribute on it directly).
-  int s_counter = 0;
-  BoxAnnotator annotate = [&node_to_rid, &s_counter,
+  BoxAnnotator annotate = [&sql_refs,
                            clean_sql](const ASTNode* node) -> std::string {
     const absl::string_view kind = node->GetNodeKindString();
     const bool is_pipe = IsPipeSegmentNode(node);
@@ -1937,14 +1938,12 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
       return std::string();
     }
 
-    // Correspondence id: an operator carries its own marker; a query/subpipeline
-    // layer carries no marker, so it borrows its result operator's id (its last
-    // pipe operator, or the FROM source) -- the same ResolvedScan the input and
-    // AST panes use for that layer, so the subquery box cross-links.
-    int rid = -1;
-    if (auto it = node_to_rid.find(node); it != node_to_rid.end()) {
-      rid = it->second;
-    } else if (is_query || is_subpipeline) {
+    // Correspondence: an operator carries its own marker(s); a query/subpipeline
+    // layer carries no marker, so it borrows its result operator's
+    // correspondences (its last pipe operator, or the FROM source) -- the same
+    // resolved node(s) the input and AST panes use for that layer, so the
+    // subquery box cross-links.
+    if (is_query || is_subpipeline) {
       const ASTNode* result = nullptr;
       if (const ASTQuery* q = node->GetAsOrNull<ASTQuery>(); q != nullptr) {
         result = q->pipe_operator_list().empty()
@@ -1955,17 +1954,9 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
                  sp != nullptr && !sp->pipe_operator_list().empty()) {
         result = sp->pipe_operator_list().back();
       }
-      if (result != nullptr) {
-        if (auto it = node_to_rid.find(result); it != node_to_rid.end()) {
-          rid = it->second;
-        }
-      }
+      sql_refs.Inherit(node, result);
     }
-    std::string ref;
-    if (rid >= 0) {
-      ref = absl::StrCat("<span class=\"ni-ref\" data-node-id=\"s", s_counter++,
-                         "\" data-corresp=\"r", rid, "\"></span>");
-    }
+    std::string ref = sql_refs.Emit(node);
 
     std::string title;
     if (is_stmt) {
@@ -2080,19 +2071,21 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   data.resolved_ast_text = resolved->DebugString(debug_config);
   std::vector<const ResolvedScan*> scan_order;
   data.resolved_ast_html = resolved->DebugStringHtml(&scan_order);
-  absl::flat_hash_map<const ResolvedScan*, int> scan_ids;
-  for (int i = 0; i < static_cast<int>(scan_order.size()); ++i) {
-    scan_ids[scan_order[i]] = i;
-  }
+  // The shared visualizer identity space: every pane joins on these ids.  The
+  // Resolved AST pane is the authority (assigns ids in emission order); other
+  // panes look them up.  Typed over ResolvedNode (not ResolvedScan) so non-scan
+  // nodes can be added to the mapping as the framework grows.
+  ResolvedNodeIds node_ids;
+  node_ids.AssignInOrder<const ResolvedScan>(scan_order);
 
-  // Structured graph model of the same Resolved AST (node ids reuse the scan-id
+  // Structured graph model of the same Resolved AST (node ids reuse the id
   // order above, so the graph view lines up with the textual panes).
   data.resolved_graph_json =
-      BuildResolvedAstQueryGraph(resolved, scan_ids).ToJson();
+      BuildResolvedAstQueryGraph(resolved, node_ids).ToJson();
 
-  // --- Input SQL pane: box HTML with node info, tagged with scan-ids. ---
+  // --- Input SQL pane: box HTML with node info, tagged with node ids. ---
   absl::StatusOr<std::string> input_html =
-      RenderBoxHtmlWithNodeInfo(sql, ast, *analyzer_output, config, &scan_ids);
+      RenderBoxHtmlWithNodeInfo(sql, ast, *analyzer_output, config, &node_ids);
   if (input_html.ok()) {
     data.input_sql_html = *input_html;
   }
@@ -2127,8 +2120,7 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
     // the markers and format the clean SQL for display.
     std::vector<int> marker_to_rid(builder.pipe_operator_markers().size(), -1);
     for (size_t i = 0; i < builder.pipe_operator_markers().size(); ++i) {
-      auto it = scan_ids.find(builder.pipe_operator_markers()[i]);
-      if (it != scan_ids.end()) marker_to_rid[i] = it->second;
+      marker_to_rid[i] = node_ids.Lookup(builder.pipe_operator_markers()[i]);
     }
     std::string clean_sql = StripScanMarkers(marked_sql);
     std::string display_sql = clean_sql;
@@ -2157,12 +2149,12 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   // the tree, show it as a *second* full visualizer UI (same input SQL, the
   // post-rewrite Resolved AST, and a SQLBuilder regeneration of it).  Build the
   // input box now, before rewriting, while the pre-rewrite analyzer info is
-  // valid; it carries no scan-id correspondence (scan_ids = nullptr) because the
+  // valid; it carries no correspondence (node_ids = nullptr) because the
   // input<->scan mapping does not survive rewrites.  All pre-rewrite panes above
   // are already built, so rewriting the output in place here is safe.
   std::string post_input_html;
   if (absl::StatusOr<std::string> h = RenderBoxHtmlWithNodeInfo(
-          sql, ast, *analyzer_output, config, /*scan_ids=*/nullptr);
+          sql, ast, *analyzer_output, config, /*node_ids=*/nullptr);
       h.ok()) {
     post_input_html = *h;
   }
@@ -2180,12 +2172,10 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
 
       std::vector<const ResolvedScan*> scan_order2;
       data.post_rewrite_ast_html = post->DebugStringHtml(&scan_order2);
-      absl::flat_hash_map<const ResolvedScan*, int> scan_ids2;
-      for (int i = 0; i < static_cast<int>(scan_order2.size()); ++i) {
-        scan_ids2[scan_order2[i]] = i;
-      }
+      ResolvedNodeIds node_ids2;
+      node_ids2.AssignInOrder<const ResolvedScan>(scan_order2);
       data.post_rewrite_resolved_graph_json =
-          BuildResolvedAstQueryGraph(post, scan_ids2).ToJson();
+          BuildResolvedAstQueryGraph(post, node_ids2).ToJson();
 
       // SQLBuilder on the post-rewrite tree.  Its inline markers tie each
       // emitted operator back to a post-rewrite scan, so the AST<->SQLBuilder
@@ -2212,8 +2202,8 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
             post_builder.pipe_operator_markers().size(), -1);
         for (size_t i = 0; i < post_builder.pipe_operator_markers().size();
              ++i) {
-          auto it = scan_ids2.find(post_builder.pipe_operator_markers()[i]);
-          if (it != scan_ids2.end()) marker_to_rid2[i] = it->second;
+          marker_to_rid2[i] =
+              node_ids2.Lookup(post_builder.pipe_operator_markers()[i]);
         }
         std::string display2 = StripScanMarkers(marked2);
         if (absl::StatusOr<std::string> f = LenientFormatSql(display2);

@@ -61,14 +61,13 @@ void AppendJsonString(absl::string_view s, std::string* out) {
 }
 
 // Walks the Resolved AST in the same flattened order the linear panes use,
-// assigning each scan a stable "r<n>" node id (looked up from `scan_ids`) and
+// assigning each scan a stable "r<n>" node id (looked up from `node_ids`) and
 // recording dataflow edges and containment.  `next_container` hands out fresh
 // "b<n>" ids for nested query boxes.
 class QueryGraphBuilder {
  public:
-  explicit QueryGraphBuilder(
-      const absl::flat_hash_map<const ResolvedScan*, int>& scan_ids)
-      : scan_ids_(scan_ids) {}
+  explicit QueryGraphBuilder(const ResolvedNodeIds& node_ids)
+      : node_ids_(node_ids) {}
 
   QueryGraph Build(const ResolvedNode* root) {
     const std::string root_container =
@@ -97,11 +96,11 @@ class QueryGraphBuilder {
     return id;
   }
 
-  // Returns the "r<n>" id for `scan`, or "" if it is not in `scan_ids_` (e.g.
+  // Returns the "r<n>" id for `scan`, or "" if it is not in `node_ids_` (e.g.
   // nested inside an expression subquery, which the linear panes also skip).
   std::string NodeId(const ResolvedScan* scan) const {
-    auto it = scan_ids_.find(scan);
-    return it == scan_ids_.end() ? "" : absl::StrCat("r", it->second);
+    const int id = node_ids_.Lookup(scan);
+    return id < 0 ? "" : absl::StrCat("r", id);
   }
 
   // Processes the pipe-input chain whose output (top) scan is `top`, placing
@@ -159,7 +158,7 @@ class QueryGraphBuilder {
     }
   }
 
-  const absl::flat_hash_map<const ResolvedScan*, int>& scan_ids_;
+  const ResolvedNodeIds& node_ids_;
   QueryGraph graph_;
   int next_container_ = 0;
 };
@@ -206,10 +205,9 @@ std::string QueryGraph::ToJson() const {
   return out;
 }
 
-QueryGraph BuildResolvedAstQueryGraph(
-    const ResolvedNode* root,
-    const absl::flat_hash_map<const ResolvedScan*, int>& scan_ids) {
-  return QueryGraphBuilder(scan_ids).Build(root);
+QueryGraph BuildResolvedAstQueryGraph(const ResolvedNode* root,
+                                      const ResolvedNodeIds& node_ids) {
+  return QueryGraphBuilder(node_ids).Build(root);
 }
 
 }  // namespace googlesql

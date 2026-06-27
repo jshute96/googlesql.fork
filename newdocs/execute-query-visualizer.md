@@ -201,6 +201,82 @@ an id must persist *inside* the tree — e.g. the SQLBuilder emitting an inline 
 reference during generation, or keeping ids stable across a rewriter pass that
 reorders scans. Not needed yet (rewriters are disabled for visualization).
 
+## Node-mapping framework (`viz_node_mapping.{h,cc}`)
+
+The id/cross-reference machinery above is factored into a small, pane-independent
+module (`tools/execute_query/viz_node_mapping.{h,cc}`, branch
+`visual-graph-new-mapping`) so the rule "every node has an id; each pane records
+edges to ids" lives in one place and can be extended without each pane
+re-deriving it. Three pieces:
+
+- **`ResolvedNodeIds`** — the shared identity space. A dense id per node, typed
+  over `const ResolvedNode*` (not `ResolvedScan*`), so non-scan nodes can be
+  added to the mapping as coverage grows. The Resolved AST pane is the id
+  authority (`AssignInOrder` over its emission-order `scan_order`); every other
+  pane and the graph builder take a `const ResolvedNodeIds&` and `Lookup`.
+- **`NodeRefMarkers`** — accumulates, per parse `ASTNode`, the **set** of resolved
+  ids it corresponds to, and emits the hidden `.ni-ref` span (own id +
+  cross-references). `Add` unions (so several markers resolving to one operator
+  node no longer clobber each other — it was last-writer-wins before); `Inherit`
+  lets a container layer (a query/subpipeline box) borrow its result operator's
+  correspondences.
+- **`RidTokens`** — formats an id set as the `data-corresp` token string.
+
+**Many:many is now first-class.** `data-corresp` holds a *space-separated set*
+of ids (`"r3 r7"`), not a single id, and the JS already splits on whitespace
+(`collectNodes`/`buildAdj` in `query_viewer.js`). A single element can therefore
+correspond to many resolved nodes and vice versa; the 1:1 case is just a
+one-element set, so existing output (`data-corresp="r8"`) is unchanged. This
+fixes the previously-dropped edges where one node carried several markers, and
+generalizes the container-borrows-result-operator case to a set.
+
+This is the first phase of the more robust framework. It deliberately
+**preserves** the current behavior and DOM contract while replacing the ad-hoc
+`flat_hash_map<const ResolvedScan*,int> scan_ids` + `vector<int> marker_to_rid`
+plumbing with the explicit identity space + relation model. The id space is
+still *populated* only from scans and still lives in pointer-keyed maps over the
+single shared analysis (so it does not yet survive rewrites).
+
+### Roadmap: token-range provenance and rewrite-stable ids
+
+Three further tiers turn this into a fully general, rewrite-stable mapping. None
+are implemented yet; they are scoped here as the next phases.
+
+1. **Token-range (rope) provenance in SQLBuilder.** Today the SQLBuilder rides an
+   inline `/*S<n>*/` comment through string assembly and the tool re-parses it
+   out. Replace the raw `std::string` accumulation with a segmented buffer
+   (`ProvenanceText`) that tags emitted byte ranges with the responsible
+   `ResolvedNode` via a current-node stack at one append chokepoint. Output
+   becomes *clean SQL + a `(byte-span → ResolvedNode)` list* — no sentinels in
+   the SQL, no marker-stripping, byte ranges that line up exactly with the
+   re-parsed AST', and coverage of **any** node that emits text (not just pipe
+   operators). The tool then assigns each span to the smallest covering AST'
+   node (today's `FindSmallestSegmentNode`, generalized).
+
+2. **Intrinsic, rewrite-stable node ids.** Rewriters are copy-based
+   (`ResolvedASTRewriteVisitor`/`ResolvedASTDeepCopyVisitor`), so pointer
+   identity never survives a rewrite. To keep ids stable across rewrites:
+   - *Tier 1 (automatic, common case):* propagate the id at the copy visitor's
+     join point (old node → new node) via a side-map carried across the copy —
+     no field on the generated node classes, no proto-serialization change.
+     Unchanged/moved/field-mutated nodes keep their id; genuinely new nodes get a
+     fresh one.
+   - *Tier 1.5 (free):* `column_id` (from `ColumnFactory`) already survives
+     rewrites; use it for data-flow correspondence orthogonally to node ids.
+   - *Tier 2 (opt-in):* a rewriter doing structural surgery (e.g. WITH-extraction)
+     records explicit `new_id ← {old_ids}` provenance edges for the nodes it
+     synthesizes.
+   - *Tier 3 (fallback):* structural diff (`node_kind` + column-id signature +
+     structural hash) proposes correspondences where Tiers 1–2 leave a gap.
+
+3. **Resolved AST rewriter debugger.** With Tier-1 id propagation, the old and
+   new trees share ids across the untouched majority, so a side-by-side diff
+   keys on the id: same id + equal fields = unchanged; same id, different
+   parent = moved; same id, different fields = mutated; id only in old/new =
+   deleted/inserted. The visualizer's panes and the debugger's two trees are
+   then the same operation (pick a node, traverse a relation) over different
+   relations.
+
 ## Next phase: graphical tree / graph view (`visual-graph` branch)
 
 The pipe-based *textual* presentation reads well for a **linear** operator
