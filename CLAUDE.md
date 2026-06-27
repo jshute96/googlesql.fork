@@ -48,6 +48,10 @@ See [newdocs/architecture.md](newdocs/architecture.md) for the full picture.
   - Parse-tree node classes ← `googlesql/parser/gen_parse_tree.py` (+ `*.template`).
   - Resolved AST node classes (C++ **and** Java) ← `googlesql/resolved_ast/gen_resolved_ast.py`.
   To add/modify a node, edit the generator, not the generated `*_generated.*` files.
+  The generated headers aren't in the **source tree** — to *change* a node/field, edit
+  `gen_resolved_ast.py`; to *read* the actual generated C++, look under `bazel-bin/`
+  after a build (e.g. `bazel-bin/googlesql/resolved_ast/resolved_ast.h`,
+  `bazel-bin/googlesql/parser/parse_tree_generated.h`).
 - The **lexer** is generated from the TextMapper grammar `googlesql/parser/googlesql.tm`.
 - Behavior is driven by **`LanguageOptions`** (which features are on) and
   **`AnalyzerOptions`** (analysis config + enabled rewriters), both in `public/`.
@@ -59,6 +63,15 @@ See [newdocs/architecture.md](newdocs/architecture.md) for the full picture.
 - **`base/`** holds the status/error macros (`RETURN_IF_ERROR`, `ASSIGN_OR_RETURN`,
   `RET_CHECK`) used everywhere; errors carry source-location payloads via
   `common/errors.*`.
+- **`ResolvedColumn::name()` / `table_name()` return `std::string` *by value***
+  (`resolved_column.h` — they call `IdString::ToString()`). Never bind the result
+  to an `absl::string_view` (it dangles immediately) — this has caused a real
+  use-after-free in `SQLBuilder`. `IdString::ToStringView()` and protobuf `.name()`
+  accessors are safe (they return into stable storage).
+- **Analyzer golden tests:** each `googlesql/analyzer/testdata/<name>.test` has its own
+  target `//googlesql/analyzer:analyzer_<name>_test`. The framework re-round-trips
+  SQLBuilder output (standard **and** pipe) and fails on invalid SQL. There is **no
+  turnkey "update goldens" command** — see the `regen-analyzer-goldens` skill.
 
 ## Build & run (Bazel)
 
@@ -106,6 +119,9 @@ common --registry=https://raw.githubusercontent.com/bazelbuild/bazel-central-reg
 
 The host-Go / host-tool settings above (in `MODULE.bazel`) are the committed
 half of the same story: they avoid the blocked Go-SDK and tool-source mirrors.
+
+Machine-specific build flags, resource-pressure workarounds, and harness gotchas for
+this particular dev box live in the untracked `CLAUDE.local.md`.
 
 ## Background reading
 

@@ -242,6 +242,41 @@ perturbs the generated SQL structure.
 
 ---
 
+## Validating a SQLBuilder change
+
+The analyzer golden tests are the real correctness gate. **77** `testdata/*.test` files
+carry `[default show_sqlbuilder_output]`, and the framework re-parses/re-analyzes the
+generated SQL in *both* standard and pipe mode (`kSqlBuilderTargetSyntaxMode` defaults to
+`"both"`) — so a SQLBuilder change that emits invalid or non-equivalent SQL fails loudly.
+Distinguish the three failure signatures (don't conflate them):
+
+| Test-log signature | Meaning |
+|---|---|
+| `BEGIN TEST DIFF` only, no error | benign golden churn — only the recorded `[SQLBUILDER_OUTPUT]` text changed |
+| `ERROR while analyzing SQLBuilder output: …` | **real bug** — emitted invalid / non-equivalent SQL |
+| `Pipe-operator markers changed the generated SQL structure` | **real bug** — the `/*S<n>*/` visualizer markers altered output |
+
+Fast sweep across affected targets:
+```bash
+bazel test … $TARGETS --test_output=errors --keep_going 2>&1 \
+ | grep -E 'ERROR while analyzing SQLBuilder output|markers changed the generated' \
+ | sed -E 's/.*output: [A-Z_]+: //' | sort | uniq -c | sort -rn
+```
+Empty output = only golden diffs remain → regenerate them (see the `regen-analyzer-goldens`
+skill). Watch for **pre-existing** baseline failures unrelated to your change (notably
+`set_operation`, `pipe_with`, `pipe_tablesample`) — confirm with a `git stash` + rerun
+before "fixing" them.
+
+> **Implementation note — two `|>` emission paths.** Most operators emit their `|>` through
+> the centralized `AppendPipeOperator` (which records `current_scan_`), but `AggregateScan`,
+> `LimitOffsetScan`, the trailing `|> SELECT`, and `|> AS` wraps emit via
+> `QueryExpression::GetPipeSQLQuery`/`WrapImpl` and are **not** recorded that way. Any
+> correspondence built by counting textual `|>` against the recorded order drifts; the
+> visualizer instead stamps inline `/*S<n>*/` markers. Converting `AggregateScan` to
+> pipe-native `AppendPipeOperator` emission is **not** byte-equivalent (alias allocation +
+> the "skip trailing `|> SELECT` when GROUP BY present" rule depend on lazy rendering) —
+> don't retry that conversion.
+
 ## Summary
 
 - **A1, A2**: pipe syntax genuinely can't express the query (SELECT hints;

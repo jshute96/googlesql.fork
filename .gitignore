@@ -4,3 +4,6 @@
 # Bazel module lockfile. Not tracked upstream and may capture
 # environment-specific registry URLs.
 /MODULE.bazel.lock
+
+# Machine-specific Claude notes (build flags, resource workarounds, harness gotchas).
+/CLAUDE.local.md
