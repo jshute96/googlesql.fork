@@ -425,7 +425,11 @@
   // already HTML-escaped, so the slice is safe to re-insert.
   function sqlBoxOwnHtml(box) {
     var h = box.innerHTML;
-    var idx = h.indexOf('<div class="rscan-sub"');
+    // Match the opening of a nested block whether its class is just "rscan-sub"
+    // (a subquery) or "rscan-sub rscan-subpipeline" (a |> FORK branch); stopping
+    // before it keeps only this operator's own leading text (e.g. "|> FORK (")
+    // rather than the whole multi-line body.
+    var idx = h.indexOf('<div class="rscan-sub');
     return idx >= 0 ? h.slice(0, idx) : h;
   }
 
@@ -440,7 +444,9 @@
     while (el && root.contains(el)) {
       if (el.classList && el.classList.contains('rscan')) {
         var lead = sqlBoxOwnHtml(el);
-        var first = lead.split('\n')[0].trim();
+        // Title is the operator's first line, without a trailing "(" left by a
+        // following nested block (so "|> FORK (" reads as "|> FORK").
+        var first = lead.split('\n')[0].trim().replace(/\s*\(+\s*$/, '');
         items.push({
           title: first || '(pipe operator)', body: lead, el: el,
           id: el.getAttribute('data-node-id')

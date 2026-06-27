@@ -309,6 +309,18 @@ std::string PipeOperatorName(const ASTNode* pipe_node) {
           {AST_PIPE_WINDOW, "pipe WINDOW"},
           {AST_PIPE_RENAME, "pipe RENAME"},
           {AST_PIPE_SET_OPERATION, "pipe set operation (such as UNION)"},
+          {AST_PIPE_FORK, "pipe FORK"},
+          {AST_PIPE_TEE, "pipe TEE"},
+          {AST_PIPE_IF, "pipe IF"},
+          {AST_PIPE_MATCH_RECOGNIZE, "pipe MATCH_RECOGNIZE"},
+          {AST_PIPE_LOG, "pipe LOG"},
+          {AST_PIPE_DESCRIBE, "pipe DESCRIBE"},
+          {AST_PIPE_PIVOT, "pipe PIVOT"},
+          {AST_PIPE_UNPIVOT, "pipe UNPIVOT"},
+          {AST_PIPE_WITH, "pipe WITH"},
+          {AST_PIPE_EXPORT_DATA, "pipe EXPORT DATA"},
+          {AST_PIPE_CREATE_TABLE, "pipe CREATE TABLE"},
+          {AST_PIPE_INSERT, "pipe INSERT"},
       });
   const absl::string_view* name =
       googlesql_base::FindOrNull(*kPipeOperatorNameMap, pipe_node->node_kind());
@@ -2800,6 +2812,10 @@ Resolver::ResolveSubpipeline(
         subpipeline_name_list,
         /*inferred_type_for_query=*/nullptr,
         /*allow_terminal=*/allow_terminal));
+    // Record a hierarchy entry so the visualizer's info box shows a
+    // "Subpipeline" step (like a subquery) between the subpipeline's pipe
+    // operators and the operator (e.g. FORK) that contains them.
+    ast_node_resolved_info_map_[ast_subpipeline].node_title = "Subpipeline";
   }
 
   return MakeResolvedSubpipeline(std::move(inside_scan));
