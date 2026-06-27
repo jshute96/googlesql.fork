@@ -487,18 +487,20 @@
   function collectScanHierarchy(box, root) {
     var items = [], el = box;
     while (el && root.contains(el)) {
-      // `.rscan-query` is a nested subquery/subpipeline wrapper carrying a
-      // "Subquery"/"Subpipeline" head: include it so it shows as a hierarchy
-      // layer, matching the input pane's "Expression subquery" step.
+      // `.rscan-query` is a nested subquery/subpipeline wrapper: its label is the
+      // hidden `data-layer` attribute (no visible heading), so it shows as a
+      // hierarchy layer matching the input pane's "Expression subquery" step.
+      var isQueryBox = el.classList && el.classList.contains('rscan-query');
       if (el.classList && (el.classList.contains('rscan') ||
-                           el.classList.contains('rscan-stmt') ||
-                           el.classList.contains('rscan-query'))) {
+                           el.classList.contains('rscan-stmt') || isQueryBox)) {
         var head = directChild(el, 'rscan-head');
+        var title = isQueryBox ? (el.getAttribute('data-layer') || 'Subquery')
+                               : (head ? head.innerHTML : '');
         var body = directChildren(el, 'rscan-field').map(function (f) {
           return f.innerHTML;
         }).join('<br>');
         items.push({
-          title: head ? head.innerHTML : '', body: body, el: el,
+          title: title, body: body, el: el,
           id: el.getAttribute ? el.getAttribute('data-node-id') : null
         });
       }

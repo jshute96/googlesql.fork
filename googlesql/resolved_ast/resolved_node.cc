@@ -280,26 +280,23 @@ void ResolvedNode::EmitScanFieldsHtml(
         subpipeline_scan = child->GetAs<ResolvedSubpipeline>()->scan();
       }
       if (subpipeline_scan != nullptr) {
-        // A "Subpipeline" header makes the box a selectable hierarchy layer (like
-        // the input pane's), so a pipe operator inside it reads as "in
-        // Subpipeline".
+        // The `data-layer` label (no visible heading) makes the box a selectable
+        // hierarchy layer like the input pane's, so a pipe operator inside it
+        // reads as "in Subpipeline".
         absl::StrAppend(output,
-                        "<div class=\"rscan-children\"><div class=\"rscan-query\">"
-                        "<div class=\"rscan-head rscan-sub-label\">Subpipeline"
-                        "</div>");
+                        "<div class=\"rscan-children\">"
+                        "<div class=\"rscan-query\" data-layer=\"Subpipeline\">");
         EmitScanChainHtml(subpipeline_scan, config, scan_counter, scan_order,
                           output, nested_depth);
         absl::StrAppend(output, "</div></div>");
       } else if (child != nullptr && child->IsScan()) {
-        // A header makes the box a selectable hierarchy layer.  The statement's
-        // own query (top_level) is "Query with pipe operators"; a scan-child of
-        // another scan is a "Subquery" (matching the input pane's "Query with
-        // pipe operators" / "Expression subquery" layers).
+        // The `data-layer` label (no visible heading) makes the box a selectable
+        // hierarchy layer.  The statement's own query (top_level) is "Query with
+        // pipe operators"; a scan-child of another scan is a "Subquery" (matching
+        // the input pane's layers).
         absl::StrAppend(
-            output,
-            "<div class=\"rscan-children\"><div class=\"rscan-query\">"
-            "<div class=\"rscan-head rscan-sub-label\">",
-            top_level ? "Query with pipe operators" : "Subquery", "</div>");
+            output, "<div class=\"rscan-children\"><div class=\"rscan-query\" data-layer=\"",
+            top_level ? "Query with pipe operators" : "Subquery", "\">");
         // A nested scan child is a subquery: deeper nesting → next colour family.
         EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,
                           scan_order, output, nested_depth);
