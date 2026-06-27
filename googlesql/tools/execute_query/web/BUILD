@@ -48,15 +48,43 @@ gen_string_constant_header_file(
     variable = "kQueryViewerJS",
 )
 
+gen_string_constant_header_file(
+    name = "viz_block_h",
+    src = "viz_block.html",
+    variable = "kVizBlock",
+)
+
+gen_string_constant_header_file(
+    name = "visualize_js_h",
+    src = "visualize.js",
+    variable = "kVisualizeJS",
+)
+
+gen_string_constant_header_file(
+    name = "page_visualize_h",
+    src = "page_visualize.html",
+    variable = "kPageVisualize",
+)
+
+gen_string_constant_header_file(
+    name = "page_visualize_content_h",
+    src = "page_visualize_content.html",
+    variable = "kPageVisualizeContent",
+)
+
 cc_library(
     name = "embedded_resources",
     srcs = [
         "embedded_resources.cc",
         "page_body.html.h",
         "page_template.html.h",
+        "page_visualize.html.h",
+        "page_visualize_content.html.h",
         "query_viewer.js.h",
         "style.css.h",
         "table.html.h",
+        "visualize.js.h",
+        "viz_block.html.h",
     ],
     hdrs = ["embedded_resources.h"],
 )

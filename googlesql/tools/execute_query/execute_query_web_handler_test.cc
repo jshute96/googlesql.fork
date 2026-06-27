@@ -39,6 +39,7 @@
 
 using testing::Eq;
 using testing::HasSubstr;
+using testing::Not;
 using testing::StartsWith;
 
 namespace googlesql {
@@ -56,11 +57,22 @@ class FakeQueryWebTemplates : public QueryWebTemplates {
   const std::string& GetWebPageContents() const override { return contents_; }
   const std::string& GetWebPageCSS() const override { return css_; }
   const std::string& GetWebPageBody() const override { return body_; }
+  const std::string& GetVisualizeContent() const override {
+    return viz_content_.empty() ? QueryWebTemplates::GetVisualizeContent()
+                                : viz_content_;
+  }
+
+  // Overrides the /visualize content fragment template (defaults to the real
+  // embedded one).
+  void SetVisualizeContent(std::string content) {
+    viz_content_ = std::move(content);
+  }
 
  private:
   std::string contents_;
   std::string css_;
   std::string body_;
+  std::string viz_content_;
 };
 
 bool HandleRequest(const ExecuteQueryWebRequest& request,
@@ -70,6 +82,17 @@ bool HandleRequest(const ExecuteQueryWebRequest& request,
     result = s;
     return true;
   });
+}
+
+bool HandleVisualizeContent(const ExecuteQueryWebRequest& request,
+                            const QueryWebTemplates& templates,
+                            std::string& result) {
+  ExecuteQueryWebHandler handler(templates);
+  return handler.HandleVisualizeContent(request,
+                                        [&result](absl::string_view s) {
+                                          result = s;
+                                          return true;
+                                        });
 }
 
 }  // namespace
@@ -310,6 +333,91 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeScript) {
   EXPECT_EQ(blocks[1].find("bbb"), std::string::npos);
   EXPECT_THAT(blocks[2], HasSubstr("bbb"));
   EXPECT_EQ(blocks[2].find("aaa"), std::string::npos);
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeShell) {
+  std::string result;
+  ExecuteQueryWebHandler handler(QueryWebTemplates::Default());
+  EXPECT_TRUE(handler.HandleVisualizeShell([&result](absl::string_view s) {
+    result = s;
+    return true;
+  }));
+  // The shell is a full-window page carrying the visualize chrome and the
+  // client scripts that fetch and inject the content.
+  EXPECT_THAT(result, HasSubstr("data-visualize-page"));
+  EXPECT_THAT(result, HasSubstr("GoogleSQL Execute Query - Visualize"));
+  EXPECT_THAT(result, HasSubstr("id=\"visualize-root\""));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentMultiStatement) {
+  std::string result;
+  // Uses the real content template + viz_block partial.
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"},
+                             ExecuteQueryConfig::SqlMode::kScript,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT 111 AS aaa; SELECT 222 AS bbb;", "none",
+                             "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // Two statements -> a statement dropdown and two statement blocks numbered by
+  // their position in the script.
+  EXPECT_THAT(result, HasSubstr("id=\"visualize-stmt-select\""));
+  EXPECT_THAT(result, HasSubstr("Statement 1"));
+  EXPECT_THAT(result, HasSubstr("Statement 2"));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"1\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"2\""));
+  // Each renders the three-pane viz block.
+  EXPECT_THAT(result, HasSubstr("class=\"viz\" data-viz"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentRewriteToggle) {
+  std::string result;
+  // TYPEOF is expanded by a rewriter, so the post-rewrite tree differs and a
+  // second (post) viz block is produced.
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT TYPEOF(1) AS t", "none", "MAXIMUM",
+                             "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  EXPECT_THAT(result, HasSubstr("data-has-post=\"1\""));
+  EXPECT_THAT(result, HasSubstr("class=\"visualize-block\" data-rewrite=\"pre\""));
+  EXPECT_THAT(result,
+              HasSubstr("class=\"visualize-block\" data-rewrite=\"post\""));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentMarkers) {
+  std::string result;
+  // A custom content template exercises the data exposed to it: the statement
+  // index, the per-block rewrite key, and the multiple/has_viz flags.
+  FakeQueryWebTemplates templates("", "", "");
+  templates.SetVisualizeContent(
+      "has_viz={{#has_viz}}1{{/has_viz}} multiple={{#multiple}}1{{/multiple}} "
+      "{{#viz_statements}}[stmt {{index}} post={{#has_post_rewrite}}1{{/"
+      "has_post_rewrite}}{{^has_post_rewrite}}0{{/has_post_rewrite}}"
+      "{{#viz_blocks}}<{{rewrite_key}}>{{/viz_blocks}}]{{/viz_statements}}");
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT 1 AS x", "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      templates, result));
+  EXPECT_THAT(result, HasSubstr("has_viz=1"));
+  EXPECT_THAT(result, HasSubstr("multiple="));  // single statement -> no "1"
+  EXPECT_THAT(result, Not(HasSubstr("multiple=1")));
+  EXPECT_THAT(result, HasSubstr("[stmt 1 post=0<pre>]"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT * FROM no_such_table_xyz", "none",
+                             "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // A failing analysis surfaces the error in place of viz blocks.
+  EXPECT_THAT(result, HasSubstr("class=\"error\""));
+  EXPECT_THAT(result, HasSubstr("no_such_table_xyz"));
 }
 
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {

@@ -1015,9 +1015,19 @@
   });
 
   // Activate single-column layout and initialize when a `.viz` is present.
-  if (document.querySelector('.viz')) {
-    document.documentElement.setAttribute('data-visualize', '1');
-    applyState();
-    applyView();
+  function initViz() {
+    if (document.querySelector('.viz')) {
+      document.documentElement.setAttribute('data-visualize', '1');
+      applyState();
+      applyView();
+    }
   }
+
+  // Exposed so the full-window /visualize page can (re-)initialize after it
+  // injects its server-rendered viz blocks, and reflow when the visible
+  // statement / rewrite block changes.
+  window.googlesqlInitVisualize = initViz;
+  window.googlesqlReflowViz = function () { applyState(); applyView(); };
+
+  initViz();
 })();

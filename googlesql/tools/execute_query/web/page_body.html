@@ -113,7 +113,11 @@
 
             </div>
 
-            <input type="submit" id="submit" value="Submit">
+            <span class="submit-buttons">
+              <input type="submit" id="submit" value="Submit">
+              <button type="button" id="visualize-btn"
+                title="Open a full-window visualization of this query in a new tab">Visualize</button>
+            </span>
           </div>
         </form>
       </div>
@@ -136,48 +140,7 @@
             {{#result_visualized}}
             <h3>Visualize</h3>
             {{#viz_blocks}}
-            {{#viz_title}}<h4 class="viz-block-title">{{viz_title}}</h4>{{/viz_title}}
-            <div class="viz" data-viz>
-              <div class="viz-columns">
-                <div class="viz-col" data-col="input">
-                  <button type="button" class="viz-show" title="Show column">+ Input SQL</button>
-                  <div class="viz-tab">
-                    <span class="viz-tab-label">Input SQL</span>
-                    {{#viz_no_input_links}}<span class="viz-tab-note" title="Input&ndash;AST correspondence is not available after rewrites">(no links)</span>{{/viz_no_input_links}}
-                    <button type="button" class="viz-hide" title="Hide column">&times;</button>
-                  </div>
-                  <div class="viz-pane">{{{viz_input_sql_html}}}</div>
-                </div>
-                <div class="viz-divider" data-divider="0"></div>
-                <div class="viz-col" data-col="ast">
-                  <button type="button" class="viz-show" title="Show column">+ Resolved AST</button>
-                  <div class="viz-tab">
-                    <span class="viz-tab-label">Resolved AST</span>
-                    <select class="viz-view" data-col="ast" title="View mode">
-                      <option value="text">Text</option>
-                      <option value="operator">Operator graph</option>
-                      <option value="query">Query graph</option>
-                    </select>
-                    <button type="button" class="viz-hide" title="Hide column">&times;</button>
-                  </div>
-                  <div class="viz-pane">{{{viz_resolved_ast_html}}}</div>
-                </div>
-                <div class="viz-divider" data-divider="1"></div>
-                <div class="viz-col" data-col="sqlbuilder">
-                  <button type="button" class="viz-show" title="Show column">+ SQLBuilder SQL</button>
-                  <div class="viz-tab">
-                    <span class="viz-tab-label">SQLBuilder SQL</span>
-                    <button type="button" class="viz-hide" title="Hide column">&times;</button>
-                  </div>
-                  <div class="viz-pane">{{{viz_sqlbuilder_sql_html}}}</div>
-                </div>
-              </div>
-              <div class="viz-info-resizer" title="Drag to resize"></div>
-              <div class="viz-info"><span class="viz-info-placeholder">Details for selected node</span></div>
-              {{#viz_resolved_graph_json}}
-              <script type="application/json" class="viz-graph-data" data-graph="ast">{{{viz_resolved_graph_json}}}</script>
-              {{/viz_resolved_graph_json}}
-            </div>
+            {{> viz_block}}
             {{/viz_blocks}}
             {{/result_visualized}}
 

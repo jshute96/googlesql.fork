@@ -138,7 +138,8 @@ bool ExecuteQueryWebHandler::HandleRequest(
     const ExecuteQueryWebRequest &request, const Writer &writer) {
   mstch::map template_params = {{"query", request.query()},
                                 {"css", templates_.GetWebPageCSS()},
-                                {"js", templates_.GetWebPageJS()}};
+                                {"js", templates_.GetWebPageJS()},
+                                {"visualize_js", templates_.GetVisualizeJS()}};
 
   mstch::array catalogs;
   for (const SelectableCatalogInfo &catalog_info :
@@ -208,7 +209,8 @@ bool ExecuteQueryWebHandler::HandleRequest(
   std::string rendered =
       mstch::render(templates_.GetWebPageContents(), template_params,
                     {{"body", templates_.GetWebPageBody()},
-                     {"table", templates_.GetTable()}});
+                     {"table", templates_.GetTable()},
+                     {"viz_block", templates_.GetVizBlock()}});
 
   if (writer(rendered) <= 0) {
     ABSL_LOG(WARNING) << "Error writing rendered HTML.";
@@ -220,12 +222,16 @@ bool ExecuteQueryWebHandler::HandleRequest(
 
 absl::Status ExecuteQueryWebHandler::ExecuteQueryImpl(
     const ExecuteQueryWebRequest &request,
-    ExecuteQueryWriter &exec_query_writer) {
+    ExecuteQueryWriter &exec_query_writer, bool force_visualize_only) {
   // TODO: Try to avoid creating a new config each time
   ExecuteQueryConfig config;
   GOOGLESQL_RETURN_IF_ERROR(googlesql::InitializeExecuteQueryConfig(config));
 
-  config.set_tool_modes(request.modes());
+  if (force_visualize_only) {
+    config.set_tool_modes({ExecuteQueryConfig::ToolMode::kVisualize});
+  } else {
+    config.set_tool_modes(request.modes());
+  }
   if (request.sql_mode().has_value()) {
     config.set_sql_mode(*request.sql_mode());
   }
@@ -274,12 +280,63 @@ absl::Status ExecuteQueryWebHandler::ExecuteQueryImpl(
 
 bool ExecuteQueryWebHandler::ExecuteQuery(
     const ExecuteQueryWebRequest &request, std::string &error_msg,
-    ExecuteQueryWriter &exec_query_writer) {
-  absl::Status st = ExecuteQueryImpl(request, exec_query_writer);
+    ExecuteQueryWriter &exec_query_writer, bool force_visualize_only) {
+  absl::Status st =
+      ExecuteQueryImpl(request, exec_query_writer, force_visualize_only);
   if (!st.ok()) {
     error_msg = st.message();
   }
   return st.ok();
+}
+
+bool ExecuteQueryWebHandler::HandleVisualizeShell(const Writer &writer) {
+  mstch::map template_params = {
+      {"css", templates_.GetWebPageCSS()},
+      {"js", templates_.GetWebPageJS()},
+      {"visualize_js", templates_.GetVisualizeJS()}};
+  std::string rendered =
+      mstch::render(templates_.GetVisualizePage(), template_params);
+  if (writer(rendered) <= 0) {
+    ABSL_LOG(WARNING) << "Error writing rendered visualize shell.";
+    return false;
+  }
+  return true;
+}
+
+bool ExecuteQueryWebHandler::HandleVisualizeContent(
+    const ExecuteQueryWebRequest &request, const Writer &writer) {
+  mstch::map template_params;
+
+  std::string error_msg;
+  ExecuteQueryWebWriter params_writer(template_params);
+  if (!request.query().empty()) {
+    ExecuteQuery(request, error_msg, params_writer,
+                 /*force_visualize_only=*/true);
+    params_writer.FlushStatement(/*at_end=*/true, error_msg);
+  }
+
+  mstch::array viz_statements = params_writer.viz_statements();
+  const bool has_viz = !viz_statements.empty();
+  template_params["multiple"] = viz_statements.size() > 1;
+  template_params["has_viz"] = has_viz;
+  template_params["viz_statements"] = std::move(viz_statements);
+  // In query mode, per-statement analysis errors are delivered to the writer
+  // rather than via ExecuteQuery's return status, so consult both.
+  if (error_msg.empty()) {
+    error_msg = params_writer.viz_error();
+  }
+  if (!error_msg.empty()) {
+    template_params["error"] = error_msg;
+  }
+
+  std::string rendered =
+      mstch::render(templates_.GetVisualizeContent(), template_params,
+                    {{"viz_block", templates_.GetVizBlock()}});
+  if (writer(rendered) <= 0) {
+    ABSL_LOG(WARNING) << "Error writing rendered visualize content.";
+    return false;
+  }
+  return true;
 }
 
 }  // namespace googlesql

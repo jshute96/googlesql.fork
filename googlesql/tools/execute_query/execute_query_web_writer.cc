@@ -334,8 +334,30 @@ absl::Status ExecuteQueryWebWriter::ExecutedExpression(const ResolvedNode& ast,
 }
 
 void ExecuteQueryWebWriter::FlushStatement(bool at_end, std::string error_msg) {
+  // Number every statement in script order (1-based), so the full-window
+  // /visualize page can label them "Statement K" by their original position.
+  ++statement_index_;
+
   if (GotResults()) {
     current_statement_params_["result"] = true;
+  }
+
+  // Record a viz-statements entry for the full-window /visualize page when this
+  // statement produced visualizer output.
+  if (!current_viz_blocks_.empty()) {
+    mstch::map viz_stmt;
+    viz_stmt["index"] = statement_index_;
+    viz_stmt["viz_blocks"] = current_viz_blocks_;
+    if (current_has_post_rewrite_) viz_stmt["has_post_rewrite"] = true;
+    viz_statement_params_array_.push_back(std::move(viz_stmt));
+  }
+  current_viz_blocks_.clear();
+  current_has_post_rewrite_ = false;
+  // Collect per-statement errors (in query mode these are delivered here rather
+  // than via ExecuteQuery's return status) so the full-window /visualize page
+  // can surface why a statement produced no visualization.
+  if (!error_msg.empty()) {
+    absl::StrAppend(&viz_error_, viz_error_.empty() ? "" : "\n", error_msg);
   }
   if (!error_msg.empty()) {
     // The error string contains HTML, so the template contains

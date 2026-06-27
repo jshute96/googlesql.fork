@@ -754,6 +754,141 @@ html[data-visualize] .right-section {
   padding: 0 2px;
 }
 
+/* ==========================================================================
+   Full-window /visualize page.
+
+   A dedicated page (opened from the main page's "Visualize" button) that shows
+   a single statement's visualizer using the whole window, with no page scroll:
+   the header bar and a controls bar (statement dropdown + pre/post-rewrite
+   toggle) are fixed, and the three-pane + info-box view fills the rest. Only
+   the panes scroll internally.
+   ========================================================================== */
+.submit-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+}
+#visualize-btn {
+  font: inherit;
+  padding: 0.25em 0.8em;
+  border: 1px solid #0f73b5;
+  border-radius: 0.3em;
+  background: #1597ec;
+  color: #fff;
+  cursor: pointer;
+}
+#visualize-btn:hover {
+  background: #0f73b5;
+}
+
+html[data-visualize-page],
+html[data-visualize-page] body {
+  height: 100%;
+  overflow: hidden;
+}
+main.visualize-main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+main.visualize-main > #header {
+  flex: 0 0 auto;
+}
+#visualize-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Controls bar: statement dropdown + pre/post-rewrite toggle. */
+.visualize-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1.5em;
+  padding: 0.4em 1em;
+  background: #eaf3fb;
+  border-bottom: 1px solid #ccc;
+}
+.visualize-bar-item {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: #333;
+}
+.visualize-rewrite-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+.visualize-rewrite-toggle[hidden] {
+  display: none;
+}
+.viz-rewrite-tab {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 2px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #f3f3f3;
+  color: #444;
+  cursor: pointer;
+}
+.viz-rewrite-tab:hover {
+  background: #e8e8e8;
+}
+.viz-rewrite-tab.active {
+  background: #1597ec;
+  border-color: #0f73b5;
+  color: #fff;
+  font-weight: bold;
+}
+
+/* The statements stack: only the selected statement and, within it, the
+   selected rewrite block are shown. */
+#visualize-statements {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.visualize-statement {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.visualize-statement.active {
+  display: flex;
+  flex-direction: column;
+}
+.visualize-block {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.visualize-block.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* On the full-window page the .viz fills its container (instead of capping at
+   100vh) and drops its own border/title -- the page chrome provides those. */
+html[data-visualize-page] .visualize-block .viz {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+}
+html[data-visualize-page] .viz-block-title {
+  display: none;
+}
+.visualize-placeholder {
+  padding: 1.5em;
+  color: #555;
+}
+.visualize-error {
+  padding: 1em;
+}
+
 /* Graph view (operator mode): an absolutely-positioned node-link canvas that
    replaces the text rendering in the Resolved AST pane. */
 .viz-col.graph-mode .viz-pane > .rscan-stmt {

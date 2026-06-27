@@ -56,14 +56,9 @@ class RootHandler : public CivetHandler {
   bool handleAll(const char *method, CivetServer *server,
                  struct mg_connection *conn) {
     absl::string_view request_uri = mg_get_request_info(conn)->request_uri;
-    if (request_uri != "/") {
+    const bool is_visualize = (request_uri == "/visualize");
+    if (request_uri != "/" && !is_visualize) {
       ABSL_LOG(WARNING) << "Request " << request_uri << " not handled.";
-      return false;
-    }
-
-    std::unique_ptr<ExecuteQueryWebRequest> request = ParseRequest(conn);
-    if (!request) {
-      ABSL_LOG(WARNING) << "Failed to parse request.";
       return false;
     }
 
@@ -79,6 +74,22 @@ class RootHandler : public CivetHandler {
     }
 
     ExecuteQueryWebHandler handler(QueryWebTemplates::Default());
+
+    // GET /visualize serves the static full-window shell; its JavaScript POSTs
+    // the saved request back to /visualize to render the visualizer content.
+    if (is_visualize && absl::string_view(method) == "GET") {
+      return handler.HandleVisualizeShell(writer);
+    }
+
+    std::unique_ptr<ExecuteQueryWebRequest> request = ParseRequest(conn);
+    if (!request) {
+      ABSL_LOG(WARNING) << "Failed to parse request.";
+      return false;
+    }
+
+    if (is_visualize) {
+      return handler.HandleVisualizeContent(*request, writer);
+    }
     return handler.HandleRequest(*request, writer);
   }
 
