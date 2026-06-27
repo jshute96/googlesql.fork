@@ -221,7 +221,8 @@
       // Details-box height.
       if (infoEl) {
         if (state.infoH == null) {
-          state.infoH = 10 * lineHeightPx(infoEl) + 12;  // ~10 lines default
+          // Default the details box to ~25% of the window height.
+          state.infoH = window.innerHeight * 0.25;
         }
         infoEl.style.setProperty('--info-h', clampInfo(state.infoH, infoEl) +
             'px');
@@ -1004,10 +1005,10 @@
     var ratio = newVH / (state.lastVH || newVH);
     var scaled = state.infoH * ratio;
     if (ratio > 1) {
-      // Growing: do not let resize push it above 10 lines (or its current
+      // Growing: keep it around its ~25%-of-window natural size (or its current
       // height if the user already dragged it larger).
-      var tenLines = 10 * lineHeightPx(infoEl) + 12;
-      scaled = Math.min(scaled, Math.max(state.infoH, tenLines));
+      var natural = window.innerHeight * 0.25;
+      scaled = Math.min(scaled, Math.max(state.infoH, natural));
     }
     state.infoH = clampInfo(scaled, infoEl);
     state.lastVH = newVH;
