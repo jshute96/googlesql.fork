@@ -1904,7 +1904,16 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
     const bool is_pipe = IsPipeSegmentNode(node);
     const bool is_from = node->node_kind() == AST_FROM_QUERY;
     const bool is_subpipeline = (kind == "Subpipeline");
-    if (!is_pipe && !is_from && !is_subpipeline) return std::string();
+    // The box formatter annotates the Query node both for the top-level query
+    // (its q-whole region) and for each subquery (its parenthesised body), so a
+    // Query node gives the "Query"/"... subquery" hierarchy layer like the input
+    // pane.
+    const bool is_query = node->node_kind() == AST_QUERY;
+    // The statement is the outermost hierarchy layer (e.g. "QueryStatement").
+    const bool is_stmt = absl::EndsWith(kind, "Statement");
+    if (!is_pipe && !is_from && !is_subpipeline && !is_query && !is_stmt) {
+      return std::string();
+    }
 
     std::string ref;
     if (auto it = node_to_rid.find(node); it != node_to_rid.end()) {
@@ -1913,8 +1922,20 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
     }
 
     std::string title;
-    if (is_subpipeline) {
+    if (is_stmt) {
+      title = std::string(kind);
+    } else if (is_subpipeline) {
       title = "Subpipeline";
+    } else if (is_query) {
+      // A subquery (its parent is a (table) subquery) vs. the top-level query.
+      const ASTNode* p = node->parent();
+      if (p != nullptr && p->node_kind() == AST_EXPRESSION_SUBQUERY) {
+        title = "Expression subquery";
+      } else if (p != nullptr && p->node_kind() == AST_TABLE_SUBQUERY) {
+        title = "Table subquery";
+      } else {
+        title = "Query with pipe operators";
+      }
     } else if (is_pipe) {
       title = SqlBuilderPipeTitle(node);
     } else {

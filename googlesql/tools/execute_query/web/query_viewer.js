@@ -487,8 +487,12 @@
   function collectScanHierarchy(box, root) {
     var items = [], el = box;
     while (el && root.contains(el)) {
+      // `.rscan-query` is a nested subquery/subpipeline wrapper carrying a
+      // "Subquery"/"Subpipeline" head: include it so it shows as a hierarchy
+      // layer, matching the input pane's "Expression subquery" step.
       if (el.classList && (el.classList.contains('rscan') ||
-                           el.classList.contains('rscan-stmt'))) {
+                           el.classList.contains('rscan-stmt') ||
+                           el.classList.contains('rscan-query'))) {
         var head = directChild(el, 'rscan-head');
         var body = directChildren(el, 'rscan-field').map(function (f) {
           return f.innerHTML;

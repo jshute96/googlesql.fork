@@ -934,6 +934,13 @@ html[data-visualize] .right-section {
 .rscan-head {
   font-weight: bold;
 }
+/* The "Subquery"/"Subpipeline" label heading a nested query box: a muted,
+   non-bold marker that names the layer without competing with the scan names. */
+.rscan-sub-label {
+  font-weight: normal;
+  font-style: italic;
+  color: #888;
+}
 .rscan-field {
   color: #333;
 }
