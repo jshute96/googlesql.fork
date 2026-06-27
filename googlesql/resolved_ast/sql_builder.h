@@ -303,15 +303,53 @@ class SQLBuilder : public ResolvedASTVisitor {
   // `options_.record_pipe_operator_markers` is set, each pipe operator emitted
   // via AppendPipeOperator is prefixed in the generated SQL with an inline
   // marker comment "/*S<n>*/", where <n> indexes this table back to the
-  // ResolvedScan that produced the operator.  Because the marker is embedded in
+  // ResolvedNode that produced the operator.  Because the marker is embedded in
   // the operator's own SQL text, it ends up in the operator's exact final
   // textual position (surviving concatenation, range-variable wrapping, and
   // parenthesized nesting), giving the execute_query visualizer an exact,
-  // hierarchy-safe operator -> ResolvedScan mapping with no positional guessing.
+  // hierarchy-safe operator -> ResolvedNode mapping with no positional guessing.
   // The caller strips the markers before display.  Empty when not recording.
-  const std::vector<const ResolvedScan*>& pipe_operator_markers() const {
-    return marker_scans_;
+  //
+  // Prefer GetSqlWithProvenance() below, which returns clean SQL plus the
+  // resolved byte-offset -> node spans directly (no marker syntax to parse).
+  // This raw accessor is retained for callers that segment on the markers in
+  // place (the visualizer's text-fallback renderer).  The vector is typed over
+  // ResolvedNode (not ResolvedScan) so non-scan nodes can be marked too.
+  const std::vector<const ResolvedNode*>& pipe_operator_markers() const {
+    return marker_nodes_;
   }
+
+  // A run of generated SQL attributed to the ResolvedNode that produced it.
+  // `byte_offset` is the start offset, in the clean (marker-free) SQL, of the
+  // text the node emitted.
+  struct ProvenanceSpan {
+    int byte_offset;
+    const ResolvedNode* node;
+  };
+
+  // The generated SQL together with its provenance: the clean SQL string (no
+  // markers) and the byte-offset -> ResolvedNode spans, in emission order.
+  // This is the "provenance text" view of the output -- equivalent in spirit to
+  // a rope of (text, node) segments: a caller gets clean SQL and an exact
+  // node-to-text-position mapping, with no marker syntax to strip or parse.
+  // `marked_sql` is the same SQL still carrying the internal "/*S<n>*/" markers,
+  // for callers that segment on them in place.
+  //
+  // Internally the byte positions are still tracked by the inline markers above
+  // (they ride along through SQL assembly automatically); collapsing them into
+  // spans happens here at the API boundary.  A future change could replace the
+  // inline carrier with a true segmented buffer without changing this contract.
+  struct ProvenanceText {
+    std::string sql;
+    std::string marked_sql;
+    std::vector<ProvenanceSpan> spans;
+  };
+
+  // Returns the generated SQL with provenance (see ProvenanceText).  Requires
+  // options_.record_pipe_operator_markers; otherwise `spans` is empty and `sql`
+  // == `marked_sql` == the plain generated SQL.  Like GetSql(), it must be
+  // called at most once (it finalizes the visited tree).
+  absl::StatusOr<ProvenanceText> GetSqlWithProvenance();
 
   // This deprecated version can crash in some cases.  Use GetSql() instead.
   // This one also returns successfully with "" if no nodes have been visited,
@@ -1572,12 +1610,15 @@ class SQLBuilder : public ResolvedASTVisitor {
   // ProcessNode.  When recording is enabled, MakeScanMarker allocates a marker
   // index for a scan and AppendPipeOperator stamps it into the operator's SQL.
   const ResolvedScan* current_scan_ = nullptr;
-  std::vector<const ResolvedScan*> marker_scans_;
+  // Indexed by marker number; entry <n> is the ResolvedNode the "/*S<n>*/"
+  // marker attributes its text to.  Typed over ResolvedNode (not ResolvedScan)
+  // so non-scan nodes can be marked; all current call sites pass scans.
+  std::vector<const ResolvedNode*> marker_nodes_;
 
-  // Allocates a marker for `scan` and returns the inline marker comment
+  // Allocates a marker for `node` and returns the inline marker comment
   // ("/*S<n>*/") to embed at the head of its pipe operator's SQL, or "" when
-  // recording is disabled or `scan` is null.  See pipe_operator_markers().
-  std::string MakeScanMarker(const ResolvedScan* scan);
+  // recording is disabled or `node` is null.  See pipe_operator_markers().
+  std::string MakeScanMarker(const ResolvedNode* node);
 
   // Builds the comma-separated subpipeline list shared by the pipe FORK and TEE
   // operators (e.g. "( |> SELECT key ), ( |> WHERE true )"). Each subpipeline is

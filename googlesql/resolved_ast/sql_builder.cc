@@ -12011,13 +12011,58 @@ SQLBuilder::MakePipeQueryExpression(absl::string_view pipe_sql) {
   return query_expression;
 }
 
-std::string SQLBuilder::MakeScanMarker(const ResolvedScan* scan) {
-  if (!options_.record_pipe_operator_markers || scan == nullptr) {
+std::string SQLBuilder::MakeScanMarker(const ResolvedNode* node) {
+  if (!options_.record_pipe_operator_markers || node == nullptr) {
     return "";
   }
-  const int index = static_cast<int>(marker_scans_.size());
-  marker_scans_.push_back(scan);
+  const int index = static_cast<int>(marker_nodes_.size());
+  marker_nodes_.push_back(node);
   return absl::StrCat("/*S", index, "*/");
+}
+
+// Removes every "/*S<n>*/" marker from `sql`, returning the clean SQL and, in
+// `offsets`, the byte offset in the clean SQL where each marker <n> sat
+// (indexed by marker number; markers not present stay -1).
+static std::string StripMarkersWithOffsets(absl::string_view sql,
+                                           std::vector<int>* offsets) {
+  std::string out;
+  out.reserve(sql.size());
+  for (size_t i = 0; i < sql.size(); ++i) {
+    if (sql[i] == '/' && i + 3 < sql.size() && sql[i + 1] == '*' &&
+        sql[i + 2] == 'S' && absl::ascii_isdigit(sql[i + 3])) {
+      size_t j = i + 3;
+      int idx = 0;
+      while (j < sql.size() && absl::ascii_isdigit(sql[j])) {
+        idx = idx * 10 + (sql[j] - '0');
+        ++j;
+      }
+      if (j + 1 < sql.size() && sql[j] == '*' && sql[j + 1] == '/') {
+        if (idx >= static_cast<int>(offsets->size())) {
+          offsets->resize(idx + 1, -1);
+        }
+        (*offsets)[idx] = static_cast<int>(out.size());
+        i = j + 1;  // skip the marker entirely
+        continue;
+      }
+    }
+    out += sql[i];
+  }
+  return out;
+}
+
+absl::StatusOr<SQLBuilder::ProvenanceText> SQLBuilder::GetSqlWithProvenance() {
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string marked, GetSql());
+  ProvenanceText out;
+  out.marked_sql = marked;
+  std::vector<int> offsets;  // marker index -> offset in clean sql (or -1)
+  out.sql = StripMarkersWithOffsets(marked, &offsets);
+  const int n = std::min<int>(offsets.size(), marker_nodes_.size());
+  for (int i = 0; i < n; ++i) {
+    if (offsets[i] >= 0 && marker_nodes_[i] != nullptr) {
+      out.spans.push_back(ProvenanceSpan{offsets[i], marker_nodes_[i]});
+    }
+  }
+  return out;
 }
 
 absl::StatusOr<std::unique_ptr<QueryExpression>> SQLBuilder::AppendPipeOperator(

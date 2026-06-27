@@ -237,23 +237,37 @@ plumbing with the explicit identity space + relation model. The id space is
 still *populated* only from scans and still lives in pointer-keyed maps over the
 single shared analysis (so it does not yet survive rewrites).
 
-### Roadmap: token-range provenance and rewrite-stable ids
+### ProvenanceText: clean SQL + (byte-offset → node) spans (implemented)
 
-Three further tiers turn this into a fully general, rewrite-stable mapping. None
-are implemented yet; they are scoped here as the next phases.
+The SQLBuilder now exposes its node→text mapping as a clean **provenance** API
+instead of making the tool parse marker comments. `SQLBuilder::ProvenanceText`
+holds `{sql, marked_sql, spans}` where `sql` is the clean (marker-free) SQL and
+`spans` is a list of `{byte_offset, const ResolvedNode*}` in emission order;
+`GetSqlWithProvenance()` produces it (gated on `record_pipe_operator_markers`).
+The visualizer's primary `RenderSqlBuilderBoxHtml` re-parses `prov.sql` and, for
+each span, assigns it to the smallest covering AST' node
+(`FindSmallestSegmentNode`) → `node_ids.Lookup(span.node)` → `data-corresp`.
+The tool no longer strips markers or threads a `marker_to_rid` vector through the
+primary path (the text-fallback segmenter still segments `marked_sql` in place).
 
-1. **Token-range (rope) provenance in SQLBuilder.** Today the SQLBuilder rides an
-   inline `/*S<n>*/` comment through string assembly and the tool re-parses it
-   out. Replace the raw `std::string` accumulation with a segmented buffer
-   (`ProvenanceText`) that tags emitted byte ranges with the responsible
-   `ResolvedNode` via a current-node stack at one append chokepoint. Output
-   becomes *clean SQL + a `(byte-span → ResolvedNode)` list* — no sentinels in
-   the SQL, no marker-stripping, byte ranges that line up exactly with the
-   re-parsed AST', and coverage of **any** node that emits text (not just pipe
-   operators). The tool then assigns each span to the smallest covering AST'
-   node (today's `FindSmallestSegmentNode`, generalized).
+The marker storage is now typed over `const ResolvedNode*` (not `ResolvedScan*`),
+so non-scan nodes can be marked too; all current call sites still pass scans.
 
-2. **Intrinsic, rewrite-stable node ids.** Rewriters are copy-based
+Internally the byte positions are still carried by the inline `/*S<n>*/` markers
+(they ride along through SQL assembly for free) and collapsed into spans at the
+API boundary. This deliberately avoids rewriting SQLBuilder's core `std::string`
+assembly into a true segmented rope — that path is shared by every SQLBuilder
+caller (`UnanalyzeQuery`, the analyzer golden-test round-trips), so a blind core
+rewrite is high-risk; the recording-off path stays byte-identical. A future
+change could swap the inline carrier for a real rope without changing the
+`ProvenanceText` contract or the visualizer.
+
+### Roadmap: rewrite-stable ids
+
+Two further tiers turn this into a fully general, rewrite-stable mapping. Not
+implemented yet; scoped here as the next phases.
+
+1. **Intrinsic, rewrite-stable node ids.** Rewriters are copy-based
    (`ResolvedASTRewriteVisitor`/`ResolvedASTDeepCopyVisitor`), so pointer
    identity never survives a rewrite. To keep ids stable across rewrites:
    - *Tier 1 (automatic, common case):* propagate the id at the copy visitor's
@@ -269,7 +283,7 @@ are implemented yet; they are scoped here as the next phases.
    - *Tier 3 (fallback):* structural diff (`node_kind` + column-id signature +
      structural hash) proposes correspondences where Tiers 1–2 leave a gap.
 
-3. **Resolved AST rewriter debugger.** With Tier-1 id propagation, the old and
+2. **Resolved AST rewriter debugger.** With Tier-1 id propagation, the old and
    new trees share ids across the untouched majority, so a side-by-side diff
    keys on the id: same id + equal fields = unchanged; same id, different
    parent = moved; same id, different fields = mutated; id only in old/new =

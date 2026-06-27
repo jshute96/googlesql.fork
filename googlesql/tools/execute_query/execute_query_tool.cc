@@ -1519,26 +1519,6 @@ static SegmentMarkers ParseSegmentMarkers(absl::string_view seg) {
   return out;
 }
 
-// Removes every "/*S<n>*/" marker comment from `sql`, leaving the clean SQL that
-// is formatted and shown to the user.
-static std::string StripScanMarkers(absl::string_view sql) {
-  std::string out;
-  out.reserve(sql.size());
-  for (size_t i = 0; i < sql.size(); ++i) {
-    if (sql[i] == '/' && i + 3 < sql.size() && sql[i + 1] == '*' &&
-        sql[i + 2] == 'S' && absl::ascii_isdigit(sql[i + 3])) {
-      size_t j = i + 3;
-      while (j < sql.size() && absl::ascii_isdigit(sql[j])) ++j;
-      if (j + 1 < sql.size() && sql[j] == '*' && sql[j + 1] == '/') {
-        i = j + 1;        // skip the marker entirely
-        continue;
-      }
-    }
-    out += sql[i];
-  }
-  return out;
-}
-
 // The [inner_start, inner_end) byte range of one parenthesized pipe-subquery
 // found within a segment: the content *between* the parentheses (inner_end is
 // the index of the ')').
@@ -1776,37 +1756,6 @@ static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
   return html;
 }
 
-// Like StripScanMarkers, but also records for each marker index the byte offset
-// in the CLEAN output where the marker was removed (= where the marked operator
-// text begins).  `offsets` is indexed by marker index; entries with no marker
-// stay -1.
-static std::string StripScanMarkersWithOffsets(absl::string_view sql,
-                                               std::vector<int>* offsets) {
-  std::string out;
-  out.reserve(sql.size());
-  for (size_t i = 0; i < sql.size(); ++i) {
-    if (sql[i] == '/' && i + 3 < sql.size() && sql[i + 1] == '*' &&
-        sql[i + 2] == 'S' && absl::ascii_isdigit(sql[i + 3])) {
-      size_t j = i + 3;
-      int idx = 0;
-      while (j < sql.size() && absl::ascii_isdigit(sql[j])) {
-        idx = idx * 10 + (sql[j] - '0');
-        ++j;
-      }
-      if (j + 1 < sql.size() && sql[j] == '*' && sql[j + 1] == '/') {
-        if (idx >= static_cast<int>(offsets->size())) {
-          offsets->resize(idx + 1, -1);
-        }
-        (*offsets)[idx] = static_cast<int>(out.size());
-        i = j + 1;  // skip the marker entirely
-        continue;
-      }
-    }
-    out += sql[i];
-  }
-  return out;
-}
-
 // True if `node` is a pipe-operator segment the box formatter annotates -- a
 // real `|>` operator (kind starts with "Pipe"), excluding the internal "Pipe*"
 // sub-nodes that are not standalone operators (e.g. the JOIN LHS placeholder,
@@ -1884,35 +1833,29 @@ static std::string SqlBuilderPipeTitle(const ASTNode* node) {
 
 // Renders the SQLBuilder pane the SAME way as the input SQL pane: by re-parsing
 // the regenerated (clean) SQL and laying it out with the box formatter, so both
-// panes format identically.  Correspondence comes from the inline "/*S<n>*/"
-// markers -- each sits at a pipe operator's head, so the smallest operator node
-// containing it maps to that operator's ResolvedScan ("r<id>").  Returns an
+// panes format identically.  Correspondence comes from the SQLBuilder's
+// provenance spans (see SQLBuilder::GetSqlWithProvenance): each span's byte
+// offset sits at a pipe operator's head, so the smallest operator node
+// containing it maps to the ResolvedNode that produced it ("r<id>").  Returns an
 // error if the generated SQL doesn't re-parse, so the caller can fall back.
 static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
-    absl::string_view marked_sql, const std::vector<int>& marker_to_rid,
-    const LanguageOptions& language_options) {
-  std::vector<int> marker_offsets;
-  std::string clean_sql = StripScanMarkersWithOffsets(marked_sql,
-                                                      &marker_offsets);
-
+    absl::string_view clean_sql,
+    const std::vector<SQLBuilder::ProvenanceSpan>& spans,
+    const ResolvedNodeIds& node_ids, const LanguageOptions& language_options) {
   std::unique_ptr<ParserOutput> parser_output;
   GOOGLESQL_RETURN_IF_ERROR(ParseStatement(
       clean_sql, ParserOptions(language_options), &parser_output));
   const ASTNode* root = parser_output->statement();
 
-  // Map each marked operator node to the Resolved-AST node id(s) it corresponds
-  // to.  Several markers can resolve to the same operator node -- one scan emits
-  // more than one operator, or nested operators share a head offset -- so this
-  // is a *set* per node (a union), not last-writer-wins, and an element may
-  // therefore carry several "r<id>" cross-references.
+  // Map each provenance span's operator node to the Resolved-AST node id(s) it
+  // corresponds to.  Several spans can resolve to the same operator node -- one
+  // scan emits more than one operator, or nested operators share a head offset
+  // -- so this is a *set* per node (a union), not last-writer-wins, and an
+  // element may therefore carry several "r<id>" cross-references.
   NodeRefMarkers sql_refs("s");
-  for (size_t k = 0; k < marker_offsets.size(); ++k) {
-    if (marker_offsets[k] < 0 || k >= marker_to_rid.size() ||
-        marker_to_rid[k] < 0) {
-      continue;
-    }
-    const ASTNode* node = FindSmallestSegmentNode(root, marker_offsets[k]);
-    if (node != nullptr) sql_refs.Add(node, marker_to_rid[k]);
+  for (const SQLBuilder::ProvenanceSpan& span : spans) {
+    const ASTNode* node = FindSmallestSegmentNode(root, span.byte_offset);
+    if (node != nullptr) sql_refs.Add(node, node_ids.Lookup(span.node));
   }
 
   // Annotate each segment (a pipe operator, the initial FROM query, or a
@@ -2100,13 +2043,13 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   sql_builder_options.record_pipe_operator_markers = true;
   SQLBuilder builder(sql_builder_options);
   absl::Status sqlbuilder_status = builder.Process(*resolved);
-  std::string marked_sql;
+  SQLBuilder::ProvenanceText prov;
   if (sqlbuilder_status.ok()) {
-    absl::StatusOr<std::string> sql = builder.GetSql();
-    if (sql.ok()) {
-      marked_sql = *std::move(sql);
+    absl::StatusOr<SQLBuilder::ProvenanceText> p = builder.GetSqlWithProvenance();
+    if (p.ok()) {
+      prov = *std::move(p);
     } else {
-      sqlbuilder_status = sql.status();
+      sqlbuilder_status = p.status();
     }
   }
   if (!sqlbuilder_status.ok()) {
@@ -2116,28 +2059,26 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
     data.sqlbuilder_sql_html =
         ErrorPaneHtml("SQLBuilder error", sqlbuilder_status.message());
   } else {
-    // Translate marker indices to Resolved-AST scan ids ("r<id>"), then strip
-    // the markers and format the clean SQL for display.
-    std::vector<int> marker_to_rid(builder.pipe_operator_markers().size(), -1);
-    for (size_t i = 0; i < builder.pipe_operator_markers().size(); ++i) {
-      marker_to_rid[i] = node_ids.Lookup(builder.pipe_operator_markers()[i]);
-    }
-    std::string clean_sql = StripScanMarkers(marked_sql);
-    std::string display_sql = clean_sql;
-    if (absl::StatusOr<std::string> f = LenientFormatSql(clean_sql); f.ok()) {
+    std::string display_sql = prov.sql;
+    if (absl::StatusOr<std::string> f = LenientFormatSql(prov.sql); f.ok()) {
       display_sql = *f;
     }
     data.sqlbuilder_sql = display_sql;
     // Lay out the regenerated SQL with the same box formatter as the input pane
-    // so the two panes format identically; fall back to text-based segmentation
-    // if the generated SQL doesn't re-parse.
+    // so the two panes format identically, driven by the provenance spans; fall
+    // back to text-based marker segmentation if the generated SQL doesn't
+    // re-parse.
     if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
-            marked_sql, marker_to_rid, config.analyzer_options().language());
+            prov.sql, prov.spans, node_ids, config.analyzer_options().language());
         h.ok()) {
       data.sqlbuilder_sql_html = *std::move(h);
     } else {
+      std::vector<int> marker_to_rid(builder.pipe_operator_markers().size(), -1);
+      for (size_t i = 0; i < builder.pipe_operator_markers().size(); ++i) {
+        marker_to_rid[i] = node_ids.Lookup(builder.pipe_operator_markers()[i]);
+      }
       data.sqlbuilder_sql_html =
-          SegmentPipeSqlToHtml(marked_sql, display_sql, marker_to_rid);
+          SegmentPipeSqlToHtml(prov.marked_sql, display_sql, marker_to_rid);
     }
   }
 
@@ -2185,39 +2126,41 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
       // leaving it blank.
       SQLBuilder post_builder(sql_builder_options);
       absl::Status post_sb_status = post_builder.Process(*post);
-      std::string marked2;
+      SQLBuilder::ProvenanceText prov2;
       if (post_sb_status.ok()) {
-        absl::StatusOr<std::string> s = post_builder.GetSql();
-        if (s.ok()) {
-          marked2 = *std::move(s);
+        absl::StatusOr<SQLBuilder::ProvenanceText> p =
+            post_builder.GetSqlWithProvenance();
+        if (p.ok()) {
+          prov2 = *std::move(p);
         } else {
-          post_sb_status = s.status();
+          post_sb_status = p.status();
         }
       }
       if (!post_sb_status.ok()) {
         data.post_rewrite_sqlbuilder_sql_html =
             ErrorPaneHtml("SQLBuilder error", post_sb_status.message());
       } else {
-        std::vector<int> marker_to_rid2(
-            post_builder.pipe_operator_markers().size(), -1);
-        for (size_t i = 0; i < post_builder.pipe_operator_markers().size();
-             ++i) {
-          marker_to_rid2[i] =
-              node_ids2.Lookup(post_builder.pipe_operator_markers()[i]);
-        }
-        std::string display2 = StripScanMarkers(marked2);
-        if (absl::StatusOr<std::string> f = LenientFormatSql(display2);
+        std::string display2 = prov2.sql;
+        if (absl::StatusOr<std::string> f = LenientFormatSql(prov2.sql);
             f.ok()) {
           display2 = *f;
         }
         data.post_rewrite_sqlbuilder_sql = display2;
         if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
-                marked2, marker_to_rid2, config.analyzer_options().language());
+                prov2.sql, prov2.spans, node_ids2,
+                config.analyzer_options().language());
             h.ok()) {
           data.post_rewrite_sqlbuilder_sql_html = *std::move(h);
         } else {
+          std::vector<int> marker_to_rid2(
+              post_builder.pipe_operator_markers().size(), -1);
+          for (size_t i = 0; i < post_builder.pipe_operator_markers().size();
+               ++i) {
+            marker_to_rid2[i] =
+                node_ids2.Lookup(post_builder.pipe_operator_markers()[i]);
+          }
           data.post_rewrite_sqlbuilder_sql_html =
-              SegmentPipeSqlToHtml(marked2, display2, marker_to_rid2);
+              SegmentPipeSqlToHtml(prov2.marked_sql, display2, marker_to_rid2);
         }
       }
     }
