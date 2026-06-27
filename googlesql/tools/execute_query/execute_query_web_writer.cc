@@ -334,10 +334,8 @@ absl::Status ExecuteQueryWebWriter::ExecutedExpression(const ResolvedNode& ast,
 }
 
 void ExecuteQueryWebWriter::FlushStatement(bool at_end, std::string error_msg) {
-  // Number every statement in script order (1-based), so the full-window
-  // /visualize page can label them "Statement K" by their original position.
-  ++statement_index_;
-
+  // statement_index_ is the current statement's 1-based script position,
+  // advanced in StartStatement (see the comment there).
   if (GotResults()) {
     current_statement_params_["result"] = true;
   }

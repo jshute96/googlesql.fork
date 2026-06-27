@@ -443,6 +443,26 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentParseError) {
   EXPECT_THAT(result, HasSubstr("did not parse"));
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeStatementNumberingWithError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "SELECT 1 AS a; SELECT 2 AS b; SELECT FROM; SELECT 4 AS d;", "none",
+          "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // The third statement is a parse error but is still numbered 3, and the
+  // statements keep contiguous numbers -- an errored statement must not cause
+  // the count to skip a number.
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"1\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"2\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"3\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"4\""));
+  EXPECT_THAT(result, Not(HasSubstr("data-stmt-index=\"5\"")));
+  EXPECT_THAT(result, HasSubstr("Parse error"));
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestVisualizePostRewriteSqlBuilderError) {
   std::string result;
   EXPECT_TRUE(HandleVisualizeContent(

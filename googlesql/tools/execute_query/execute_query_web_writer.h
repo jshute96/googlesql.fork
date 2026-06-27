@@ -174,6 +174,11 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
     if (!is_first) {
       FlushStatement(/*at_end=*/false);
     }
+    // Number statements here (once per statement, in script order) rather than
+    // in FlushStatement: an errored statement is flushed both explicitly (with
+    // its error) and again by the next StartStatement's empty no-op flush, so
+    // counting in FlushStatement would skip a number after every error.
+    ++statement_index_;
     return absl::OkStatus();
   }
 
