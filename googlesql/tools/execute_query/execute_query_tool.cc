@@ -1389,6 +1389,28 @@ static std::string PreBlockHtml(absl::string_view text) {
                       "</pre>");
 }
 
+// HTML for a visualizer pane that couldn't be produced: a labeled error block
+// shown in place of the pane's normal content, so a failing step (parse,
+// analysis, SQLBuilder) is visible rather than leaving the pane blank.
+static std::string ErrorPaneHtml(absl::string_view title,
+                                 absl::string_view error) {
+  return absl::StrCat(
+      "<div class=\"viz-pane-error\"><div class=\"viz-pane-error-title\">",
+      EscapeHtmlText(title), "</div><pre class=\"viz-pre\">",
+      EscapeHtmlText(error), "</pre></div>");
+}
+
+// Box-formats the input SQL with no per-node resolver info (NameLists). Used for
+// the Input SQL pane when analysis failed: we still have the parse tree to lay
+// out, just no resolver annotations to attach.
+static absl::StatusOr<std::string> RenderBoxHtmlNoInfo(
+    absl::string_view sql, const ASTNode* ast,
+    const ExecuteQueryConfig& config) {
+  BoxAnnotator annotate = [](const ASTNode*) { return std::string(); };
+  return SqlToBoxHtml(sql, ast, config.analyzer_options().language(),
+                      /*width=*/80, annotate, /*break_pipe_operators=*/true);
+}
+
 // Splits `sql` into top-level pipe-operator segment byte ranges: a segment runs
 // from one depth-0 "|>" (or the start of the string) up to the next.  Splitting
 // is parenthesis/quote-aware -- a "|>" inside parentheses (join subqueries,
@@ -1984,6 +2006,26 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
 // itself (rewriters disabled, parse locations recorded) so the Resolved AST
 // stays close to the input pipe structure, runs the SQLBuilder in pipe mode,
 // then re-analyzes the regenerated SQL so its NameLists can be shown too.
+// Emits a visualizer block for a statement that failed to parse: the parse
+// error goes in the Input SQL pane (parsing is the step that failed), and the
+// downstream panes note that they are unavailable, rather than showing nothing.
+static absl::Status VisualizeParseError(absl::string_view sql,
+                                        const absl::Status& parse_status,
+                                        ExecuteQueryWriter& writer) {
+  VisualizationData data;
+  data.input_sql = std::string(sql);
+  data.input_sql_html = ErrorPaneHtml("Parse error", parse_status.message());
+  data.resolved_ast_text =
+      absl::StrCat("Parse error: ", parse_status.message());
+  data.resolved_ast_html = ErrorPaneHtml(
+      "Unavailable",
+      "Resolved AST is unavailable because the query did not parse.");
+  data.sqlbuilder_sql_html = ErrorPaneHtml(
+      "Unavailable",
+      "SQLBuilder is unavailable because the query did not parse.");
+  return writer.visualized(data);
+}
+
 static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
                                    ExecuteQueryConfig& config,
                                    ExecuteQueryWriter& writer) {
@@ -2001,15 +2043,34 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   viz_options.set_enabled_rewrites({});
   viz_options.set_parse_location_record_type(
       PARSE_LOCATION_RECORD_FULL_NODE_SCOPE);
-  std::unique_ptr<const AnalyzerOutput> analyzer_output;
-  GOOGLESQL_RETURN_IF_ERROR(AnalyzeStatementFromParserAST(
-      *ast->GetAsOrDie<ASTStatement>(), viz_options, sql, config.catalog(),
-      config.type_factory(), &analyzer_output));
-  const ResolvedNode* resolved = analyzer_output->resolved_node();
-  GOOGLESQL_RET_CHECK_NE(resolved, nullptr);
-
   VisualizationData data;
   data.input_sql = std::string(sql);
+
+  std::unique_ptr<const AnalyzerOutput> analyzer_output;
+  if (absl::Status analyze_status = AnalyzeStatementFromParserAST(
+          *ast->GetAsOrDie<ASTStatement>(), viz_options, sql, config.catalog(),
+          config.type_factory(), &analyzer_output);
+      !analyze_status.ok()) {
+    // Analysis failed: still show the parse tree in the Input SQL pane (without
+    // resolver NameList info), and surface the analysis error in the other two
+    // panes instead of leaving them blank.
+    if (absl::StatusOr<std::string> h = RenderBoxHtmlNoInfo(sql, ast, config);
+        h.ok()) {
+      data.input_sql_html = *std::move(h);
+    } else {
+      data.input_sql_html = PreBlockHtml(sql);
+    }
+    data.resolved_ast_text =
+        absl::StrCat("Analysis error: ", analyze_status.message());
+    data.resolved_ast_html =
+        ErrorPaneHtml("Analysis error", analyze_status.message());
+    data.sqlbuilder_sql_html = ErrorPaneHtml(
+        "Unavailable",
+        "SQLBuilder cannot run because analysis failed (see Resolved AST).");
+    return writer.visualized(data);
+  }
+  const ResolvedNode* resolved = analyzer_output->resolved_node();
+  GOOGLESQL_RET_CHECK_NE(resolved, nullptr);
 
   // --- Resolved AST pane: structured linear emitter (one box per
   // ResolvedScan, alternating colors, nested query blocks, data-scan-id).  Also
@@ -2045,32 +2106,47 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   sql_builder_options.target_syntax_mode = SQLBuilder::TargetSyntaxMode::kPipe;
   sql_builder_options.record_pipe_operator_markers = true;
   SQLBuilder builder(sql_builder_options);
-  GOOGLESQL_RETURN_IF_ERROR(builder.Process(*resolved));
-  GOOGLESQL_ASSIGN_OR_RETURN(std::string marked_sql, builder.GetSql());
-
-  // Translate marker indices to Resolved-AST scan ids ("r<id>"), then strip the
-  // markers and format the clean SQL for display.
-  std::vector<int> marker_to_rid(builder.pipe_operator_markers().size(), -1);
-  for (size_t i = 0; i < builder.pipe_operator_markers().size(); ++i) {
-    auto it = scan_ids.find(builder.pipe_operator_markers()[i]);
-    if (it != scan_ids.end()) marker_to_rid[i] = it->second;
+  absl::Status sqlbuilder_status = builder.Process(*resolved);
+  std::string marked_sql;
+  if (sqlbuilder_status.ok()) {
+    absl::StatusOr<std::string> sql = builder.GetSql();
+    if (sql.ok()) {
+      marked_sql = *std::move(sql);
+    } else {
+      sqlbuilder_status = sql.status();
+    }
   }
-  std::string clean_sql = StripScanMarkers(marked_sql);
-  std::string display_sql = clean_sql;
-  if (absl::StatusOr<std::string> f = LenientFormatSql(clean_sql); f.ok()) {
-    display_sql = *f;
-  }
-  data.sqlbuilder_sql = display_sql;
-  // Lay out the regenerated SQL with the same box formatter as the input pane so
-  // the two panes format identically; fall back to text-based segmentation if
-  // the generated SQL doesn't re-parse.
-  if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
-          marked_sql, marker_to_rid, config.analyzer_options().language());
-      h.ok()) {
-    data.sqlbuilder_sql_html = *std::move(h);
-  } else {
+  if (!sqlbuilder_status.ok()) {
+    // SQLBuilder failed to regenerate SQL from the Resolved AST: show the error
+    // in the SQLBuilder pane rather than leaving it blank. The Input SQL and
+    // Resolved AST panes above are unaffected.
     data.sqlbuilder_sql_html =
-        SegmentPipeSqlToHtml(marked_sql, display_sql, marker_to_rid);
+        ErrorPaneHtml("SQLBuilder error", sqlbuilder_status.message());
+  } else {
+    // Translate marker indices to Resolved-AST scan ids ("r<id>"), then strip
+    // the markers and format the clean SQL for display.
+    std::vector<int> marker_to_rid(builder.pipe_operator_markers().size(), -1);
+    for (size_t i = 0; i < builder.pipe_operator_markers().size(); ++i) {
+      auto it = scan_ids.find(builder.pipe_operator_markers()[i]);
+      if (it != scan_ids.end()) marker_to_rid[i] = it->second;
+    }
+    std::string clean_sql = StripScanMarkers(marked_sql);
+    std::string display_sql = clean_sql;
+    if (absl::StatusOr<std::string> f = LenientFormatSql(clean_sql); f.ok()) {
+      display_sql = *f;
+    }
+    data.sqlbuilder_sql = display_sql;
+    // Lay out the regenerated SQL with the same box formatter as the input pane
+    // so the two panes format identically; fall back to text-based segmentation
+    // if the generated SQL doesn't re-parse.
+    if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
+            marked_sql, marker_to_rid, config.analyzer_options().language());
+        h.ok()) {
+      data.sqlbuilder_sql_html = *std::move(h);
+    } else {
+      data.sqlbuilder_sql_html =
+          SegmentPipeSqlToHtml(marked_sql, display_sql, marker_to_rid);
+    }
   }
 
   if (data.input_sql_html.empty()) {
@@ -3244,11 +3320,17 @@ static absl::Status ExecuteOneQuery(absl::string_view script,
   absl::StatusOr<const ASTNode*> ast = ParseSql(
       script, config, &start_location, at_end_of_input, &parser_output);
   if (!ast.ok()) {
-    return MaybeUpdateErrorFromPayload(
+    absl::Status parse_status = MaybeUpdateErrorFromPayload(
         ErrorMessageOptions{
             .mode = ErrorMessageMode::ERROR_MESSAGE_MULTI_LINE_WITH_CARET,
             .attach_error_location_payload = false},
         script, ast.status());
+    // In visualize mode, show the parse error in the panes (the top-level error
+    // block is suppressed when panes are produced) rather than nothing.
+    if (config.has_tool_mode(ToolMode::kVisualize)) {
+      VisualizeParseError(script, parse_status, writer).IgnoreError();
+    }
+    return parse_status;
   }
 
   if (config.has_tool_mode(ToolMode::kParse) ||

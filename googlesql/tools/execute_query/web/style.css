@@ -888,6 +888,21 @@ html[data-visualize-page] .viz-block-title {
   padding: 1.5em;
   color: #555;
 }
+
+/* A visualizer pane whose step (parse / analysis / SQLBuilder) failed: shown in
+   place of that pane's normal content. */
+.viz-pane-error {
+  padding: 4px 2px;
+}
+.viz-pane-error-title {
+  font-weight: bold;
+  color: #c0392b;
+  margin-bottom: 4px;
+}
+.viz-pane-error .viz-pre {
+  white-space: pre-wrap;
+  color: #333;
+}
 .visualize-error {
   padding: 1em;
 }

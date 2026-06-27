@@ -321,11 +321,13 @@ bool ExecuteQueryWebHandler::HandleVisualizeContent(
   template_params["has_viz"] = has_viz;
   template_params["viz_statements"] = std::move(viz_statements);
   // In query mode, per-statement analysis errors are delivered to the writer
-  // rather than via ExecuteQuery's return status, so consult both.
+  // rather than via ExecuteQuery's return status, so consult both. Only show the
+  // top-level error block when no panes were produced: when the visualizer did
+  // render panes, the failing step's error is already shown in its own pane.
   if (error_msg.empty()) {
     error_msg = params_writer.viz_error();
   }
-  if (!error_msg.empty()) {
+  if (!error_msg.empty() && !has_viz) {
     template_params["error"] = error_msg;
   }
 

@@ -407,7 +407,7 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentMarkers) {
   EXPECT_THAT(result, HasSubstr("[stmt 1 post=0<pre>]"));
 }
 
-TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentError) {
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentAnalysisError) {
   std::string result;
   EXPECT_TRUE(HandleVisualizeContent(
       ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
@@ -415,9 +415,32 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentError) {
                              "SELECT * FROM no_such_table_xyz", "none",
                              "MAXIMUM", "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("", "", ""), result));
-  // A failing analysis surfaces the error in place of viz blocks.
-  EXPECT_THAT(result, HasSubstr("class=\"error\""));
+  // Analysis failed: the panes are still produced. The Input SQL pane shows the
+  // parse-tree box (no NameList), and the analysis error is shown in the
+  // Resolved AST pane rather than leaving it blank.
+  EXPECT_THAT(result, HasSubstr("class=\"viz\" data-viz"));
+  EXPECT_THAT(result, HasSubstr("viz-pane-error"));
+  EXPECT_THAT(result, HasSubstr("Analysis error"));
   EXPECT_THAT(result, HasSubstr("no_such_table_xyz"));
+  // The Input SQL pane still box-formats the parse tree.
+  EXPECT_THAT(result, HasSubstr("class=\"ast ast-"));
+  // Because panes were produced, the top-level error block is suppressed.
+  EXPECT_THAT(result, Not(HasSubstr("id=\"error\"")));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentParseError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT FROM WHERE", "none", "MAXIMUM",
+                             "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // A parse failure still produces panes, with the parse error in the Input SQL
+  // pane and "unavailable" notes in the downstream panes.
+  EXPECT_THAT(result, HasSubstr("class=\"viz\" data-viz"));
+  EXPECT_THAT(result, HasSubstr("Parse error"));
+  EXPECT_THAT(result, HasSubstr("did not parse"));
 }
 
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {
