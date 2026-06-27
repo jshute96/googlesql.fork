@@ -195,6 +195,11 @@ class ResolvedNode {
     // was consumed as the pipe input is omitted from the operator's fields. If
     // false, it is shown inline as e.g. "input_scan=<pipe_input>".
     bool omit_pipe_input_scan_field = true;
+
+    // If true, the "parse_location" field is omitted from every node. The
+    // visual (HTML) renderer records parse locations for cross-pane
+    // correspondence but does not want them cluttering the displayed tree.
+    bool omit_parse_location = false;
   };
 
   // Returns a string representation of this tree and all descendants, for
@@ -510,11 +515,23 @@ class ResolvedNode {
   // Renders a single scan box's own fields: scalar fields and non-scan child
   // nodes become escaped text; scan child nodes become nested query boxes.
   // `elide` is the pipe-input scan to skip (already shown as the box above).
+  // `top_level` is set only for the enclosing statement node, whose query is the
+  // depth-0 query (the statement is transparent and does not add a nesting
+  // level); for any scan, its scan-child fields are genuine subqueries one level
+  // deeper.
   static void EmitScanFieldsHtml(const ResolvedNode* scan,
                                  const DebugStringConfig& config,
                                  const ResolvedNode* elide, int* scan_counter,
                                  std::vector<const ResolvedScan*>* scan_order,
-                                 std::string* output, int depth);
+                                 std::string* output, int depth,
+                                 bool top_level = false);
+  // Renders a contiguous run of "leaf" fields (scalars and non-scan child
+  // subtrees, i.e. no nested scans) as a single box-glyph tree fragment that
+  // matches the textual DebugString form, appended as a `<div class="rscan-
+  // tree">`.
+  static void EmitFieldsTreeHtml(
+      const std::vector<DebugStringField>& fields,
+      const DebugStringConfig& config, std::string* output);
 
   // DebugString on these call protected methods.
   friend class ResolvedComputedColumn;

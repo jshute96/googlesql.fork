@@ -131,6 +131,7 @@ std::string ResolvedNode::DebugStringHtml(
     std::vector<const ResolvedScan*>* scan_order) const {
   DebugStringConfig config;
   config.linear_mode = true;
+  config.omit_parse_location = true;
   int scan_counter = 0;
   std::string output;
   EmitNodeHtml(this, config, &scan_counter, scan_order, &output, /*depth=*/0);
@@ -156,7 +157,7 @@ void ResolvedNode::EmitNodeHtml(const ResolvedNode* node,
   absl::StrAppend(output, "<div class=\"rscan-stmt\"><div class=\"rscan-head\">",
                   HtmlEscape(node->node_kind_string()), "</div>");
   EmitScanFieldsHtml(node, config, /*elide=*/nullptr, scan_counter, scan_order,
-                     output, depth);
+                     output, depth, /*top_level=*/true);
   absl::StrAppend(output, "</div>");
 }
 
@@ -198,9 +199,23 @@ void ResolvedNode::EmitScanFieldsHtml(
     const ResolvedNode* scan, const DebugStringConfig& config,
     const ResolvedNode* elide, int* scan_counter,
     std::vector<const ResolvedScan*>* scan_order, std::string* output,
-    int depth) {
+    int depth, bool top_level) {
   std::vector<DebugStringField> fields;
   scan->CollectDebugStringFields(&fields);
+
+  // The statement's query is the depth-0 query (the statement adds no nesting
+  // level); a scan's scan-child fields are genuine subqueries one level deeper.
+  const int nested_depth = top_level ? depth : depth + 1;
+
+  // Accumulate a contiguous run of "leaf" fields (scalars and non-scan child
+  // subtrees) so they render together as one connected box-glyph tree matching
+  // the textual DebugString.  A field that introduces a nested scan (a subquery
+  // to surface as its own clickable box) flushes the pending tree first.
+  std::vector<DebugStringField> tree_fields;
+  auto flush_tree = [&]() {
+    EmitFieldsTreeHtml(tree_fields, config, output);
+    tree_fields.clear();
+  };
 
   for (const DebugStringField& field : fields) {
     // Skip the field that was consumed as this scan's pipe input (it is the
@@ -209,21 +224,55 @@ void ResolvedNode::EmitScanFieldsHtml(
         field.nodes[0] == elide) {
       continue;
     }
-    if (field.nodes.empty()) {
-      // Scalar field: "name=value" (or bare value if unnamed).
-      if (!field.value.empty() || !field.name.empty()) {
-        absl::StrAppend(output, "<div class=\"rscan-field\">");
-        if (!field.name.empty()) {
-          absl::StrAppend(output, HtmlEscape(field.name), "=");
-        }
-        absl::StrAppend(output, HtmlEscape(field.value), "</div>");
-      }
+    // Drop parse_location noise so the visual tree matches the textual
+    // DebugString form (the command-line tool doesn't record parse locations).
+    if (config.omit_parse_location && field.name == "parse_location") {
       continue;
     }
-    // Child-node field.  Scan children begin a nested query; non-scan children
-    // (expressions, computed columns, ...) are rendered as escaped text.
+
+    // Does this field introduce a nested scan (a subquery shown as its own box)?
+    bool has_scan = false;
     for (const ResolvedNode* child : field.nodes) {
-      if (child != nullptr && child->IsScan()) {
+      if (child != nullptr && (child->IsScan() || SubtreeContainsScan(child))) {
+        has_scan = true;
+        break;
+      }
+    }
+    if (!has_scan) {
+      tree_fields.push_back(field);
+      continue;
+    }
+
+    flush_tree();
+    // Child-node field with a nested scan.  Scan children begin a nested query
+    // box; non-scan children that merely contain a subquery are expanded
+    // structurally; remaining plain children render as a small tree carrying the
+    // field name.
+    std::vector<const ResolvedNode*> leaf_children;
+    for (const ResolvedNode* child : field.nodes) {
+      // A subpipeline (e.g. a `|> FORK` branch) is "like the final subquery in a
+      // ResolvedWithScan": render its pipe chain as its own nested query box so
+      // it reads -- and is selectable -- as a subquery, with the same depth-
+      // based colours and stacked, selectable pipe operators.
+      const ResolvedScan* subpipeline_scan = nullptr;
+      if (child != nullptr && child->Is<ResolvedGeneralizedQuerySubpipeline>()) {
+        const ResolvedSubpipeline* sp =
+            child->GetAs<ResolvedGeneralizedQuerySubpipeline>()->subpipeline();
+        if (sp != nullptr) subpipeline_scan = sp->scan();
+      } else if (child != nullptr && child->Is<ResolvedSubpipeline>()) {
+        subpipeline_scan = child->GetAs<ResolvedSubpipeline>()->scan();
+      }
+      if (subpipeline_scan != nullptr) {
+        absl::StrAppend(output, "<div class=\"rscan-children\">");
+        if (!field.name.empty()) {
+          absl::StrAppend(output, "<div class=\"rscan-field-name\">",
+                          HtmlEscape(field.name), "=</div>");
+        }
+        absl::StrAppend(output, "<div class=\"rscan-query\">");
+        EmitScanChainHtml(subpipeline_scan, config, scan_counter, scan_order,
+                          output, nested_depth);
+        absl::StrAppend(output, "</div></div>");
+      } else if (child != nullptr && child->IsScan()) {
         absl::StrAppend(output, "<div class=\"rscan-children\">");
         if (!field.name.empty()) {
           absl::StrAppend(output, "<div class=\"rscan-field-name\">",
@@ -232,7 +281,7 @@ void ResolvedNode::EmitScanFieldsHtml(
         absl::StrAppend(output, "<div class=\"rscan-query\">");
         // A nested scan child is a subquery: deeper nesting → next colour family.
         EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,
-                          scan_order, output, depth + 1);
+                          scan_order, output, nested_depth);
         absl::StrAppend(output, "</div></div>");
       } else if (child != nullptr && SubtreeContainsScan(child)) {
         // A non-scan child that contains a subquery (e.g. a WHERE filter
@@ -252,17 +301,83 @@ void ResolvedNode::EmitScanFieldsHtml(
                            scan_order, output, depth);
         absl::StrAppend(output, "</div>");
       } else {
-        absl::StrAppend(output, "<div class=\"rscan-field\">");
-        if (!field.name.empty()) {
-          absl::StrAppend(output, HtmlEscape(field.name), "=\n");
+        leaf_children.push_back(child);
+      }
+    }
+    if (!leaf_children.empty()) {
+      DebugStringField leaf_field = field;
+      leaf_field.nodes = std::move(leaf_children);
+      std::vector<DebugStringField> one;
+      one.push_back(std::move(leaf_field));
+      EmitFieldsTreeHtml(one, config, output);
+    }
+  }
+  flush_tree();
+}
+
+void ResolvedNode::EmitFieldsTreeHtml(
+    const std::vector<DebugStringField>& fields,
+    const DebugStringConfig& config, std::string* output) {
+  if (fields.empty()) return;
+  // Always render with Unicode box glyphs (the nicer connector lines).
+  DebugStringConfig tree_config = config;
+  tree_config.use_box_glyphs = true;
+  const BoxGlyphs& glyphs = kUnicodeBoxGlyphs;
+
+  // Build the tree text exactly as DebugStringBody lays out a node's fields
+  // (connectors, indentation, multi-line values), but rooted at this box (no
+  // outer field prefix), then HTML-escape it into a preformatted block.
+  std::string text;
+  for (const DebugStringField& field : fields) {
+    const bool is_last_field = (&field == &fields.back());
+    const absl::string_view field_connector =
+        is_last_field ? glyphs.tree_last : glyphs.tree_branch;
+    const absl::string_view field_indent =
+        is_last_field ? glyphs.tree_space : glyphs.tree_vertical;
+    const bool print_field_name = !field.name.empty();
+    const bool value_has_newlines = absl::StrContains(field.value, "\n");
+    const bool print_one_line = field.nodes.empty() && !value_has_newlines;
+
+    if (print_field_name) {
+      absl::StrAppend(&text, field_connector, field.name, "=");
+      if (print_one_line) absl::StrAppend(&text, field.value);
+      absl::StrAppend(&text, "\n");
+    } else if (print_one_line) {
+      absl::StrAppend(&text, field_connector, field.value, "\n");
+    }
+
+    if (!print_one_line) {
+      if (value_has_newlines) {
+        absl::StrAppend(&text, field_indent, "  \"\"\"\n");
+        for (absl::string_view line : absl::StrSplit(field.value, '\n')) {
+          std::string line_content = absl::StrCat(field_indent, "  ", line);
+          absl::StrAppend(&text,
+                          absl::StripTrailingAsciiWhitespace(line_content),
+                          "\n");
         }
-        absl::StrAppend(output, HtmlEscape(child == nullptr
-                                               ? "<nullptr>"
-                                               : child->DebugString()),
-                        "</div>");
+        absl::StrAppend(&text, field_indent, "  \"\"\"\n");
+      }
+      for (const ResolvedNode* child : field.nodes) {
+        const bool is_last_node = (child == field.nodes.back());
+        const absl::string_view field_name_indent =
+            print_field_name ? field_indent : absl::string_view{};
+        const absl::string_view field_value_indent =
+            (!is_last_node || (!print_field_name && !is_last_field))
+                ? glyphs.tree_vertical
+                : glyphs.tree_space;
+        const absl::string_view node_connector =
+            is_last_node ? glyphs.tree_last : glyphs.tree_branch;
+        DebugStringImpl(child, tree_config,
+                        absl::StrCat(field_name_indent, field_value_indent),
+                        absl::StrCat(field_name_indent, node_connector), &text,
+                        /*pipe_input_to_elide=*/nullptr);
       }
     }
   }
+  // Drop a single trailing newline so the box doesn't gain a blank last line.
+  if (!text.empty() && text.back() == '\n') text.pop_back();
+  absl::StrAppend(output, "<div class=\"rscan-tree\">", HtmlEscape(text),
+                  "</div>");
 }
 
 void ResolvedNode::AppendAnnotations(
@@ -363,6 +478,17 @@ void ResolvedNode::DebugStringBody(const ResolvedNode* node,
   // tree, as this makes debugging easier.
   if (node != nullptr) {
     node->CollectDebugStringFields(&fields);
+  }
+
+  // The visual renderer records parse locations for correspondence but does not
+  // want them shown; drop them from every node so the displayed tree matches the
+  // clean textual DebugString.
+  if (config.omit_parse_location) {
+    fields.erase(std::remove_if(fields.begin(), fields.end(),
+                                [](const DebugStringField& field) {
+                                  return field.name == "parse_location";
+                                }),
+                 fields.end());
   }
 
   // In linear_mode, the scan field consumed as the pipe input (which may be

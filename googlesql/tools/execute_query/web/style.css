@@ -937,6 +937,11 @@ html[data-visualize] .right-section {
 .rscan-field {
   color: #333;
 }
+/* A box-glyph tree of a scan's leaf fields (matching the textual DebugString).
+   Inherits white-space: pre from .rscan so the connector lines line up. */
+.rscan-tree {
+  color: #333;
+}
 .rscan-field-name {
   color: #555;
   font-weight: bold;
