@@ -445,6 +445,10 @@
           title: first || '(pipe operator)', body: lead, el: el,
           id: el.getAttribute('data-node-id')
         });
+      } else if (el.classList && el.classList.contains('rscan-subpipeline')) {
+        // A `|> FORK` (or similar) branch: a subpipeline step in the hierarchy,
+        // between the operators inside it and the operator that contains them.
+        items.push({ title: 'Subpipeline', body: '', el: el, id: null });
       } else if (el.classList && el.classList.contains('rscan-stmt')) {
         items.push({ title: 'SQLBuilder SQL', body: '', el: el, id: null });
       }

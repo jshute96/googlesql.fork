@@ -1631,7 +1631,19 @@ static void RenderSegmentInline(std::string& html, absl::string_view mseg,
     } else {
       absl::StrAppend(&html, EscapeHtmlText(before_paren), " (");
     }
-    absl::StrAppend(&html, "<div class=\"rscan-sub\">");
+    // A subpipeline body (e.g. a `|> FORK` branch) starts directly with a pipe
+    // operator -- there is no FROM/SELECT source -- so it reads as `(|> ...)`.
+    // Tag it so the info-box hierarchy can show a "Subpipeline" step between the
+    // enclosing operator (FORK) and the operators inside it (a genuine subquery,
+    // which starts with FROM/SELECT, is left untagged).
+    absl::string_view dinner =
+        dseg.substr(dgroups[k].inner_start,
+                    dgroups[k].inner_end - dgroups[k].inner_start);
+    const bool is_subpipeline =
+        absl::StartsWith(absl::StripLeadingAsciiWhitespace(dinner), "|>");
+    absl::StrAppend(&html, is_subpipeline
+                               ? "<div class=\"rscan-sub rscan-subpipeline\">"
+                               : "<div class=\"rscan-sub\">");
     // A nested pipe-subquery is one level deeper -> next colour family.
     RenderPipeChainHtml(
         html,
