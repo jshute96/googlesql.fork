@@ -3705,8 +3705,8 @@ absl::StatusOr<std::string> SQLBuilder::ProcessResolvedTVFScan(
     std::string first_arg = std::move(argument_list[0]);
     argument_list.erase(argument_list.begin());
     from = absl::StrCat(first_arg.substr(1, first_arg.length() - 2), " ",
-                        QueryExpression::kPipe, " CALL ", name, "(",
-                        absl::StrJoin(argument_list, ", "), ")");
+                        QueryExpression::kPipe, MakeScanMarker(node), " CALL ",
+                        name, "(", absl::StrJoin(argument_list, ", "), ")");
   } else {
     from = absl::StrCat(name, "(", absl::StrJoin(argument_list, ", "), ")");
   }
@@ -12064,7 +12064,7 @@ absl::Status SQLBuilder::VisitResolvedDescribeScan(
   // <input_scan> |> DESCRIBE
   std::string sql =
       absl::StrCat(query_expr->GetSQLQuery(TargetSyntaxMode::kPipe),
-                   QueryExpression::kPipe, "DESCRIBE");
+                   QueryExpression::kPipe, MakeScanMarker(node), "DESCRIBE");
 
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> new_query_expr,
                    MaybeWrapPipeQueryAsStandardQuery(*node, sql));
@@ -12089,9 +12089,9 @@ absl::Status SQLBuilder::VisitResolvedStaticDescribeScan(
   // arguments.  The new `|> STATIC_DESCRIBE` will recompute it when re-analyzed.
   // Construct the SQL for the pipe operator as follows:
   //   <input_scan> |> STATIC_DESCRIBE
-  std::string sql =
-      absl::StrCat(query_expr->GetSQLQuery(TargetSyntaxMode::kPipe),
-                   QueryExpression::kPipe, "STATIC_DESCRIBE");
+  std::string sql = absl::StrCat(
+      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe), QueryExpression::kPipe,
+      MakeScanMarker(node), "STATIC_DESCRIBE");
 
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> new_query_expr,
                    MaybeWrapPipeQueryAsStandardQuery(*node, sql));
@@ -12199,10 +12199,13 @@ absl::Status SQLBuilder::FinishPipeOperatorScan(const ResolvedScan* node,
                                                 absl::string_view pipe_sql,
                                                 bool is_operator_chain,
                                                 absl::string_view op_sql) {
+  // Visualizer side-channel: stamp the inline marker at this operator's head so
+  // it maps back to `node` (no-op when marker recording is disabled).
+  const std::string marker = MakeScanMarker(node);
   std::string combined =
       pipe_sql.empty()
-          ? std::string(op_sql)
-          : absl::StrCat(pipe_sql, QueryExpression::kPipe, op_sql);
+          ? absl::StrCat(marker, op_sql)
+          : absl::StrCat(pipe_sql, QueryExpression::kPipe, marker, op_sql);
 
   if (is_operator_chain) {
     // This operator is itself inside a subpipeline, so keep producing an
