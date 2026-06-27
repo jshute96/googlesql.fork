@@ -209,11 +209,11 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeCrossRefs) {
           "FROM (SELECT 1 AS x) |> WHERE x > 0 |> SELECT x", "none", "MAXIMUM",
           "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
-                            "{{#statements}}{{#result_visualized}}"
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
                             "[AST]{{{viz_resolved_ast_html}}}"
                             "[IN]{{{viz_input_sql_html}}}"
                             "[SB]{{{viz_sqlbuilder_sql_html}}}"
-                            "{{/result_visualized}}{{/statements}}"),
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
       result));
   // The Resolved AST pane emits one box per scan, each with a stable id.
   EXPECT_THAT(result, HasSubstr("class=\"rscan "));
@@ -222,12 +222,12 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeCrossRefs) {
   // to the scans they produced (input SQL <-> Resolved AST correspondence).
   EXPECT_THAT(result, HasSubstr("ni-ref"));
   EXPECT_THAT(result, HasSubstr("data-corresp=\"r"));
-  // The SQLBuilder pane is rendered as `.rscan` segment boxes too, each with its
-  // own id and a cross-reference to the scan that produced it, so the
-  // regenerated pipe operators correspond to the same scans.
+  // The SQLBuilder pane is laid out by the same box formatter as the input pane
+  // (so both panes format identically), carrying hidden `.ni-ref` markers that
+  // cross-reference each regenerated operator to the scan that produced it.
   EXPECT_THAT(result, HasSubstr("[SB]"));
   std::string sb = result.substr(result.find("[SB]"));
-  EXPECT_THAT(sb, HasSubstr("class=\"rscan "));
+  EXPECT_THAT(sb, HasSubstr("class=\"ast ast-"));
   EXPECT_THAT(sb, HasSubstr("data-node-id=\"s"));
   EXPECT_THAT(sb, HasSubstr("data-corresp=\"r"));
   EXPECT_THAT(sb, HasSubstr("|&gt; WHERE"));
@@ -246,26 +246,27 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeJoinPipeCorrespondence) {
           "|> SELECT c, s",
           "none", "MAXIMUM", "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
-                            "{{#statements}}{{#result_visualized}}"
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
                             "[SB]{{{viz_sqlbuilder_sql_html}}}"
-                            "{{/result_visualized}}{{/statements}}"),
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
       result));
   std::string sb = result.substr(result.find("[SB]"));
-  // The SQLBuilder regenerates the comma joins as a flat run of top-level
-  // segments (SELECT .. |> AS .. |> CROSS JOIN (..) |> SELECT .. |> AS ..).
-  // Correspondence is structural: each of the user's own pipe operators maps
-  // 1:1 to the scan it came from -- NOT to a random nested join scan (the bug
-  // this guards against).  The linear Resolved AST emits, in order, the source
-  // scans and join tree as r0..r7, then FilterScan r8, AggregateScan r9,
-  // OrderByScan r10 and the final ProjectScan r11.
-  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r8\">|&gt; WHERE"));
-  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r9\">|&gt; AGGREGATE"));
-  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r10\">|&gt; ORDER BY"));
-  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r11\">|&gt; SELECT c"));
-  // The whole FROM + JOIN construction maps to the *range* of every source
-  // scan, so clicking a JoinScan (r2 or r5) highlights that block and a click
-  // on the block highlights all of r0..r7 in the Resolved AST.
-  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r0 r1 r2 r3 r4 r5 r6 r7\">SELECT 1"));
+  // The SQLBuilder pane is laid out by the box formatter (like the input pane);
+  // each regenerated pipe operator carries a `.ni-ref` cross-referencing the
+  // single scan it came from.  Correspondence is per operator: the user's own
+  // pipe operators map 1:1 to FilterScan r8, AggregateScan r9, OrderByScan r10
+  // and the final ProjectScan r11 -- NOT to a random nested join scan (the bug
+  // this guards against).  The `.ni-title` is the operator's "|> KEYWORD" head.
+  EXPECT_THAT(sb, HasSubstr("class=\"ast ast-"));
+  EXPECT_THAT(
+      sb,
+      HasSubstr("data-corresp=\"r8\"></span><div class=\"ni-title\">|&gt; WHERE"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r9\"></span><div "
+                           "class=\"ni-title\">|&gt; AGGREGATE"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r10\"></span><div "
+                           "class=\"ni-title\">|&gt; ORDER BY"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r11\"></span><div "
+                           "class=\"ni-title\">|&gt; SELECT"));
 }
 
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNonQueryStatement) {
@@ -277,9 +278,9 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeNonQueryStatement) {
           "CREATE TABLE t AS SELECT 1 AS x", "none", "MAXIMUM",
           "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
-                            "{{#statements}}{{#result_visualized}}"
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
                             "[V]{{{viz_resolved_ast_html}}}"
-                            "{{/result_visualized}}{{/statements}}"),
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
       result));
   // A non-query (DDL) statement is visualized just like a query: the resolved
   // CREATE-statement block contains the query's scan boxes.
@@ -296,9 +297,9 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeScript) {
           "SELECT 111 AS aaa; SELECT 222 AS bbb;", "none", "MAXIMUM",
           "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
-                            "{{#statements}}{{#result_visualized}}"
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
                             "[V]{{{viz_input_sql_html}}}"
-                            "{{/result_visualized}}{{/statements}}"),
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
       result));
   // Each top-level statement of the script is visualized as its own block,
   // scoped to its OWN text: the first block's Input SQL pane shows aaa/111 and
@@ -320,17 +321,16 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {
           "SELECT (SELECT 1) AS a, x FROM (SELECT 1 AS x) UNION ALL SELECT 2, 3",
           "none", "MAXIMUM", "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
-                            "{{#statements}}{{#result_visualized}}"
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
                             "[SB]{{{viz_sqlbuilder_sql_html}}}"
-                            "{{/result_visualized}}{{/statements}}"),
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
       result));
   // The regenerated SQL is a UNION of two parenthesized inputs whose pipe
-  // operators are all nested, so the SQLBuilder pane is a single top-level
-  // segment: no bogus top-level split at the nested "|>".
+  // operators are all nested.  Laid out by the box formatter, the nested
+  // operators are present and carry correspondence ids.
   std::string sb = result.substr(result.find("[SB]"));
-  EXPECT_THAT(sb, HasSubstr("|&gt;"));  // nested pipe operators are present...
-  EXPECT_THAT(sb, HasSubstr("data-node-id=\"s0\""));
-  EXPECT_EQ(sb.find("data-node-id=\"s1\""), std::string::npos);  // ...but flat.
+  EXPECT_THAT(sb, HasSubstr("|&gt;"));  // nested pipe operators are present.
+  EXPECT_THAT(sb, HasSubstr("class=\"ast ast-"));
 }
 
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeGraphJson) {
@@ -342,9 +342,9 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeGraphJson) {
           "FROM (SELECT 1 AS x) |> WHERE x > 0 |> SELECT x", "none", "MAXIMUM",
           "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
-                            "{{#statements}}{{#result_visualized}}"
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
                             "[G]{{{viz_resolved_graph_json}}}"
-                            "{{/result_visualized}}{{/statements}}"),
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
       result));
   // The structured QueryGraph model is embedded as JSON, with the same scan
   // ids (r0..) the Resolved AST pane uses and a pipe-edge spine.
@@ -364,12 +364,11 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizePostRewriteSection) {
           SQLBuilder::TargetSyntaxMode::kStandard, "SELECT TYPEOF(1) AS t",
           "none", "MAXIMUM", "ALL_MINUS_DEV"),
       FakeQueryWebTemplates("{{> body}}", "",
-                            "{{#statements}}{{#result_visualized}}"
-                            "[AST]{{{viz_resolved_ast_html}}}"
-                            "{{#viz_has_post_rewrite}}"
-                            "[POST]{{{viz_post_rewrite_ast_html}}}"
-                            "{{/viz_has_post_rewrite}}"
-                            "{{/result_visualized}}{{/statements}}"),
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "{{^viz_title}}[AST]{{/viz_title}}"
+                            "{{#viz_title}}[POST]{{/viz_title}}"
+                            "{{{viz_resolved_ast_html}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
       result));
   // The rewriter expands typeof() into an if(...$is_null...) form, so the
   // pre-rewrite pane keeps typeof() and a separate post-rewrite section appears

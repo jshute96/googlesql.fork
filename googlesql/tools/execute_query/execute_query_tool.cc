@@ -1756,6 +1756,172 @@ static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
   return html;
 }
 
+// Like StripScanMarkers, but also records for each marker index the byte offset
+// in the CLEAN output where the marker was removed (= where the marked operator
+// text begins).  `offsets` is indexed by marker index; entries with no marker
+// stay -1.
+static std::string StripScanMarkersWithOffsets(absl::string_view sql,
+                                               std::vector<int>* offsets) {
+  std::string out;
+  out.reserve(sql.size());
+  for (size_t i = 0; i < sql.size(); ++i) {
+    if (sql[i] == '/' && i + 3 < sql.size() && sql[i + 1] == '*' &&
+        sql[i + 2] == 'S' && absl::ascii_isdigit(sql[i + 3])) {
+      size_t j = i + 3;
+      int idx = 0;
+      while (j < sql.size() && absl::ascii_isdigit(sql[j])) {
+        idx = idx * 10 + (sql[j] - '0');
+        ++j;
+      }
+      if (j + 1 < sql.size() && sql[j] == '*' && sql[j + 1] == '/') {
+        if (idx >= static_cast<int>(offsets->size())) {
+          offsets->resize(idx + 1, -1);
+        }
+        (*offsets)[idx] = static_cast<int>(out.size());
+        i = j + 1;  // skip the marker entirely
+        continue;
+      }
+    }
+    out += sql[i];
+  }
+  return out;
+}
+
+// Finds the smallest-range pipe-operator (or initial FROM-query) AST node whose
+// byte range contains `offset`.  Each inline marker sits at such an operator's
+// head, so this resolves a marker position to the operator node the box
+// formatter will annotate.
+static const ASTNode* FindSmallestSegmentNode(const ASTNode* node, int offset) {
+  if (node == nullptr) return nullptr;
+  const int start = node->start_location().GetByteOffset();
+  const int end = node->end_location().GetByteOffset();
+  if (offset < start || offset >= end) return nullptr;
+  // A pipe operator (the box formatter detects these the same way, by the node
+  // kind string starting with "Pipe") or the initial FROM query is a segment the
+  // box formatter annotates.
+  const ASTNode* best =
+      (absl::StartsWith(node->GetNodeKindString(), "Pipe") ||
+       node->node_kind() == AST_FROM_QUERY)
+          ? node
+          : nullptr;
+  for (int i = 0; i < node->num_children(); ++i) {
+    const ASTNode* found = FindSmallestSegmentNode(node->child(i), offset);
+    if (found != nullptr) best = found;  // deeper child = smaller range
+  }
+  return best;
+}
+
+// The "|> KEYWORD" title for a pipe operator node, for the SQLBuilder pane's
+// info-box hierarchy.  Mirrors PipeOperatorName/PipeOperatorTitle in
+// analyzer/resolver_query.cc (the input pane's titles); keep the two in sync.
+static std::string SqlBuilderPipeTitle(const ASTNode* node) {
+  switch (node->node_kind()) {
+    case AST_PIPE_JOIN: return "|> JOIN";
+    case AST_PIPE_CALL: return "|> CALL";
+    case AST_PIPE_SELECT: return "|> SELECT";
+    case AST_PIPE_AGGREGATE: return "|> AGGREGATE";
+    case AST_PIPE_DROP: return "|> DROP";
+    case AST_PIPE_SET: return "|> SET";
+    case AST_PIPE_WHERE: return "|> WHERE";
+    case AST_PIPE_LIMIT_OFFSET: return "|> LIMIT";
+    case AST_PIPE_ORDER_BY: return "|> ORDER BY";
+    case AST_PIPE_TABLESAMPLE: return "|> TABLESAMPLE";
+    case AST_PIPE_STATIC_DESCRIBE: return "|> STATIC_DESCRIBE";
+    case AST_PIPE_ASSERT: return "|> ASSERT";
+    case AST_PIPE_EXTEND: return "|> EXTEND";
+    case AST_PIPE_AS: return "|> AS";
+    case AST_PIPE_DISTINCT: return "|> DISTINCT";
+    case AST_PIPE_WINDOW: return "|> WINDOW";
+    case AST_PIPE_RENAME: return "|> RENAME";
+    case AST_PIPE_SET_OPERATION: return "|> (set operation)";
+    case AST_PIPE_FORK: return "|> FORK";
+    case AST_PIPE_TEE: return "|> TEE";
+    case AST_PIPE_IF: return "|> IF";
+    case AST_PIPE_MATCH_RECOGNIZE: return "|> MATCH_RECOGNIZE";
+    case AST_PIPE_LOG: return "|> LOG";
+    case AST_PIPE_DESCRIBE: return "|> DESCRIBE";
+    case AST_PIPE_PIVOT: return "|> PIVOT";
+    case AST_PIPE_UNPIVOT: return "|> UNPIVOT";
+    case AST_PIPE_WITH: return "|> WITH";
+    case AST_PIPE_EXPORT_DATA: return "|> EXPORT DATA";
+    case AST_PIPE_CREATE_TABLE: return "|> CREATE TABLE";
+    case AST_PIPE_INSERT: return "|> INSERT";
+    default: return absl::StrCat("|> ", node->GetNodeKindString());
+  }
+}
+
+// Renders the SQLBuilder pane the SAME way as the input SQL pane: by re-parsing
+// the regenerated (clean) SQL and laying it out with the box formatter, so both
+// panes format identically.  Correspondence comes from the inline "/*S<n>*/"
+// markers -- each sits at a pipe operator's head, so the smallest operator node
+// containing it maps to that operator's ResolvedScan ("r<id>").  Returns an
+// error if the generated SQL doesn't re-parse, so the caller can fall back.
+static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
+    absl::string_view marked_sql, const std::vector<int>& marker_to_rid,
+    const LanguageOptions& language_options) {
+  std::vector<int> marker_offsets;
+  std::string clean_sql = StripScanMarkersWithOffsets(marked_sql,
+                                                      &marker_offsets);
+
+  std::unique_ptr<ParserOutput> parser_output;
+  GOOGLESQL_RETURN_IF_ERROR(ParseStatement(
+      clean_sql, ParserOptions(language_options), &parser_output));
+  const ASTNode* root = parser_output->statement();
+
+  // Map each marked operator node to its Resolved-AST scan id.
+  absl::flat_hash_map<const ASTNode*, int> node_to_rid;
+  for (size_t k = 0; k < marker_offsets.size(); ++k) {
+    if (marker_offsets[k] < 0 || k >= marker_to_rid.size() ||
+        marker_to_rid[k] < 0) {
+      continue;
+    }
+    const ASTNode* node = FindSmallestSegmentNode(root, marker_offsets[k]);
+    if (node != nullptr) node_to_rid[node] = marker_to_rid[k];
+  }
+
+  // Annotate each segment (a pipe operator, the initial FROM query, or a
+  // subpipeline) with a title for the info-box hierarchy -- mirroring the input
+  // pane -- plus, where the operator maps to a ResolvedScan, a hidden `.ni-ref`
+  // carrying its own id ("s<n>") and a cross-reference ("r<id>") for the
+  // cross-pane highlight (the box formatter wraps the box, so we can't set an
+  // attribute on it directly).
+  int s_counter = 0;
+  BoxAnnotator annotate = [&node_to_rid, &s_counter,
+                           clean_sql](const ASTNode* node) -> std::string {
+    const absl::string_view kind = node->GetNodeKindString();
+    const bool is_pipe = absl::StartsWith(kind, "Pipe");
+    const bool is_from = node->node_kind() == AST_FROM_QUERY;
+    const bool is_subpipeline = (kind == "Subpipeline");
+    if (!is_pipe && !is_from && !is_subpipeline) return std::string();
+
+    std::string ref;
+    if (auto it = node_to_rid.find(node); it != node_to_rid.end()) {
+      ref = absl::StrCat("<span class=\"ni-ref\" data-node-id=\"s", s_counter++,
+                         "\" data-corresp=\"r", it->second, "\"></span>");
+    }
+
+    std::string title;
+    if (is_subpipeline) {
+      title = "Subpipeline";
+    } else if (is_pipe) {
+      title = SqlBuilderPipeTitle(node);
+    } else {
+      // FROM query: its first line ("FROM <table>").
+      const int start = node->start_location().GetByteOffset();
+      const int end = node->end_location().GetByteOffset();
+      absl::string_view t =
+          absl::string_view(clean_sql).substr(start, end - start);
+      title = std::string(
+          absl::StripAsciiWhitespace(t.substr(0, t.find('\n'))));
+      if (title.size() > 60) title = absl::StrCat(title.substr(0, 57), "...");
+    }
+    return absl::StrCat(ref, "<div class=\"ni-title\">", EscapeHtmlText(title),
+                        "</div><div class=\"ni-body\"></div>");
+  };
+  return SqlToBoxHtml(clean_sql, root, language_options, /*width=*/80, annotate,
+                      /*break_pipe_operators=*/true);
+}
+
 // Builds the "visualize" output: the input SQL, the Resolved AST (linear pipe
 // form), and the SQLBuilder-regenerated SQL (pipe syntax).  Analyzes the query
 // itself (rewriters disabled, parse locations recorded) so the Resolved AST
@@ -1838,8 +2004,17 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
     display_sql = *f;
   }
   data.sqlbuilder_sql = display_sql;
-  data.sqlbuilder_sql_html =
-      SegmentPipeSqlToHtml(marked_sql, display_sql, marker_to_rid);
+  // Lay out the regenerated SQL with the same box formatter as the input pane so
+  // the two panes format identically; fall back to text-based segmentation if
+  // the generated SQL doesn't re-parse.
+  if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
+          marked_sql, marker_to_rid, config.analyzer_options().language());
+      h.ok()) {
+    data.sqlbuilder_sql_html = *std::move(h);
+  } else {
+    data.sqlbuilder_sql_html =
+        SegmentPipeSqlToHtml(marked_sql, display_sql, marker_to_rid);
+  }
 
   if (data.input_sql_html.empty()) {
     data.input_sql_html = PreBlockHtml(sql);
@@ -1899,8 +2074,15 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
             display2 = *f;
           }
           data.post_rewrite_sqlbuilder_sql = display2;
-          data.post_rewrite_sqlbuilder_sql_html =
-              SegmentPipeSqlToHtml(marked2, display2, marker_to_rid2);
+          if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
+                  marked2, marker_to_rid2,
+                  config.analyzer_options().language());
+              h.ok()) {
+            data.post_rewrite_sqlbuilder_sql_html = *std::move(h);
+          } else {
+            data.post_rewrite_sqlbuilder_sql_html =
+                SegmentPipeSqlToHtml(marked2, display2, marker_to_rid2);
+          }
         }
       }
     }
