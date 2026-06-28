@@ -424,6 +424,10 @@ class Builder {
     bool flatten_query = false;
     int clause_cont = kDefaultIndent;
     int subquery_depth = 0;  // nesting depth of enclosing subqueries
+    // True while building a table-name path (the parent table reference decides
+    // this), so BuildInner does not also region it as a column-like expression
+    // -- the table reference supplies its own "table" region.
+    bool in_table_name = false;
   };
 
   DocPtr Build(const ASTNode* node, Ctx ctx, DocPtr trailer = nullptr) {
@@ -744,15 +748,28 @@ class Builder {
 
   DocPtr BuildInner(const ASTNode* node, const std::string& kind, Ctx ctx) {
     DocPtr inner = BuildLayout(node, kind, ctx);
-    // A resolved function call or a statement gets its own clickable region
-    // carrying its info. (Only when the annotator has info for it, so parse-mode
-    // rendering -- which has no annotator -- is unaffected.)
-    if (annotate_ &&
-        (kind == "FunctionCall" || absl::EndsWith(kind, "Statement"))) {
-      std::string info = annotate_(node);
-      if (!info.empty()) {
-        absl::string_view cls = kind == "FunctionCall" ? "func" : "stmt";
-        return Region(cls, Concat({std::move(inner), NodeInfoBox(info)}));
+    // A node that carries resolver info gets its own clickable region carrying
+    // that info.  (Only when the annotator has info for it, so parse-mode
+    // rendering -- which has no annotator -- is unaffected.)  Covered:
+    //   * function calls ("func") and statements ("stmt");
+    //   * leaf expressions ("expr") -- literals and a path expression that
+    //     resolved to a column reference.  Table-name paths are NOT matched:
+    //     the resolver records expression info only for column-like paths, so
+    //     the annotator returns nothing for a table name (the context decision
+    //     is made at analysis time).  Table names get their own "table" region
+    //     from BuildTablePath.
+    if (annotate_) {
+      const bool is_func = kind == "FunctionCall";
+      const bool is_stmt = absl::EndsWith(kind, "Statement");
+      const bool is_expr_leaf =
+          (absl::EndsWith(kind, "Literal") || kind == "PathExpression") &&
+          !ctx.in_table_name;
+      if (is_func || is_stmt || is_expr_leaf) {
+        std::string info = annotate_(node);
+        if (!info.empty()) {
+          absl::string_view cls = is_func ? "func" : is_stmt ? "stmt" : "expr";
+          return Region(cls, Concat({std::move(inner), NodeInfoBox(info)}));
+        }
       }
     }
     return inner;
@@ -804,7 +821,10 @@ class Builder {
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
         if (!named && p.child->GetNodeKindString() == "PathExpression") {
-          parts.push_back(RegionAnnotated("table", p.child, Build(p.child, ctx)));
+          Ctx name_ctx = ctx;
+          name_ctx.in_table_name = true;  // suppress BuildInner's "expr" region
+          parts.push_back(
+              RegionAnnotated("table", p.child, Build(p.child, name_ctx)));
           named = true;
         } else {
           parts.push_back(Build(p.child, ctx));

@@ -1258,6 +1258,16 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
        &input_refs](const ASTNode* node) -> std::string {
     auto it = info_map.find(node);
     if (it == info_map.end()) return std::string();
+    // A leaf expression (literal / column ref) is only annotated for the
+    // visualizer (which supplies `expr_ids` and links it as "e<n>").  In
+    // analyze mode (no expr_ids) such a node carries nothing else, so skip it --
+    // keeping the analyze-mode query viewer's regions unchanged.
+    const ASTNodeResolvedInfo& ni = it->second;
+    const bool expr_only =
+        ni.expr_info.has_value() && !ni.resolved_scan_info.has_value() &&
+        !ni.table_scan_info.has_value() && !ni.function_call_info.has_value() &&
+        !ni.statement_info.has_value();
+    if (expr_only && expr_ids == nullptr) return std::string();
     std::string html = ResolvedInfoHoverHtml(it->second, product_mode);
     // For the visualizer: give this node its own id (a0, a1, ...) and a
     // cross-reference to the resolved node(s) it produced, so the panes can be

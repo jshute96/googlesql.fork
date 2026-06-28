@@ -333,10 +333,10 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeExpressionCorrespondence) {
   // The Resolved AST pane wraps clickable expression nodes (function calls,
   // literals, column references) in `.rexpr` spans with their own "e<n>" id.
   EXPECT_THAT(result, HasSubstr("class=\"rexpr\" data-node-id=\"e"));
-  // An explicit function call (ABS) gets an annotatable region in the input
-  // pane, which cross-links to the same Resolved AST node ("e<n>").  (Literals
-  // and column references are wrapped in the AST pane but are not yet regioned
-  // by the box formatter, so they are not yet input-linked.)
+  // The input pane gives leaf expressions (literals, column refs -- but not
+  // table names) their own `.rect expr` region, cross-linking to the same
+  // Resolved AST node ("e<n>").  Function calls cross-link via their own region.
+  EXPECT_THAT(result, HasSubstr("class=\"rect expr\""));
   EXPECT_THAT(result, HasSubstr("data-corresp=\"e"));
 }
 

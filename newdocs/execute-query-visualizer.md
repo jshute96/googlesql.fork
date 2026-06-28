@@ -282,19 +282,21 @@ clickable and cross-pane-linked, alongside scans (`r`/`q`):
   are not yet wrapped.
 - **Framework**: `NodeRefMarkers::Targets` gains an `e` set (`AddExpr`); the
   input pane links an expression AST node to its `e<n>` via `expr_info`.
-- **Input pane**: works today for **explicit function calls** — the box
-  formatter already gives an `ASTFunctionCall` its own annotatable region
-  (`box_formatter.cc` `BuildInner`), so its `.ni-ref` carries `data-corresp=
-  "e<n>"`. **Literals and column references are clickable in the AST pane but
-  not yet input-linked**: the box formatter only regions function calls,
-  statements, and table paths, so leaf-expression AST nodes have no annotation
-  hook. Extending `BuildInner` to region literal/path nodes is the next step
-  (note it also affects the analyze-mode query viewer, which shares the box
-  formatter).
+- **Input pane**: `box_formatter.cc` `BuildInner` regions function calls
+  (`func`), statements (`stmt`), and now **leaf expressions** (`expr`: any
+  `*Literal` kind, and a `PathExpression`) when the annotator has info, so each
+  carries a `.ni-ref` with `data-corresp="e<n>"`. The column-ref/table-name
+  ambiguity is resolved two ways: (1) the resolver records `expr_info` only for
+  column-like paths, never table names, so the annotator returns nothing for a
+  table name; (2) belt-and-suspenders, the table reference (`BuildTablePath`)
+  sets `Ctx.in_table_name` so `BuildInner` skips its `expr` region and supplies
+  the `table` region instead — your "the parent decides" rule. The analyze-mode
+  query viewer is kept unchanged: a leaf-expression-only node is skipped by the
+  annotator unless `expr_ids` is supplied (visualizer only).
 - **SQLBuilder pane**: not yet — marking expression nodes during emission
   (`MakeScanMarker` is already node-general) plus teaching
-  `FindSmallestSegmentNode` about expression AST kinds would give the full
-  three-way link.
+  `FindSmallestSegmentNode` about expression AST kinds, and regioning them in the
+  regenerated SQL, would give the full three-way link.
 
 ### ProvenanceText: clean SQL + (byte-offset → node) spans (implemented)
 
