@@ -124,6 +124,10 @@ class NodeRefMarkers {
   // no-op if rid<0) -- used for subquery/subpipeline layer boxes.
   void AddContainer(const ASTNode* node, int rid);
 
+  // Records that `node` corresponds to an *expression* node id ("e<rid>"; no-op
+  // if rid<0) -- a function call, literal, or column reference.
+  void AddExpr(const ASTNode* node, int rid);
+
   // Copies every correspondence recorded for `from` onto `node` (both
   // namespaces; no-op if `from` has none).  Call after `from`'s edges exist.
   void Inherit(const ASTNode* node, const ASTNode* from);
@@ -142,11 +146,13 @@ class NodeRefMarkers {
   std::string Emit(const ASTNode* node);
 
  private:
-  // Operator ("r") and container ("q") correspondence ids for one node.
+  // Operator ("r"), container ("q") and expression ("e") correspondence ids for
+  // one node.
   struct Targets {
     absl::flat_hash_set<int> r;
     absl::flat_hash_set<int> q;
-    bool empty() const { return r.empty() && q.empty(); }
+    absl::flat_hash_set<int> e;
+    bool empty() const { return r.empty() && q.empty() && e.empty(); }
   };
 
   std::string prefix_;

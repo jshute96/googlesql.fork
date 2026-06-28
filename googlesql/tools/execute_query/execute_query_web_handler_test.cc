@@ -316,6 +316,30 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeSubqueryContainerCorrespondence) {
   EXPECT_THAT(result, HasSubstr("data-corresp=\"q"));
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeExpressionCorrespondence) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kPipe,
+          "FROM (SELECT 1 AS a) |> WHERE ABS(a) > 0 |> SELECT a", "none",
+          "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates(
+          "{{> body}}", "",
+          "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+          "{{{viz_resolved_ast_html}}}{{{viz_input_sql_html}}}"
+          "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // The Resolved AST pane wraps clickable expression nodes (function calls,
+  // literals, column references) in `.rexpr` spans with their own "e<n>" id.
+  EXPECT_THAT(result, HasSubstr("class=\"rexpr\" data-node-id=\"e"));
+  // An explicit function call (ABS) gets an annotatable region in the input
+  // pane, which cross-links to the same Resolved AST node ("e<n>").  (Literals
+  // and column references are wrapped in the AST pane but are not yet regioned
+  // by the box formatter, so they are not yet input-linked.)
+  EXPECT_THAT(result, HasSubstr("data-corresp=\"e"));
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNonQueryStatement) {
   std::string result;
   EXPECT_TRUE(HandleRequest(

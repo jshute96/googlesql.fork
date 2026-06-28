@@ -1301,6 +1301,23 @@ absl::Status Resolver::ResolveExpr(
         ast_expr, const_cast<ResolvedExpr*>(resolved_expr_out->get()));
   }
 
+  // Visualizer: link a clickable leaf expression to its resolved node so it can
+  // be correlated across panes.  Literals of any type, and a path expression
+  // that resolved to a bare column reference (the whole path is the clickable
+  // unit).  Function calls are linked at their own resolution site (which also
+  // records the signature); other path shapes (GetStructField/GetProtoField
+  // subtrees, argument refs, ...) are left for a later extension.
+  if (const ResolvedExpr* rnode = resolved_expr_out->get();
+      rnode->Is<ResolvedLiteral>() ||
+      (rnode->Is<ResolvedColumnRef>() &&
+       ast_expr->node_kind() == AST_PATH_EXPRESSION)) {
+    ASTNodeResolvedInfo& info = ast_node_resolved_info_map_[ast_expr];
+    info.expr_info =
+        ExprInfo{.node = rnode, .label = rnode->Is<ResolvedLiteral>()
+                                             ? "Literal"
+                                             : "Column reference"};
+  }
+
   // Note: This call checks that graph element types cannot be returned from
   // most expressions.  This cannot currently detect when the expression
   // occurred as the base argument in a chained function call, which is a hole.
@@ -10897,6 +10914,12 @@ absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
         .signature = resolved_function_call->signature().DebugString(
             /*function_name=*/"", /*verbose=*/false),
     };
+    // Link to the resolved node so the visualizer can correlate this call across
+    // panes.  For aggregate/analytic calls this scalar node is replaced later
+    // (so it won't be found in the final tree, and simply gets no
+    // correspondence -- never a wrong one); for plain scalar calls it is final.
+    info.expr_info = ExprInfo{.node = resolved_function_call.get(),
+                              .label = "Function call"};
   }
 
   if (function->IsDeprecated()) {

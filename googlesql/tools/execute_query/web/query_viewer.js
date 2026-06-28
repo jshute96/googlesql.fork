@@ -570,6 +570,13 @@
       add(qboxes[qi].getAttribute('data-node-id'), qboxes[qi],
           qboxes[qi].getAttribute('data-corresp'));
     }
+    // Clickable expression spans in the Resolved AST pane ("e<n>": function
+    // calls, literals, column references).
+    var exprs = viz.querySelectorAll('.rexpr[data-node-id]');
+    for (var ei = 0; ei < exprs.length; ei++) {
+      add(exprs[ei].getAttribute('data-node-id'), exprs[ei],
+          exprs[ei].getAttribute('data-corresp'));
+    }
     var gnodes = viz.querySelectorAll('.viz-gnode[data-node-id]');
     for (var k = 0; k < gnodes.length; k++) {
       add(gnodes[k].getAttribute('data-node-id'), gnodes[k],
@@ -688,6 +695,20 @@
         if (gitems.length > 0) renderDetails(viz, gitems);
       }
       applyCorrespondence(viz, gnode, gid);
+      return;
+    }
+    // Clickable expression span (function call / literal / column reference) in
+    // the Resolved AST pane: id "e<n>" is on the `.rexpr` itself.  Check before
+    // the enclosing `.rscan` so the expression drives correspondence, not its
+    // scan.  Details come from the enclosing scan's hierarchy.
+    var rexpr = e.target.closest('.rexpr');
+    if (rexpr && pane.contains(rexpr)) {
+      var ebox = rexpr.closest('.rscan, .rscan-stmt');
+      if (ebox) {
+        var eitems = collectScanHierarchy(ebox, viz);
+        if (eitems.length > 0) renderDetails(viz, eitems);
+      }
+      applyCorrespondence(viz, rexpr, rexpr.getAttribute('data-node-id'));
       return;
     }
     // Resolved AST / SQLBuilder box: id is on the `.rscan` itself.  The

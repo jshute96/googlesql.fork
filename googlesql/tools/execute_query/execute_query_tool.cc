@@ -1229,9 +1229,14 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
           absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}}), "</div>");
     }
   }
-  return absl::StrCat("<div class=\"ni-title\">",
-                      EscapeHtmlText(info.node_title), "</div>",
-                      "<div class=\"ni-body\">", body, "</div>");
+  // Title: the node's own title, or the expression-kind label for a clickable
+  // leaf expression (literal / column reference) that has no other title.
+  std::string title = info.node_title;
+  if (title.empty() && info.expr_info.has_value()) {
+    title = info.expr_info->label;
+  }
+  return absl::StrCat("<div class=\"ni-title\">", EscapeHtmlText(title),
+                      "</div>", "<div class=\"ni-body\">", body, "</div>");
 }
 
 // Renders SQL as box-formatted HTML (parser/box_formatter.h) with each AST
@@ -1240,8 +1245,8 @@ static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
 // Shared by the analyze-mode query viewer and the visualizer panes.
 static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
     absl::string_view sql, const ASTNode* ast, const AnalyzerOutput& output,
-    const ExecuteQueryConfig& config,
-    const ResolvedNodeIds* node_ids = nullptr) {
+    const ExecuteQueryConfig& config, const ResolvedNodeIds* node_ids = nullptr,
+    const ResolvedNodeIds* expr_ids = nullptr) {
   const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
   const ProductMode product_mode =
       config.analyzer_options().language().product_mode();
@@ -1249,16 +1254,16 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
   // produced; the input pane's own-id namespace is "a".
   NodeRefMarkers input_refs("a");
   BoxAnnotator annotate =
-      [&info_map, product_mode, node_ids,
+      [&info_map, product_mode, node_ids, expr_ids,
        &input_refs](const ASTNode* node) -> std::string {
     auto it = info_map.find(node);
     if (it == info_map.end()) return std::string();
     std::string html = ResolvedInfoHoverHtml(it->second, product_mode);
     // For the visualizer: give this node its own id (a0, a1, ...) and a
-    // cross-reference to the id of the ResolvedScan it produced (r<id>), so the
-    // panes can be correlated.  Carried in a hidden `.ni-ref` marker inside the
-    // node-info (the box itself is wrapped by the box formatter, so we cannot
-    // set an attribute on it directly).
+    // cross-reference to the resolved node(s) it produced, so the panes can be
+    // correlated.  Carried in a hidden `.ni-ref` marker inside the node-info
+    // (the box itself is wrapped by the box formatter, so we cannot set an
+    // attribute on it directly).
     if (node_ids != nullptr) {
       const ResolvedScan* scan = nullptr;
       // A scan-producing AST node that is NOT a pipe operator is the *container*
@@ -1279,6 +1284,13 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
         } else {
           input_refs.Add(node, rid);
         }
+      }
+      // A clickable expression (function call, literal, column reference) links
+      // to its Resolved AST node ("e<id>").
+      if (expr_ids != nullptr && it->second.expr_info.has_value()) {
+        input_refs.AddExpr(node, expr_ids->Lookup(it->second.expr_info->node));
+      }
+      if (input_refs.Has(node)) {
         html = absl::StrCat(input_refs.Emit(node), html);
       }
     }
@@ -2027,13 +2039,17 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
   debug_config.linear_mode = true;
   data.resolved_ast_text = resolved->DebugString(debug_config);
   std::vector<const ResolvedScan*> scan_order;
-  data.resolved_ast_html = resolved->DebugStringHtml(&scan_order);
+  std::vector<const ResolvedNode*> expr_order;
+  data.resolved_ast_html = resolved->DebugStringHtml(&scan_order, &expr_order);
   // The shared visualizer identity space: every pane joins on these ids.  The
   // Resolved AST pane is the authority (assigns ids in emission order); other
-  // panes look them up.  Typed over ResolvedNode (not ResolvedScan) so non-scan
-  // nodes can be added to the mapping as the framework grows.
+  // panes look them up.  `node_ids` are the scan ids ("r<n>"/"q<n>"); `expr_ids`
+  // are the clickable expression ids ("e<n>": function calls, literals, column
+  // references), wrapped as `.rexpr` spans by the AST pane.
   ResolvedNodeIds node_ids;
   node_ids.AssignInOrder<const ResolvedScan>(scan_order);
+  ResolvedNodeIds expr_ids;
+  expr_ids.AssignInOrder<const ResolvedNode>(expr_order);
 
   // Structured graph model of the same Resolved AST (node ids reuse the id
   // order above, so the graph view lines up with the textual panes).
@@ -2041,8 +2057,8 @@ static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
       BuildResolvedAstQueryGraph(resolved, node_ids).ToJson();
 
   // --- Input SQL pane: box HTML with node info, tagged with node ids. ---
-  absl::StatusOr<std::string> input_html =
-      RenderBoxHtmlWithNodeInfo(sql, ast, *analyzer_output, config, &node_ids);
+  absl::StatusOr<std::string> input_html = RenderBoxHtmlWithNodeInfo(
+      sql, ast, *analyzer_output, config, &node_ids, &expr_ids);
   if (input_html.ok()) {
     data.input_sql_html = *input_html;
   }

@@ -112,6 +112,38 @@ std::string HtmlEscape(absl::string_view s) {
   }
   return out;
 }
+
+// HTML-escapes `s`, then expands the expression sentinels that DebugStringImpl
+// brackets clickable expression nodes with -- "\x01<id>\x02" (open) and "\x03"
+// (close) -- into clickable spans.  The sentinels are control bytes that
+// HtmlEscape passes through untouched, so escaping first is safe.
+std::string EscapeAndExpandExprSpans(absl::string_view s) {
+  const std::string escaped = HtmlEscape(s);
+  std::string out;
+  out.reserve(escaped.size());
+  for (size_t i = 0; i < escaped.size(); ++i) {
+    if (escaped[i] == '\x01') {
+      std::string digits;
+      size_t j = i + 1;
+      while (j < escaped.size() && absl::ascii_isdigit(escaped[j])) {
+        digits += escaped[j++];
+      }
+      if (j < escaped.size() && escaped[j] == '\x02' && !digits.empty()) {
+        absl::StrAppend(&out, "<span class=\"rexpr\" data-node-id=\"e", digits,
+                        "\">");
+        i = j;
+        continue;
+      }
+      continue;  // malformed: drop the stray sentinel byte
+    }
+    if (escaped[i] == '\x03') {
+      absl::StrAppend(&out, "</span>");
+      continue;
+    }
+    out += escaped[i];
+  }
+  return out;
+}
 }  // namespace
 
 // True if `node` has a ResolvedScan anywhere in its subtree (e.g. an expression
@@ -139,10 +171,12 @@ static bool SubtreeContainsScan(const ResolvedNode* node) {
 }
 
 std::string ResolvedNode::DebugStringHtml(
-    std::vector<const ResolvedScan*>* scan_order) const {
+    std::vector<const ResolvedScan*>* scan_order,
+    std::vector<const ResolvedNode*>* expr_order) const {
   DebugStringConfig config;
   config.linear_mode = true;
   config.omit_parse_location = true;
+  config.expr_html_order = expr_order;
   int scan_counter = 0;
   std::string output;
   EmitNodeHtml(this, config, &scan_counter, scan_order, &output, /*depth=*/0);
@@ -246,8 +280,8 @@ void ResolvedNode::EmitScanFieldsHtml(
   auto flush_text = [&]() {
     if (text.empty()) return;
     if (text.back() == '\n') text.pop_back();
-    absl::StrAppend(output, "<div class=\"rscan-tree\">", HtmlEscape(text),
-                    "</div>");
+    absl::StrAppend(output, "<div class=\"rscan-tree\">",
+                    EscapeAndExpandExprSpans(text), "</div>");
     text.clear();
   };
 
@@ -349,7 +383,7 @@ void ResolvedNode::EmitScanFieldsHtml(
       if (!sub.empty() && sub.back() == '\n') sub.pop_back();
       absl::StrAppend(output,
                       "<div class=\"rscan-children\"><div class=\"rscan-tree\">",
-                      HtmlEscape(sub), "</div></div>");
+                      EscapeAndExpandExprSpans(sub), "</div></div>");
     }
   }
   flush_text();
@@ -494,6 +528,28 @@ void ResolvedNode::DebugStringBody(const ResolvedNode* node,
                                    absl::string_view field_prefix,
                                    std::string* output,
                                    const ResolvedNode* pipe_input_to_elide) {
+  // HTML cross-pane correspondence: a clickable expression node (function call,
+  // literal, column reference) gets an "e<n>" id and its rendered text is
+  // bracketed with sentinels (expanded to a `<span class="rexpr">` at the HTML
+  // flush).  Only active when config.expr_html_order is set (HTML rendering);
+  // plain-text DebugString is unaffected.  This is the node emitter, so it
+  // covers expressions emitted as recursed DebugString children.
+  const bool expr_wrap =
+      config.expr_html_order != nullptr && node != nullptr &&
+      (node->Is<ResolvedFunctionCall>() || node->Is<ResolvedLiteral>() ||
+       node->Is<ResolvedColumnRef>());
+  const size_t expr_wrap_start = output->size();
+  int expr_wrap_id = -1;
+  if (expr_wrap) {
+    expr_wrap_id = static_cast<int>(config.expr_html_order->size());
+    config.expr_html_order->push_back(node);
+  }
+  const auto close_expr_wrap = [&]() {
+    if (!expr_wrap) return;
+    output->insert(expr_wrap_start, absl::StrCat("\x01", expr_wrap_id, "\x02"));
+    absl::StrAppend(output, "\x03");
+  };
+
   const BoxGlyphs& glyphs =
       config.use_box_glyphs ? kUnicodeBoxGlyphs : kAsciiBoxGlyphs;
 
@@ -641,6 +697,7 @@ void ResolvedNode::DebugStringBody(const ResolvedNode* node,
     AppendAnnotations(node, config.annotations, output);
     *output += "\n";
   }
+  close_expr_wrap();
 }
 
 void ResolvedNode::CollectDebugStringFields(

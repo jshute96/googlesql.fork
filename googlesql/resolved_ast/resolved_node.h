@@ -200,6 +200,14 @@ class ResolvedNode {
     // visual (HTML) renderer records parse locations for cross-pane
     // correspondence but does not want them cluttering the displayed tree.
     bool omit_parse_location = false;
+
+    // When non-null (HTML rendering only), each clickable expression node
+    // (function call, literal, column reference) that DebugStringImpl emits is
+    // appended here in emission order, and its rendered text is bracketed with
+    // sentinels so the HTML flush can turn it into an id'd "<span class=rexpr>"
+    // ("e<n>", n = index here).  Plain-text DebugString leaves this null and is
+    // byte-for-byte unaffected.
+    std::vector<const ResolvedNode*>* expr_html_order = nullptr;
   };
 
   // Returns a string representation of this tree and all descendants, for
@@ -222,9 +230,13 @@ class ResolvedNode {
   //
   // If `scan_order` is non-null, it is filled with the scans in scan-id order
   // (i.e. `scan_order[i]` is the scan whose box has `data-node-id="i"`), so the
-  // caller can build a scan->id map to correlate the other panes.
+  // caller can build a scan->id map to correlate the other panes.  If
+  // `expr_order` is non-null, the clickable expression nodes (function calls,
+  // literals, column references) are filled in `e<n>` id order likewise, and
+  // each is wrapped in a `<span class="rexpr" data-node-id="e<n>">`.
   std::string DebugStringHtml(
-      std::vector<const ResolvedScan*>* scan_order = nullptr) const;
+      std::vector<const ResolvedScan*>* scan_order = nullptr,
+      std::vector<const ResolvedNode*>* expr_order = nullptr) const;
 
   // Check if any semantically meaningful fields have not been accessed in
   // this node or its children. If so, return a descriptive error indicating

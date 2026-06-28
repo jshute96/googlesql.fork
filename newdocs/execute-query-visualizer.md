@@ -260,6 +260,42 @@ operators/leaf table scans get `Add` (`r`). The JS collects
 hierarchy step) highlights the *container* layer 1:1 across panes, distinct from
 selecting its last operator.
 
+### Expression correspondence (e-namespace: function calls, literals, column refs)
+
+A third correspondence namespace, **`e<n>`**, makes individual *expressions*
+clickable and cross-pane-linked, alongside scans (`r`/`q`):
+
+- **Analyzer link** (`resolver_expr.cc`): records `ASTNodeResolvedInfo::expr_info
+  {node, label}` for function calls (at the function-call site, with the
+  signature) and, at the generic `ResolveExpr` tail, for literals and a path
+  expression that resolved to a bare `ResolvedColumnRef`. Nodes that get
+  replaced later (e.g. aggregate calls) point at a node not in the final tree,
+  so they simply get no `e` id — never a wrong correspondence.
+- **Resolved AST pane** (`resolved_node.cc`): `DebugStringBody` wraps each
+  clickable expression (function call / literal / column ref) it emits with
+  sentinels, assigning it an `e<n>` id (in `DebugStringConfig.expr_html_order`);
+  the HTML flush (`EscapeAndExpandExprSpans`) turns them into
+  `<span class="rexpr" data-node-id="e<n>">`. Gated on the HTML render, so
+  plain-text `DebugString` (and the analyzer goldens) are byte-identical. Only
+  expressions emitted as *recursed* DebugString children are wrapped; ones
+  inlined as a parent's `field.value` string (e.g. a `ComputedColumn := Literal`)
+  are not yet wrapped.
+- **Framework**: `NodeRefMarkers::Targets` gains an `e` set (`AddExpr`); the
+  input pane links an expression AST node to its `e<n>` via `expr_info`.
+- **Input pane**: works today for **explicit function calls** — the box
+  formatter already gives an `ASTFunctionCall` its own annotatable region
+  (`box_formatter.cc` `BuildInner`), so its `.ni-ref` carries `data-corresp=
+  "e<n>"`. **Literals and column references are clickable in the AST pane but
+  not yet input-linked**: the box formatter only regions function calls,
+  statements, and table paths, so leaf-expression AST nodes have no annotation
+  hook. Extending `BuildInner` to region literal/path nodes is the next step
+  (note it also affects the analyze-mode query viewer, which shares the box
+  formatter).
+- **SQLBuilder pane**: not yet — marking expression nodes during emission
+  (`MakeScanMarker` is already node-general) plus teaching
+  `FindSmallestSegmentNode` about expression AST kinds would give the full
+  three-way link.
+
 ### ProvenanceText: clean SQL + (byte-offset → node) spans (implemented)
 
 The SQLBuilder now exposes its node→text mapping as a clean **provenance** API

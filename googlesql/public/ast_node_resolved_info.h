@@ -29,6 +29,7 @@ namespace googlesql {
 
 class ASTNode;
 class NameList;
+class ResolvedNode;
 class ResolvedScan;
 class Table;
 
@@ -73,6 +74,21 @@ struct ResolvedScanInfo {
   const ResolvedScan* scan = nullptr;
 };
 
+// Extra information the resolver learned about an AST node that directly
+// corresponds to a ResolvedExpr the visualizer can show as its own clickable,
+// cross-pane-linked element -- e.g. a function call, a literal, or a path that
+// resolved to a column reference.  This is the AST-expression analogue of
+// ResolvedScanInfo.
+struct ExprInfo {
+  // The resolved node this AST (sub)expression produced.  Owned by the
+  // resolver/AnalyzerOutput; valid for its lifetime.  Never null when set.
+  const ResolvedNode* node = nullptr;
+
+  // A short kind label for the hover box (e.g. "Function call", "Literal",
+  // "Column reference").
+  std::string label;
+};
+
 // Extra information the resolver learned about an AST node that resolved to a
 // ResolvedFunctionCall.
 struct FunctionCallInfo {
@@ -112,6 +128,10 @@ struct ASTNodeResolvedInfo {
 
   // Set when this AST node resolved to a ResolvedFunctionCall.
   std::optional<FunctionCallInfo> function_call_info;
+
+  // Set when this AST node directly corresponds to a clickable ResolvedExpr
+  // (function call, literal, column reference, ...).
+  std::optional<ExprInfo> expr_info;
 
   // Set when this AST node is a statement.
   std::optional<StatementInfo> statement_info;

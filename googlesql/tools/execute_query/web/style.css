@@ -1041,7 +1041,8 @@ html[data-visualize-page] .viz-block-title {
 .viz .rect.viz-corresp,
 .viz .rscan.viz-corresp,
 .viz .rscan-query.viz-corresp,
-.viz .rscan-stmt.viz-corresp {
+.viz .rscan-stmt.viz-corresp,
+.viz .rexpr.viz-corresp {
   outline: 2px solid #f0a93b;
   outline-offset: 0;
   /* Lift above adjacent siblings so the (outside-the-box) outline isn't
@@ -1053,12 +1054,23 @@ html[data-visualize-page] .viz-block-title {
 .viz .rect.viz-selected,
 .viz .rscan.viz-selected,
 .viz .rscan-query.viz-selected,
-.viz .rscan-stmt.viz-selected {
+.viz .rscan-stmt.viz-selected,
+.viz .rexpr.viz-selected {
   outline: 2px solid #d35400;
   outline-offset: 0;
   filter: brightness(1.1) saturate(1.3);
   position: relative;
   z-index: 2;
+}
+
+/* Clickable expression spans (function calls, literals, column references) in
+   the Resolved AST pane. */
+.viz .rexpr {
+  cursor: pointer;
+  border-radius: 2px;
+}
+.viz .rexpr:hover {
+  background: rgba(240, 169, 59, 0.18);
 }
 
 /* Resolved AST pane: one box per ResolvedScan, alternating shades, rendered by

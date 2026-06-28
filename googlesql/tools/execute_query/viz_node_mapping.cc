@@ -61,6 +61,11 @@ void NodeRefMarkers::AddContainer(const ASTNode* node, int rid) {
   targets_[node].q.insert(rid);
 }
 
+void NodeRefMarkers::AddExpr(const ASTNode* node, int rid) {
+  if (node == nullptr || rid < 0) return;
+  targets_[node].e.insert(rid);
+}
+
 void NodeRefMarkers::Inherit(const ASTNode* node, const ASTNode* from) {
   if (node == nullptr || from == nullptr) return;
   auto it = targets_.find(from);
@@ -71,6 +76,7 @@ void NodeRefMarkers::Inherit(const ASTNode* node, const ASTNode* from) {
   Targets& to = targets_[node];
   to.r.insert(from_t.r.begin(), from_t.r.end());
   to.q.insert(from_t.q.begin(), from_t.q.end());
+  to.e.insert(from_t.e.begin(), from_t.e.end());
 }
 
 void NodeRefMarkers::InheritAsContainer(const ASTNode* node,
@@ -103,6 +109,7 @@ std::string NodeRefMarkers::Emit(const ASTNode* node) {
   std::string corresp;
   AppendPrefixedTokens(it->second.r, "r", &corresp);
   AppendPrefixedTokens(it->second.q, "q", &corresp);
+  AppendPrefixedTokens(it->second.e, "e", &corresp);
   return absl::StrCat("<span class=\"ni-ref\" data-node-id=\"", prefix_,
                       counter_++, "\" data-corresp=\"", corresp, "\"></span>");
 }
