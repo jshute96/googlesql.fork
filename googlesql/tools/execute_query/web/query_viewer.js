@@ -500,12 +500,10 @@
         var body = directChildren(el, 'rscan-field').map(function (f) {
           return f.innerHTML;
         }).join('<br>');
-        // A subquery wrapper has no scan id of its own; it borrows its result
-        // scan's id (data-corresp) so clicking it cross-links to that scan's
-        // layer in the other panes.
-        var id = isQueryBox ? el.getAttribute('data-corresp')
-                            : (el.getAttribute ? el.getAttribute('data-node-id')
-                                               : null);
+        // A subquery/subpipeline wrapper is the *container* node: its own id is
+        // "q<n>" (data-node-id), distinct from its last operator's "r<n>", so
+        // clicking it cross-links to the same container layer in the other panes.
+        var id = el.getAttribute ? el.getAttribute('data-node-id') : null;
         items.push({ title: title, body: body, el: el, id: id });
       }
       el = el.parentElement;
@@ -564,6 +562,13 @@
     for (var i = 0; i < boxes.length; i++) {
       add(boxes[i].getAttribute('data-node-id'), boxes[i],
           boxes[i].getAttribute('data-corresp'));
+    }
+    // Subquery/subpipeline container wrappers ("q<n>"): the Resolved AST field
+    // that holds a (sub)query, a distinct correspondence node from its operators.
+    var qboxes = viz.querySelectorAll('.rscan-query[data-node-id]');
+    for (var qi = 0; qi < qboxes.length; qi++) {
+      add(qboxes[qi].getAttribute('data-node-id'), qboxes[qi],
+          qboxes[qi].getAttribute('data-corresp'));
     }
     var gnodes = viz.querySelectorAll('.viz-gnode[data-node-id]');
     for (var k = 0; k < gnodes.length; k++) {

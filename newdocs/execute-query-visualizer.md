@@ -237,6 +237,29 @@ plumbing with the explicit identity space + relation model. The id space is
 still *populated* only from scans and still lives in pointer-keyed maps over the
 single shared analysis (so it does not yet survive rewrites).
 
+### Subquery/subpipeline container correspondence (q-namespace, implemented)
+
+A subquery's *result scan* plays two roles: it is the chain's **last operator**
+and it is the **whole subquery** (the field that holds it). Both used to share
+the same id `r<n>`, so selecting a Subquery just highlighted its last operator
+in the other panes. They are now separated into two namespaces over the same
+dense id `n`:
+
+- **`r<n>`** — the operator/scan view (the `.rscan` box).
+- **`q<n>`** — the container view (the subquery/subpipeline as a whole).
+
+The Resolved AST pane's `.rscan-query` wrapper is the **hub**: it carries
+`data-node-id="q<n>"` (where `n` is the result scan's id, via `ScanChainTopId`).
+The other panes link to it as `data-corresp="q<n>"`: the SQLBuilder query/
+subpipeline layer via `NodeRefMarkers::InheritAsContainer`, and the input pane
+via `ResolvedScanInfo::is_pipe_operator` — a scan-producing AST node that is *not*
+a pipe operator is the container view, so it gets `AddContainer` (`q`) while
+operators/leaf table scans get `Add` (`r`). The JS collects
+`.rscan-query[data-node-id]` and `collectScanHierarchy` reads the wrapper's
+`data-node-id`. Net: selecting a Subquery (the wrapper, or the "Subquery"
+hierarchy step) highlights the *container* layer 1:1 across panes, distinct from
+selecting its last operator.
+
 ### ProvenanceText: clean SQL + (byte-offset → node) spans (implemented)
 
 The SQLBuilder now exposes its node→text mapping as a clean **provenance** API

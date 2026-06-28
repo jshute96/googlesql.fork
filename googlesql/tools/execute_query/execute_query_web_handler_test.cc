@@ -292,6 +292,30 @@ TEST(ExecuteQueryWebHandlerTest, TestVisualizeJoinPipeCorrespondence) {
                            "class=\"ni-title\">|&gt; SELECT"));
 }
 
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeSubqueryContainerCorrespondence) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kPipe,
+          "FROM (SELECT 1 AS a) |> WHERE a > 0 |> SELECT a", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates(
+          "{{> body}}", "",
+          "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+          "{{{viz_resolved_ast_html}}}{{{viz_input_sql_html}}}"
+          "{{{viz_sqlbuilder_sql_html}}}"
+          "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // The Resolved AST pane gives a (sub)query/subpipeline its own *container*
+  // node "q<n>" (the field that holds it), distinct from its last operator
+  // "r<n>", on the `.rscan-query` wrapper.
+  EXPECT_THAT(result, HasSubstr("data-node-id=\"q"));
+  // The other panes cross-link to that container ("q<n>") rather than to the
+  // last operator -- the SQLBuilder query layer always does (InheritAsContainer).
+  EXPECT_THAT(result, HasSubstr("data-corresp=\"q"));
+}
+
 TEST(ExecuteQueryWebHandlerTest, TestVisualizeNonQueryStatement) {
   std::string result;
   EXPECT_TRUE(HandleRequest(

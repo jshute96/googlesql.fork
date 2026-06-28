@@ -293,13 +293,14 @@ void ResolvedNode::EmitScanFieldsHtml(
       if (subpipeline_scan != nullptr) {
         // The `data-layer` label (no visible heading) makes the box a selectable
         // hierarchy layer like the input pane's, so a pipe operator inside it
-        // reads as "in Subpipeline".  `data-corresp` is the subpipeline's result
-        // scan (its top scan), so clicking the box cross-links to the same
-        // subpipeline layer in the other panes.
+        // reads as "in Subpipeline".  The box is the *container* node for this
+        // subpipeline -- its own id is "q<n>" where <n> is the result (top)
+        // scan's id -- so selecting the subpipeline cross-links to the same
+        // container layer (not the last operator, "r<n>") in the other panes.
         absl::StrAppend(
             output, "<div class=\"rscan-children\">"
                     "<div class=\"rscan-query\" data-layer=\"Subpipeline\""
-                    " data-corresp=\"r",
+                    " data-node-id=\"q",
             ScanChainTopId(subpipeline_scan, *scan_counter), "\">");
         EmitScanChainHtml(subpipeline_scan, config, scan_counter, scan_order,
                           output, nested_depth);
@@ -308,13 +309,14 @@ void ResolvedNode::EmitScanFieldsHtml(
         // The `data-layer` label (no visible heading) makes the box a selectable
         // hierarchy layer.  The statement's own query (top_level) is "Query with
         // pipe operators"; a scan-child of another scan is a "Subquery" (matching
-        // the input pane's layers).  `data-corresp` is the query's result scan
-        // (its top scan), so clicking it cross-links to the same query layer in
-        // the other panes.
+        // the input pane's layers).  The box is the *container* node for this
+        // (sub)query -- its own id is "q<n>" where <n> is the result (top) scan's
+        // id -- so selecting the (sub)query cross-links to the same container
+        // layer (not the last operator, "r<n>") in the other panes.
         absl::StrAppend(
             output, "<div class=\"rscan-children\"><div class=\"rscan-query\" data-layer=\"",
             top_level ? "Query with pipe operators" : "Subquery",
-            "\" data-corresp=\"r",
+            "\" data-node-id=\"q",
             ScanChainTopId(child->GetAs<ResolvedScan>(), *scan_counter), "\">");
         // A nested scan child is a subquery: deeper nesting → next colour family.
         EmitScanChainHtml(child->GetAs<ResolvedScan>(), config, scan_counter,

@@ -1261,13 +1261,24 @@ static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
     // set an attribute on it directly).
     if (node_ids != nullptr) {
       const ResolvedScan* scan = nullptr;
+      // A scan-producing AST node that is NOT a pipe operator is the *container*
+      // view of a (sub)query/subpipeline (it produced this scan as its result),
+      // so it cross-links as "q<id>" to the Resolved AST field that holds it; a
+      // pipe operator (or a leaf table scan) is the operator view ("r<id>").
+      bool is_container = false;
       if (it->second.resolved_scan_info.has_value()) {
         scan = it->second.resolved_scan_info->scan;
+        is_container = !it->second.resolved_scan_info->is_pipe_operator;
       } else if (it->second.table_scan_info.has_value()) {
         scan = it->second.table_scan_info->scan;
       }
       if (scan != nullptr) {
-        input_refs.Add(node, node_ids->Lookup(scan));
+        const int rid = node_ids->Lookup(scan);
+        if (is_container) {
+          input_refs.AddContainer(node, rid);
+        } else {
+          input_refs.Add(node, rid);
+        }
         html = absl::StrCat(input_refs.Emit(node), html);
       }
     }
@@ -1897,7 +1908,10 @@ static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
                  sp != nullptr && !sp->pipe_operator_list().empty()) {
         result = sp->pipe_operator_list().back();
       }
-      sql_refs.Inherit(node, result);
+      // Borrow the result operator's id but as the *container* correspondence
+      // ("q<id>"), so selecting this query/subpipeline layer cross-links to the
+      // Resolved AST field that holds it, not to its last operator ("r<id>").
+      sql_refs.InheritAsContainer(node, result);
     }
     std::string ref = sql_refs.Emit(node);
 

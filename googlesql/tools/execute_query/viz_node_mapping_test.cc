@@ -123,5 +123,36 @@ TEST(NodeRefMarkersTest, OwnIdsAdvanceOnlyOnNonEmptyEmit) {
   EXPECT_NE(refs.Emit(z).find("data-node-id=\"a1\""), std::string::npos);
 }
 
+TEST(NodeRefMarkersTest, ContainerIdsUseQNamespace) {
+  NodeRefMarkers refs("s");
+  const ASTNode* c = FakePtr<ASTNode>(0x10);
+  refs.AddContainer(c, 5);
+  refs.AddContainer(c, 2);
+  EXPECT_EQ(refs.Emit(c),
+            "<span class=\"ni-ref\" data-node-id=\"s0\" "
+            "data-corresp=\"q2 q5\"></span>");
+}
+
+TEST(NodeRefMarkersTest, InheritAsContainerCopiesOperatorIdsAsQ) {
+  NodeRefMarkers refs("s");
+  const ASTNode* op = FakePtr<ASTNode>(0x10);
+  const ASTNode* query = FakePtr<ASTNode>(0x20);
+  refs.Add(op, 4);  // operator -> r4
+  refs.InheritAsContainer(query, op);
+  EXPECT_EQ(refs.Emit(query),
+            "<span class=\"ni-ref\" data-node-id=\"s0\" "
+            "data-corresp=\"q4\"></span>");
+}
+
+TEST(NodeRefMarkersTest, MixedNamespacesEmitRThenQ) {
+  NodeRefMarkers refs("a");
+  const ASTNode* n = FakePtr<ASTNode>(0x10);
+  refs.Add(n, 7);
+  refs.AddContainer(n, 3);
+  EXPECT_EQ(refs.Emit(n),
+            "<span class=\"ni-ref\" data-node-id=\"a0\" "
+            "data-corresp=\"r7 q3\"></span>");
+}
+
 }  // namespace
 }  // namespace googlesql

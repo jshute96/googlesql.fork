@@ -92,11 +92,21 @@ class ResolvedNodeIds {
 // ("r3 r7 ...", ascending; "" when empty).  Negative ids are dropped.
 std::string RidTokens(const absl::flat_hash_set<int>& ids);
 
-// Accumulates, per parse ASTNode, the set of ResolvedNode ids that node
-// corresponds to, and emits the hidden ".ni-ref" marker the box formatter can't
-// place on the `.rect` directly.  One instance per pane render; `own_id_prefix`
-// is the pane's own-id namespace ("a" for the input pane, "s" for the
-// SQLBuilder pane) used only so the JS can address each element.
+// Accumulates, per parse ASTNode, the resolved-node ids that node corresponds
+// to, and emits the hidden ".ni-ref" marker the box formatter can't place on the
+// `.rect` directly.  One instance per pane render; `own_id_prefix` is the pane's
+// own-id namespace ("a" for the input pane, "s" for the SQLBuilder pane) used
+// only so the JS can address each element.
+//
+// Correspondences live in two id namespaces, both keyed on the same dense
+// ResolvedNode id `n`:
+//   * "r<n>" -- the *operator/scan* view of a node (its `.rscan` box).
+//   * "q<n>" -- the *container* view of a subquery/subpipeline (the
+//     `.rscan-query` wrapper that holds it in the Resolved AST pane).
+// A subquery's result scan plays both roles (it is the last operator AND the
+// whole subquery), so separating the namespaces lets selecting the Subquery
+// highlight the *container* field across panes, distinct from selecting its last
+// operator.  See newdocs/execute-query-visualizer.md.
 //
 // Both usage shapes are supported: record-all-then-emit (the SQLBuilder pane
 // precomputes every marker's id before laying out boxes) and record-then-emit
@@ -106,27 +116,42 @@ class NodeRefMarkers {
   explicit NodeRefMarkers(absl::string_view own_id_prefix)
       : prefix_(own_id_prefix) {}
 
-  // Records that `node` corresponds to resolved-node id `rid` (no-op if rid<0).
+  // Records that `node` corresponds to operator/scan id `rid` ("r<rid>";
+  // no-op if rid<0).
   void Add(const ASTNode* node, int rid);
 
-  // Copies every correspondence recorded for `from` onto `node` (a no-op if
-  // `from` has none).  Used when a container element (a query/subpipeline layer)
-  // borrows the correspondences of its result operator so the box cross-links to
-  // the same resolved nodes.  Call after `from`'s edges are populated.
+  // Records that `node` corresponds to the *container* view of `rid` ("q<rid>";
+  // no-op if rid<0) -- used for subquery/subpipeline layer boxes.
+  void AddContainer(const ASTNode* node, int rid);
+
+  // Copies every correspondence recorded for `from` onto `node` (both
+  // namespaces; no-op if `from` has none).  Call after `from`'s edges exist.
   void Inherit(const ASTNode* node, const ASTNode* from);
 
+  // Copies `from`'s operator ids ("r<id>") onto `node` as *container* ids
+  // ("q<id>").  Used when a query/subpipeline layer borrows its result
+  // operator's id but as the container correspondence.
+  void InheritAsContainer(const ASTNode* node, const ASTNode* from);
+
   // Whether `node` has any recorded correspondence.
-  bool Has(const ASTNode* node) const { return rids_.contains(node); }
+  bool Has(const ASTNode* node) const;
 
   // The ".ni-ref" span for `node` -- its own id plus the space-separated
-  // "r<id>" cross-references -- or "" if `node` has no recorded correspondence.
-  // Allocates a fresh own-id each time it emits a non-empty span.
+  // cross-references ("r<id>"/"q<id>") -- or "" if `node` has none.  Allocates a
+  // fresh own-id each time it emits a non-empty span.
   std::string Emit(const ASTNode* node);
 
  private:
+  // Operator ("r") and container ("q") correspondence ids for one node.
+  struct Targets {
+    absl::flat_hash_set<int> r;
+    absl::flat_hash_set<int> q;
+    bool empty() const { return r.empty() && q.empty(); }
+  };
+
   std::string prefix_;
   int counter_ = 0;
-  absl::flat_hash_map<const ASTNode*, absl::flat_hash_set<int>> rids_;
+  absl::flat_hash_map<const ASTNode*, Targets> targets_;
 };
 
 }  // namespace googlesql
