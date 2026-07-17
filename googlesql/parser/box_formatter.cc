@@ -112,6 +112,10 @@ enum class Kind {
   kColorPop,   // close the innermost colour region
 };
 
+// Sentinel "infinite" width: anything containing a hard line break can never
+// be rendered flat.
+constexpr int kInf = 1 << 29;
+
 struct Doc {
   Kind kind;
   std::string html;       // kText
@@ -121,6 +125,11 @@ struct Doc {
   bool hard = false;      // kLine
   int nest = 0;           // kNest
   std::vector<DocPtr> children;
+  // Layout totals, precomputed bottom-up at construction (Docs are immutable)
+  // so the renderer's fit check is O(1) instead of re-walking the subtree at
+  // every Group.
+  int flat_width_total = 0;   // visible width if rendered flat; kInf if hard
+  bool contains_hard = false;  // subtree contains a HardLine
 };
 
 DocPtr Nil() {
@@ -133,6 +142,7 @@ DocPtr Text(std::string html, int width) {
   d->kind = Kind::kText;
   d->html = std::move(html);
   d->width = width;
+  d->flat_width_total = width;
   return d;
 }
 // Zero-width text: HTML markup (div tags) that must not affect layout.
@@ -146,30 +156,42 @@ DocPtr Line(std::string flat = " ") {
   d->kind = Kind::kLine;
   d->flat_width = static_cast<int>(flat.size());
   d->flat_html = std::move(flat);
+  d->flat_width_total = d->flat_width;
   return d;
 }
 DocPtr HardLine() {
   auto d = std::make_shared<Doc>();
   d->kind = Kind::kLine;
   d->hard = true;
+  d->flat_width_total = kInf;
+  d->contains_hard = true;
   return d;
 }
 DocPtr Nest(int n, DocPtr child) {
   auto d = std::make_shared<Doc>();
   d->kind = Kind::kNest;
   d->nest = n;
+  d->flat_width_total = child->flat_width_total;
+  d->contains_hard = child->contains_hard;
   d->children = {std::move(child)};
   return d;
 }
 DocPtr Group(DocPtr child) {
   auto d = std::make_shared<Doc>();
   d->kind = Kind::kGroup;
+  d->flat_width_total = child->flat_width_total;
+  d->contains_hard = child->contains_hard;
   d->children = {std::move(child)};
   return d;
 }
 DocPtr Concat(std::vector<DocPtr> parts) {
   auto d = std::make_shared<Doc>();
   d->kind = Kind::kConcat;
+  for (const DocPtr& p : parts) {
+    d->flat_width_total =
+        std::min(kInf, d->flat_width_total + p->flat_width_total);
+    d->contains_hard = d->contains_hard || p->contains_hard;
+  }
   d->children = std::move(parts);
   return d;
 }
@@ -197,44 +219,6 @@ DocPtr Region(absl::string_view cls, DocPtr inner) {
 DocPtr NodeInfoBox(absl::string_view html) {
   return Concat({Tag("<div class=\"node-info\">"), Tag(std::string(html)),
                  Tag("</div>")});
-}
-
-constexpr int kInf = 1 << 29;
-
-bool ContainsHard(const DocPtr& d) {
-  switch (d->kind) {
-    case Kind::kLine:
-      return d->hard;
-    case Kind::kText:
-    case Kind::kNil:
-      return false;
-    default:
-      for (const auto& c : d->children) {
-        if (ContainsHard(c)) return true;
-      }
-      return false;
-  }
-}
-
-// Flat (single-line) visible width, capped at kInf. A hard line is unflattenable
-// so it makes the width effectively infinite.
-int FlatWidth(const DocPtr& d) {
-  switch (d->kind) {
-    case Kind::kNil:
-      return 0;
-    case Kind::kText:
-      return d->width;
-    case Kind::kLine:
-      return d->hard ? kInf : d->flat_width;
-    default: {
-      int sum = 0;
-      for (const auto& c : d->children) {
-        sum += FlatWidth(c);
-        if (sum >= kInf) return kInf;
-      }
-      return sum;
-    }
-  }
 }
 
 class Renderer {
@@ -285,7 +269,7 @@ class Renderer {
       case Kind::kGroup: {
         const DocPtr& body = d->children[0];
         const bool group_flat =
-            !ContainsHard(body) && col_ + FlatWidth(body) <= width_;
+            !body->contains_hard && col_ + body->flat_width_total <= width_;
         Emit(body, indent, group_flat);
         return;
       }
@@ -323,10 +307,6 @@ struct Piece {
   int end = 0;
 };
 
-bool StartsWith(absl::string_view s, absl::string_view prefix) {
-  return absl::StartsWith(s, prefix);
-}
-
 // Default continuation indent (columns) for wrapped clause content, lists and
 // parenthesized blocks. Pipe operators are the exception: their content lines
 // up under the operator name instead (see BuildPipe).
@@ -353,8 +333,10 @@ std::vector<Token> Tokenize(absl::string_view sql,
                             const LanguageOptions& language_options,
                             absl::string_view filename, int root_start,
                             int root_end) {
+  // Lex only up to the root's end (byte offsets are unaffected), so text after
+  // the statement being formatted cannot fail tokenization for it.
   ParseResumeLocation resume =
-      ParseResumeLocation::FromStringView(filename, sql);
+      ParseResumeLocation::FromStringView(filename, sql.substr(0, root_end));
   resume.set_byte_position(root_start);
   ParseTokenOptions options;
   options.include_comments = true;
@@ -565,16 +547,20 @@ class Builder {
     const auto [lo, hi] = TokenRange(begin, end);
     for (size_t i = lo; i < hi; ++i) {
       const Token& t = tokens_[i];
+      // Clamp to the requested range: piece boundaries are normally
+      // token-aligned, but if one ever fell mid-token this must not emit bytes
+      // beyond `end` (they belong to the next piece).
+      const int te = std::min(t.end, end);
       if (t.comment) {  // comments are handled by the comment-aware paths
         pending = true;
-        cursor = t.end;
+        cursor = te;
         continue;
       }
       if (cursor < t.begin && HasWhitespace(cursor, t.begin)) pending = true;
       if (pending) out += ' ';
       pending = false;
-      out.append(sql_.data() + t.begin, t.end - t.begin);
-      cursor = t.end;
+      out.append(sql_.data() + t.begin, te - t.begin);
+      cursor = te;
     }
     if (cursor < end && HasWhitespace(cursor, end)) pending = true;
     if (pending) out += ' ';
@@ -589,7 +575,15 @@ class Builder {
       const auto [lo, hi] = TokenRange(begin, end);
       for (size_t i = lo; i < hi; ++i) {
         if (tokens_[i].comment) {
-          spans.push_back({tokens_[i].begin, tokens_[i].end});
+          // The lexer's line-comment tokens include the trailing newline; trim
+          // it so the span is just the comment text (matching the fallback
+          // scan below) and Esc never embeds a raw trailing newline.
+          int ce = std::min(tokens_[i].end, end);
+          while (ce > tokens_[i].begin &&
+                 (sql_[ce - 1] == '\n' || sql_[ce - 1] == '\r')) {
+            --ce;
+          }
+          spans.push_back({tokens_[i].begin, ce});
         }
       }
       return spans;
@@ -643,9 +637,6 @@ class Builder {
   bool GapHasComment(const Piece& p) const {
     return RangeHasComment(p.begin, p.end);
   }
-
-  // Renders a literal gap as inline escaped text (with comments wrapped).
-  DocPtr GapInline(const Piece& p) { return GapWithComments(p.begin, p.end); }
 
   // Renders a source range as inline code interleaved with comment divs: code
   // segments (token-verbatim, whitespace collapsed) between comment tokens,
@@ -761,9 +752,11 @@ class Builder {
         ++child_count;
         prev_child = true;
       } else {
-        absl::string_view c =
-            absl::StripLeadingAsciiWhitespace(GapText(ps[i]));
-        if (prev_child && StartsWith(c, ",")) ++comma_seps;
+        // NormalizeCode (rather than raw text) so a comment before the comma
+        // does not hide it from list detection.
+        std::string c = NormalizeCode(ps[i].begin, ps[i].end);
+        absl::string_view stripped = absl::StripLeadingAsciiWhitespace(c);
+        if (prev_child && absl::StartsWith(stripped, ",")) ++comma_seps;
         prev_child = false;
       }
     }
@@ -771,7 +764,10 @@ class Builder {
   }
 
   // Builds the contents of a comma-separated list from pieces[first..end_child],
-  // attaching each comma inside the preceding item's box.
+  // attaching each comma inside the preceding item's box. The commas are
+  // synthesized (the separator gaps are not re-emitted), so any comment in a
+  // separator gap is rendered explicitly after the comma; a line comment there
+  // forces the item break to be hard.
   DocPtr BuildListBody(const std::vector<Piece>& ps, size_t first, Ctx ctx) {
     // Gather child indices.
     std::vector<size_t> child_idx;
@@ -783,7 +779,16 @@ class Builder {
       const bool last = (k + 1 == child_idx.size());
       DocPtr trailer = last ? nullptr : Esc(",");
       parts.push_back(Build(ps[child_idx[k]].child, ctx, trailer));
-      if (!last) parts.push_back(Line(" "));
+      if (last) break;
+      const size_t gi = child_idx[k] + 1;
+      bool force_break = false;
+      if (gi < ps.size() && ps[gi].child == nullptr && GapHasComment(ps[gi])) {
+        parts.push_back(InlineComments(ps[gi].begin, ps[gi].end));
+        for (const auto& [cs, ce] : CommentSpansIn(ps[gi].begin, ps[gi].end)) {
+          if (CommentForcesBreak(sql_.substr(cs, ce - cs))) force_break = true;
+        }
+      }
+      parts.push_back(force_break ? HardLine() : Line(" "));
     }
     return Group(Concat(std::move(parts)));
   }
@@ -1071,6 +1076,10 @@ class Builder {
     for (const Piece& p : ps) {
       if (p.child != nullptr) {
         parts.push_back(Nest(3, Build(p.child, inner_ctx)));
+      } else if (GapHasComment(p)) {
+        // A comment in the marker gap (e.g. between "|>" and the operator
+        // keyword) renders with the comment-aware path so it is not dropped.
+        parts.push_back(GapWithComments(p.begin, p.end));
       } else {
         // The leading "|>" marker (and any stray punctuation/keywords). Always
         // put a space after the bare "|>" before the operator; for most
@@ -1131,7 +1140,7 @@ class Builder {
         parts.push_back(Esc(" "));
         parts.push_back(Build(ps[i].child, ctx));
       } else {
-        DocPtr g = GapInline(ps[i]);
+        DocPtr g = GapWithComments(ps[i].begin, ps[i].end);
         if (g->kind != Kind::kNil) {
           parts.push_back(Esc(" "));
           parts.push_back(g);
@@ -1263,6 +1272,9 @@ class Builder {
       parts.push_back(ClauseSep(ctx));
       if (!op.empty()) {
         parts.push_back(Esc(op));
+        // Any comment in the operator gap attaches to the operator's line
+        // (approximate placement, but never dropped).
+        parts.push_back(InlineComments(gb, ge));
         parts.push_back(ClauseSep(ctx));
       }
       parts.push_back(Build(operands[i], ctx));
@@ -1289,17 +1301,36 @@ class Builder {
       }
       std::string c = std::string(
           absl::StripAsciiWhitespace(NormalizeCode(p.begin, p.end)));
-      if (i == 0 && !header.empty() && StartsWith(c, header)) {
+      // Comments in this gap render inline next to the keyword (approximate
+      // placement, but never dropped). Keyword matching is case-insensitive;
+      // the header/footer are re-emitted (by the wrapper below) in the
+      // canonical case from the format spec, while arm keywords keep the
+      // source's case.
+      DocPtr comments = InlineComments(p.begin, p.end);
+      const bool has_comment = comments->kind != Kind::kNil;
+      if (i == 0 && !header.empty() && absl::StartsWithIgnoreCase(c, header)) {
         c = std::string(absl::StripAsciiWhitespace(c.substr(header.size())));
       }
-      if (c.empty()) continue;
-      if (!footer.empty() && (c == footer || StartsWith(c, absl::StrCat(footer, " ")))) {
-        continue;  // footer is emitted by the wrapper below
+      if (c.empty() ||
+          (!footer.empty() &&
+           (absl::EqualsIgnoreCase(c, footer) ||
+            absl::StartsWithIgnoreCase(c, absl::StrCat(footer, " "))))) {
+        // Nothing but the footer (emitted by the wrapper below) or whitespace;
+        // keep any comment.
+        if (has_comment) body.push_back(comments);
+        continue;
       }
       bool is_arm = false;
       for (absl::string_view kw : fmt.break_before_keywords) {
-        if (StartsWith(c, kw)) {
-          body.push_back(Line(" "));
+        if (absl::StartsWithIgnoreCase(c, kw)) {
+          // The comment attaches to the end of the previous line, and forces
+          // the arm break (and so the whole CASE) to be hard.
+          if (has_comment) {
+            body.push_back(comments);
+            body.push_back(HardLine());
+          } else {
+            body.push_back(Line(" "));
+          }
           body.push_back(Esc(absl::StrCat(c, " ")));
           is_arm = true;
           break;
@@ -1309,6 +1340,7 @@ class Builder {
         // A connector keyword (e.g. THEN) stays inline with spaces on both
         // sides, since the surrounding operands render without them.
         body.push_back(Esc(absl::StrCat(" ", c, " ")));
+        if (has_comment) body.push_back(comments);
       }
     }
     return Group(Concat({Esc(std::string(header)),
@@ -1458,8 +1490,13 @@ class Builder {
         first = false;
       } else {
         std::string c = NormalizeCode(p.begin, p.end);
-        if (StartsWith(c, ";")) parts.push_back(Esc(";"));
-        else if (GapHasComment(p)) parts.push_back(GapWithComments(p.begin, p.end));
+        if (absl::StartsWith(c, ";")) {
+          parts.push_back(Esc(";"));
+          // A comment in the ";" gap attaches to the statement's line.
+          parts.push_back(InlineComments(p.begin, p.end));
+        } else if (GapHasComment(p)) {
+          parts.push_back(GapWithComments(p.begin, p.end));
+        }
       }
     }
     return Concat(std::move(parts));

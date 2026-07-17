@@ -230,6 +230,8 @@ Doc {
   bool hard;                     // kLine: is this a HardLine?
   int nest;                      // kNest: how many columns to add
   std::vector<DocPtr> children;  // kConcat / kGroup / kNest: sub-docs
+  int flat_width_total;          // subtree width if rendered flat (precomputed)
+  bool contains_hard;            // subtree contains a HardLine (precomputed)
 }
 ```
 
@@ -256,7 +258,10 @@ group is flat  ⇔  the group contains no HardLine
 
 `FlatWidth` is the visible width the group would occupy on one line (a
 `HardLine` makes it effectively infinite, which is how "this contains a
-mandatory break" propagates outward).
+mandatory break" propagates outward). Both it and the contains-a-`HardLine`
+flag are precomputed bottom-up when each `Doc` node is constructed (`Doc`s are
+immutable), so the renderer's fit check is a constant-time field read rather
+than a subtree walk.
 
 ```
   width = 24
@@ -521,7 +526,10 @@ LEFT JOIN cc AS c ON b.k = c.k
 Each arm keyword (`WHEN`, `ELSE`) starts a new indented line; the footer (`END`)
 dedents back to the header (`CASE`) column; other keywords (`THEN`) stay inline
 as connectors. All the keywords come from the node's format spec, so the same
-engine serves any construct of this shape.
+engine serves any construct of this shape. Keyword matching is
+case-insensitive: the header and footer are re-emitted in the spec's canonical
+(upper) case, while arm/connector keywords keep the case they had in the
+source.
 
 ```
 CASE
@@ -540,12 +548,21 @@ One statement per line, `;` attached.
 
 Comments do not appear in the AST, so they are located from the lexer's
 `COMMENT` tokens (see *Gap text is handled as real lexer tokens*, above) —
-precisely, never by guessing from gap characters. A line comment (`--` / `#`),
-or any comment containing a newline, forces a `HardLine` after it so the
-original line structure of the comment survives. Between stacked items (query
-clauses, pipe operators) a trailing comment is attached to the *current* line
-instead of introducing a blank line, so `\|> WHERE x -- note` keeps its note on
-the same line rather than pushing a gap.
+precisely, never by guessing from gap characters. (The lexer's line-comment
+tokens include the trailing newline; the formatter trims it off the span so a
+comment is just its text.) A line comment (`--` / `#`), or any comment
+containing a newline, forces a `HardLine` after it so the original line
+structure of the comment survives. Between stacked items (query clauses, pipe
+operators) a trailing comment is attached to the *current* line instead of
+introducing a blank line, so `\|> WHERE x -- note` keeps its note on the same
+line rather than pushing a gap.
+
+Layouts that synthesize their separators instead of re-emitting gap text (list
+commas, set-operation operators, `CASE` arms, the pipe `\|>` marker, the `;` in
+a statement list) still emit any comment found in those gaps, attached inline
+next to the construct — placement is approximate there, but a comment is never
+silently dropped. A line comment in a list separator also forces the list to
+break, so the comment can't swallow the rest of the line.
 
 ---
 

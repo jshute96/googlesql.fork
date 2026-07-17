@@ -214,6 +214,44 @@ TEST(BoxFormatterTest, RealCommentStillDetectedAfterString) {
   EXPECT_THAT(out, HasSubstr("-- note"));
 }
 
+TEST(BoxFormatterTest, LowercaseCaseKeywordsHandled) {
+  // Keyword matching in the CASE layout is case-insensitive: lowercase
+  // case/when/then/else/end must not duplicate the synthesized CASE/END.
+  std::string out =
+      Box("SELECT case when aaaa > 1 then 1 else 2 end FROM t", 20);
+  EXPECT_THAT(out,
+              HasSubstr("CASE\n    when aaaa > 1 then 1\n    else 2\n  END"));
+  EXPECT_THAT(out, Not(HasSubstr("CASEcase")));
+  EXPECT_THAT(out, Not(HasSubstr("end")));
+}
+
+TEST(BoxFormatterTest, CommentInPipeMarkerGapPreserved) {
+  // A comment between "|>" and the operator keyword is kept (previously the
+  // token-based code normalization silently dropped it).
+  std::string out = Box("FROM t |> /* c */ WHERE x > 1");
+  EXPECT_THAT(out, HasSubstr("/* c */"));
+}
+
+TEST(BoxFormatterTest, CommentInSetOperationGapPreserved) {
+  std::string out = Box("SELECT 1 UNION ALL -- note\nSELECT 2");
+  EXPECT_THAT(out, HasSubstr("UNION ALL"));
+  EXPECT_THAT(out, HasSubstr("-- note"));
+}
+
+TEST(BoxFormatterTest, CommentInCaseArmGapPreserved) {
+  std::string out =
+      Box("SELECT CASE WHEN a > 1 THEN 1 -- why\nELSE 2 END FROM t");
+  EXPECT_THAT(out, HasSubstr("-- why"));
+}
+
+TEST(BoxFormatterTest, CommentInListGapPreserved) {
+  // The list layout synthesizes its commas; a comment in a separator gap must
+  // still be emitted, attached after the comma, and forces the list to break.
+  std::string out = Box("SELECT aaa, -- one\nbbb FROM t");
+  EXPECT_THAT(out, HasSubstr("aaa, -- one\n"));
+  EXPECT_THAT(out, HasSubstr("bbb"));
+}
+
 TEST(BoxFormatterTest, SetOperationStacks) {
   EXPECT_THAT(Box("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3"),
               Eq("SELECT 1\nUNION ALL\nSELECT 2\nUNION ALL\nSELECT 3"));
