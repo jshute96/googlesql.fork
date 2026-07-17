@@ -96,11 +96,19 @@ they apply under. Skip any whose condition doesn't describe your machine.
 - A **C++20** compiler. The default `--config=clang` (see `.bazelrc`) builds
   with an LLVM toolchain that `toolchains_llvm` downloads, so a host clang is
   not strictly required, but `tzdata` is.
-- A host **Go** toolchain and host **autotools** (`make`, `cmake`, `ninja`,
-  `pkg-config`, `autoconf`, `automake`, `m4`). `MODULE.bazel` is configured to
-  use the host's Go (`go_sdk.host()`) and the preinstalled `rules_foreign_cc`
-  toolchains rather than downloading them — the Go tool `textmapper` (lexer gen)
-  and the ICU build (via `rules_foreign_cc`) depend on these being installed.
+- A host **Go** toolchain (**≥ 1.25**) and host **autotools** (`make`, `cmake`,
+  `ninja`, `pkg-config`, `autoconf`, `automake`, `m4`). `MODULE.bazel` is
+  configured to use the host's Go (`go_sdk.host()`) and the preinstalled
+  `rules_foreign_cc` toolchains rather than downloading them — the Go tool
+  `textmapper` (lexer gen) and the ICU build (via `rules_foreign_cc`) depend on
+  these being installed. The Go floor is real: `go.mod` declares `go 1.25` and
+  `textmapper` requires ≥ 1.25, and because `go_sdk.host()` runs the host `go`
+  with `GOTOOLCHAIN=local`, a host `go` that only *reaches* 1.25 via
+  `GOTOOLCHAIN=auto` download is **not** enough — the host `go` must itself be
+  ≥ 1.25 (check: `GOTOOLCHAIN=local go version`). If the host Go was upgraded
+  after a prior build, Bazel caches the old host-SDK repo; clear it with
+  `bazel shutdown` then remove `external/rules_go~~go_sdk~*host*` (dirs and
+  `@…​.marker` files) under the output base before rebuilding.
 - First build is **slow**: the generated `resolved_ast` sources and ICU
   (autoconf + make) dominate. Expect tens of minutes from a cold cache.
 
