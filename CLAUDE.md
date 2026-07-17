@@ -72,6 +72,10 @@ bazel run //googlesql/tools/execute_query:execute_query -- --web   # interactive
 version is pinned in `.bazelversion`. See `README.md` for full instructions and
 `execute_query.md` for the tool.
 
+Some hosts need more than these plain commands — the conditional subsections
+below (ecryptfs, low-resource, restricted-network) each state the condition
+they apply under. Skip any whose condition doesn't describe your machine.
+
 ### What a build actually needs
 
 - **Bazel** at the `.bazelversion` version (install it if the container has
@@ -86,6 +90,54 @@ version is pinned in `.bazelversion`. See `README.md` for full instructions and
   and the ICU build (via `rules_foreign_cc`) depend on these being installed.
 - First build is **slow**: the generated `resolved_ast` sources and ICU
   (autoconf + make) dominate. Expect tens of minutes from a cold cache.
+
+### Iterating: rebuild costs and gotchas
+
+- **Edits to `resolved_ast/*.{h,cc}` are expensive** — they force the generated
+  sources to recompile, and that dominates the rebuild (tens of minutes on a
+  modest host, versus seconds for a tool / JS / CSS edit). Batch AST-header
+  edits together before kicking off a build rather than iterating one at a time.
+- **`execute_query`'s web assets are embedded at build time.** Editing
+  `tools/execute_query/web/*.{js,css}` needs a full relink *and* a server
+  restart — a reload won't pick it up. To confirm the new binary really contains
+  the change:
+  `grep -a -c "<marker-string>" bazel-bin/googlesql/tools/execute_query/execute_query`
+- **Bazel's JVM writes crash dumps (`hs_err_pid*.log`, `replay_pid*.log`) into
+  the repo root.** They show up as untracked files; delete them before committing.
+
+### Building on an ecryptfs home directory
+
+If Bazel's cache/output base lives on an **ecryptfs mount with filename
+encryption** (check: `mount | grep ecryptfs` shows an `ecryptfs_fnek_sig=`
+option), encrypted filenames expand past the 255-byte limit and builds fail with
+`build-runfiles failed: File name too long`, plus spurious "reading symlink …
+No such file or directory" errors. Two flags avoid staging a runfiles tree:
+
+```bash
+bazel build --config=clang --nobuild_runfile_links --dynamic_mode=off <target>
+bazel test  --config=clang --nobuild_runfile_links --dynamic_mode=off \
+            --test_output=errors <target>
+```
+
+`--nobuild_runfile_links` alone isn't enough for test targets — they link a
+`.so` solib tree, which `--dynamic_mode=off` (static link) avoids.
+
+For the same reason, **run tools by their built binary rather than `bazel run`**
+(which stages runfiles and fails):
+`./bazel-bin/googlesql/tools/execute_query/execute_query --web --port=8080`.
+The web assets are embedded, so no runfiles are needed. Binaries that read
+tzdata directly may need `TZDIR=/usr/share/zoneinfo`.
+
+### Low-resource hosts (no swap, or a near-full disk)
+
+Lower `--jobs` (e.g. `--jobs=2`) — the default fans out to core count and the
+heavy C++ translation units spike memory and scratch space together.
+
+Interpret failures accordingly: a **slow clang SIGSEGV/SIGBUS/ICE deep in the
+build, on a file unrelated to your change, is resource pressure, not a compiler
+bug** — despite LLVM's "please file a bug" message. Lower `--jobs` and rerun;
+Bazel caches successful actions, so retries converge. By contrast a *fast*
+failure with a clear diagnostic is a real compile error worth reading.
 
 ### Building behind a restricted-network sandbox (e.g. Claude Code on the web)
 
