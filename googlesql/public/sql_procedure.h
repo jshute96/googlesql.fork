@@ -25,6 +25,7 @@
 #include "googlesql/public/procedure.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "absl/memory/memory.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 
 namespace googlesql {
@@ -43,8 +44,7 @@ class SQLProcedure : public Procedure {
   // Creates a SQLProcedure with empty module details.
   static absl::StatusOr<std::unique_ptr<SQLProcedure>> Create(
       const ResolvedCreateProcedureStmt* create_procedure_statement) {
-    return absl::WrapUnique(new SQLProcedure(create_procedure_statement,
-                                             ModuleDetails::CreateEmpty()));
+    return Create(create_procedure_statement, ModuleDetails::CreateEmpty());
   }
 
   // Same as above, but Creates a SQLProcedure with the specified
@@ -52,6 +52,8 @@ class SQLProcedure : public Procedure {
   static absl::StatusOr<std::unique_ptr<SQLProcedure>> Create(
       const ResolvedCreateProcedureStmt* create_procedure_statement,
       ModuleDetails module_details) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        create_procedure_statement->signature().IsValidForProcedure());
     return absl::WrapUnique(new SQLProcedure(create_procedure_statement,
                                              std::move(module_details)));
   }
@@ -68,6 +70,15 @@ class SQLProcedure : public Procedure {
 
   const ModuleDetails& module_details() const { return module_details_; }
 
+  Catalog* resolution_catalog() const { return resolution_catalog_; }
+
+  // If set, <resolution_catalog_> is used to resolve statements in the
+  // procedure body. If this object is created from a module, the resolution
+  // catalog must be set.
+  void set_resolution_catalog(Catalog* resolution_catalog) {
+    resolution_catalog_ = resolution_catalog;
+  }
+
  private:
   explicit SQLProcedure(
       const ResolvedCreateProcedureStmt* create_procedure_statement,
@@ -82,6 +93,9 @@ class SQLProcedure : public Procedure {
 
   // Details about the containing GoogleSQL module.
   const ModuleDetails module_details_;
+
+  // The catalog used to resolve the procedure body. Not owned.
+  Catalog* resolution_catalog_ = nullptr;
 };
 
 }  // namespace googlesql

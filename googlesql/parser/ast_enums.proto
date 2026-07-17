@@ -53,6 +53,11 @@ enum SchemaObjectKind {
   kPropertyGraph = 16;
   kExternalSchema = 18;
   kSequence = 20;
+  kLiveTable = 21;
+  kSearchIndex = 22;
+  kVectorIndex = 23;
+  kAiIndex = 24;
+  kPropertyGraphType = 25;
 }
 
 message ASTBinaryExpressionEnums {
@@ -88,6 +93,7 @@ message ASTOptionsEntryEnums {
     ASSIGN = 1;      // "="
     ADD_ASSIGN = 2;  // "+="
     SUB_ASSIGN = 3;  // "-="
+    FROM = 4;        // "FROM"
   }
 }
 
@@ -207,6 +213,20 @@ message ASTWindowFrameExprEnums {
     UNBOUNDED_FOLLOWING = 5;
   }
 }
+// Defines the possible types of bounds in WITHIN clause of estimator
+// function calls and OUTPUT WITHIN clause in ALIGN operator.
+message ASTAlignWithinBoundExprEnums {
+  enum AlignWithinBoundType {
+    NOT_SET = 0;
+    UNBOUNDED_PRECEDING = 1;
+    UNBOUNDED_FOLLOWING = 2;
+    PERIOD_PRECEDING = 3;
+    PERIOD_FOLLOWING = 4;
+    INTERVAL_PRECEDING = 5;
+    INTERVAL_FOLLOWING = 6;
+    TIMESTAMP = 7;
+  }
+}
 message ASTAnySomeAllOpEnums {
   enum Op {
     // 0 reserved for future NOT_SET. See b/186246331.
@@ -228,6 +248,14 @@ message ASTImportStatementEnums {
     // 0 reserved for future NOT_SET. See b/186246331.
     MODULE = 1;
     PROTO = 2;
+  }
+}
+
+message ASTDefineMacroStatementEnums {
+  enum MacroVisibility {
+    MACRO_VISIBILITY_UNSPECIFIED = 0;
+    PUBLIC = 1;
+    PRIVATE = 2;
   }
 }
 message ASTUnpivotClauseEnums {
@@ -269,6 +297,10 @@ message ASTTemplatedParameterTypeEnums {
     ANY_STRUCT = 5;
     ANY_ARRAY = 6;
     ANY_TABLE = 7;
+    // Similar to ANY TYPE, but the input type must coerce to STRING.
+    // Other modifications, e.g. collation is preserved.
+    // See (broken link)
+    ANY_STRING = 8;
   }
 }
 message ASTGeneratedColumnInfoEnums {
@@ -443,6 +475,14 @@ message ASTGraphNodeTableReferenceEnums {
   }
 }
 
+message ASTGraphNodeTypeReferenceEnums {
+  enum NodeReferenceType {
+    NODE_REFERENCE_TYPE_UNSPECIFIED = 0;
+    SOURCE = 1;
+    DESTINATION = 2;
+  }
+}
+
 message ASTGraphLabelOperationEnums {
   enum OperationType {
     OPERATION_TYPE_UNSPECIFIED = 0;
@@ -507,5 +547,6 @@ message ASTAlterIndexStatementEnums {
     INDEX_DEFAULT = 0;
     INDEX_SEARCH = 1;
     INDEX_VECTOR = 2;
+    INDEX_AI = 3;
   }
 }

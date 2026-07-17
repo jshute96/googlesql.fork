@@ -49,6 +49,7 @@
 #include "googlesql/public/type.pb.h"
 #include "googlesql/public/types/annotation.h"
 #include "googlesql/public/types/array_type.h"
+#include "googlesql/public/types/declarative_type.h"
 #include "googlesql/public/types/enum_type.h"
 #include "googlesql/public/types/graph_element_type.h"
 #include "googlesql/public/types/internal_utils.h"
@@ -73,8 +74,10 @@
 #include "absl/container/node_hash_map.h"
 #include "absl/flags/flag.h"
 #include "googlesql/base/check.h"
+#include "absl/memory/memory.h"
 #include "absl/meta/type_traits.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
@@ -85,7 +88,6 @@
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_builder.h"
-#include "googlesql/base/status_macros.h"
 
 ABSL_FLAG(int32_t, googlesql_type_factory_nesting_depth_limit,
           std::numeric_limits<int32_t>::max(),
@@ -130,6 +132,7 @@ static const auto* StaticTypeSet() {
       types::JsonType(),
       types::TokenListType(),
       types::UuidType(),
+      types::ColumnListSpecType(),
   };
   return kStaticTypeSet;
 }
@@ -175,7 +178,7 @@ int64_t TypeFactory::GetEstimatedOwnedMemoryBytesSize() const {
   // threaded accesses during concurrent unit tests. Also, function
   // GetExternallyAllocatedMemoryEstimate doesn't declare thread safety (even
   // though current implementation is safe).
-  absl::MutexLock l(&store_->mutex_);
+  absl::MutexLock l(store_->mutex_);
   return sizeof(*this) + sizeof(internal::TypeStore) +
          estimated_memory_used_by_types_ +
          internal::GetExternallyAllocatedMemoryEstimate(store_->owned_types_) +
@@ -193,14 +196,17 @@ int64_t TypeFactory::GetEstimatedOwnedMemoryBytesSize() const {
          internal::GetExternallyAllocatedMemoryEstimate(
              cached_enum_types_with_extra_attributes_) +
          internal::GetExternallyAllocatedMemoryEstimate(cached_catalog_names_) +
-         internal::GetExternallyAllocatedMemoryEstimate(cached_extended_types_);
+         internal::GetExternallyAllocatedMemoryEstimate(
+             cached_extended_types_) +
+         internal::GetExternallyAllocatedMemoryEstimate(
+             cached_declarative_types_);
 }
 
 template <class TYPE>
 const TYPE* TypeFactory::TakeOwnership(const TYPE* type) {
   const int64_t type_owned_bytes_size =
       type->GetEstimatedOwnedMemoryBytesSize();
-  absl::MutexLock l(&store_->mutex_);
+  absl::MutexLock l(store_->mutex_);
   return TakeOwnershipLocked(type, type_owned_bytes_size);
 }
 
@@ -225,7 +231,7 @@ const auto* TypeFactory::MakeTypeWithChildElementType(
     absl::flat_hash_map<const Type*, const TYPE*>& cache) {
   auto& cached_result = cache[element_type];
   if (cached_result == nullptr) {
-    cached_result = TakeOwnershipLocked(new TYPE(this, element_type));
+    cached_result = TakeOwnershipLocked(new TYPE(*this, element_type));
   }
   return cached_result;
 }
@@ -250,6 +256,9 @@ const Type* TypeFactory::get_bignumeric() { return types::BigNumericType(); }
 const Type* TypeFactory::get_json() { return types::JsonType(); }
 const Type* TypeFactory::get_tokenlist() { return types::TokenListType(); }
 const Type* TypeFactory::get_uuid() { return types::UuidType(); }
+const Type* TypeFactory::get_column_list_spec() {
+  return types::ColumnListSpecType();
+}
 
 const Type* TypeFactory::MakeSimpleType(TypeKind kind) {
   ABSL_CHECK(Type::IsSimpleType(kind))
@@ -259,15 +268,19 @@ const Type* TypeFactory::MakeSimpleType(TypeKind kind) {
   return type;
 }
 
-absl::Status TypeFactory::MakeArrayType(const Type* element_type,
-                                        const ArrayType** result) {
+absl::StatusOr<const ArrayType*> TypeFactory::MakeArrayType(
+    const Type* element_type) {
+  return MakeArrayType(element_type, /*allow_array_of_array=*/false);
+}
+
+absl::StatusOr<const ArrayType*> TypeFactory::MakeArrayType(
+    const Type* element_type, bool allow_array_of_array) {
   if (this != s_type_factory() && StaticTypeSet()->contains(element_type)) {
-    return s_type_factory()->MakeArrayType(element_type, result);
+    return s_type_factory()->MakeArrayType(element_type, allow_array_of_array);
   }
 
-  *result = nullptr;
   AddDependency(element_type);
-  if (element_type->IsArray()) {
+  if (!allow_array_of_array && element_type->IsArray()) {
     return ::googlesql_base::InvalidArgumentErrorBuilder()
            << "Array of array types are not supported";
   }
@@ -277,8 +290,20 @@ absl::Status TypeFactory::MakeArrayType(const Type* element_type,
     return ::googlesql_base::InvalidArgumentErrorBuilder()
            << "Array type would exceed nesting depth limit of " << depth_limit;
   }
-  absl::MutexLock lock(&store_->mutex_);
-  *result = MakeTypeWithChildElementType(element_type, cached_array_types_);
+  absl::MutexLock lock(store_->mutex_);
+  return MakeTypeWithChildElementType(element_type, cached_array_types_);
+}
+
+absl::StatusOr<const ArrayType*> TypeFactory::MakeArrayType(
+    const Type* element_type, const LanguageOptions& language_options) {
+  return MakeArrayType(element_type, language_options.LanguageFeatureEnabled(
+                                         FEATURE_ARRAY_OF_ARRAY));
+}
+
+absl::Status TypeFactory::MakeArrayType(const Type* element_type,
+                                        const ArrayType** result) {
+  GOOGLESQL_ASSIGN_OR_RETURN(*result,
+                   MakeArrayType(element_type, /*allow_array_of_array=*/false));
   return absl::OkStatus();
 }
 
@@ -318,7 +343,7 @@ absl::Status TypeFactory::MakeStructTypeFromVector(
   // We calculate <max_nesting_depth> in the previous loop. We also need to
   // increment it to take into account the struct itself.
   *result = TakeOwnership(
-      new StructType(this, std::move(fields), max_nesting_depth + 1));
+      new StructType(*this, std::move(fields), max_nesting_depth + 1));
   return absl::OkStatus();
 }
 
@@ -349,10 +374,11 @@ const EnumType*& TypeFactory::FindOrCreateCachedType(
   }
 }
 
-const ProtoType* TypeFactory::MakeProtoTypeImpl(
+absl::StatusOr<const ProtoType*> TypeFactory::MakeProtoTypeImpl(
     const google::protobuf::Descriptor* descriptor,
     absl::Span<const std::string> catalog_name_path) {
-  absl::MutexLock lock(&store_->mutex_);
+  GOOGLESQL_RET_CHECK_NE(descriptor, nullptr);
+  absl::MutexLock lock(store_->mutex_);
 
   const internal::CatalogName* cached_catalog =
       FindOrCreateCatalogName(catalog_name_path);
@@ -362,15 +388,16 @@ const ProtoType* TypeFactory::MakeProtoTypeImpl(
 
   if (cached_type == nullptr) {
     cached_type =
-        TakeOwnershipLocked(new ProtoType(this, descriptor, cached_catalog));
+        TakeOwnershipLocked(new ProtoType(*this, descriptor, cached_catalog));
   }
   return cached_type;
 }
 
-const EnumType* TypeFactory::MakeEnumTypeImpl(
+absl::StatusOr<const EnumType*> TypeFactory::MakeEnumTypeImpl(
     const google::protobuf::EnumDescriptor* descriptor,
     absl::Span<const std::string> catalog_name_path, bool is_opaque) {
-  absl::MutexLock lock(&store_->mutex_);
+  GOOGLESQL_RET_CHECK_NE(descriptor, nullptr);
+  absl::MutexLock lock(store_->mutex_);
 
   const internal::CatalogName* cached_catalog =
       FindOrCreateCatalogName(catalog_name_path);
@@ -380,7 +407,7 @@ const EnumType* TypeFactory::MakeEnumTypeImpl(
 
   if (cached_type == nullptr) {
     cached_type = TakeOwnershipLocked(
-        new EnumType(this, descriptor, cached_catalog, is_opaque));
+        new EnumType(*this, descriptor, cached_catalog, is_opaque));
   }
   return cached_type;
 }
@@ -407,23 +434,72 @@ const internal::CatalogName* TypeFactory::FindOrCreateCatalogName(
 absl::Status TypeFactory::MakeProtoType(
     const google::protobuf::Descriptor* descriptor, const ProtoType** result,
     absl::Span<const std::string> catalog_name_path) {
-  *result = MakeProtoTypeImpl(descriptor, catalog_name_path);
+  GOOGLESQL_ASSIGN_OR_RETURN(*result, MakeProtoTypeImpl(descriptor, catalog_name_path));
   return absl::OkStatus();
 }
 
 absl::Status TypeFactory::MakeProtoType(
     const google::protobuf::Descriptor* descriptor, const Type** result,
     absl::Span<const std::string> catalog_name_path) {
-  *result = MakeProtoTypeImpl(descriptor, catalog_name_path);
+  GOOGLESQL_ASSIGN_OR_RETURN(*result, MakeProtoTypeImpl(descriptor, catalog_name_path));
   return absl::OkStatus();
+}
+
+static absl::Status ValidateDeclarativeTypeDescriptor(
+    const DeclarativeTypeDescriptor& descriptor) {
+  GOOGLESQL_RET_CHECK(!descriptor.type_id().name_space.empty());
+  GOOGLESQL_RET_CHECK(!descriptor.type_id().local_id.empty());
+
+  GOOGLESQL_RET_CHECK(descriptor.type_id().counter >= 0);
+  if (descriptor.type_id().IsGoogleSQLBuiltin()) {
+    GOOGLESQL_RET_CHECK_EQ(descriptor.type_id().counter, 0);
+  }
+
+  GOOGLESQL_RET_CHECK(!descriptor.display_name().empty());
+
+  GOOGLESQL_RET_CHECK(descriptor.backing_type() != nullptr);
+
+  return absl::OkStatus();
+}
+
+absl::StatusOr<const Type*> TypeFactory::MakeDeclarativeType(
+    DeclarativeTypeDescriptor descriptor) {
+  GOOGLESQL_RETURN_IF_ERROR(ValidateDeclarativeTypeDescriptor(descriptor));
+
+
+  if (this != s_type_factory() && descriptor.type_id().IsGoogleSQLBuiltin() &&
+      descriptor.backing_type()->type_store_ == s_type_factory()->store_) {
+    return s_type_factory()->MakeDeclarativeType(std::move(descriptor));
+  }
+
+  AddDependency(descriptor.backing_type());
+
+  TypeId type_id = descriptor.type_id();
+
+  auto declarative_type =
+      absl::WrapUnique(new DeclarativeType(*this, std::move(descriptor)));
+
+  absl::MutexLock lock(store_->mutex_);
+  auto it = cached_declarative_types_.find(type_id);
+  if (it == cached_declarative_types_.end()) {
+    it = cached_declarative_types_
+             .emplace(std::move(type_id),
+                      TakeOwnershipLocked(declarative_type.release()))
+             .first;
+  } else {
+    GOOGLESQL_RET_CHECK(it->second->IsIdenticalTo(declarative_type.get()))
+        << "Conflicting declarative types found for NameSpace: "
+        << type_id.name_space << " ID: " << type_id.local_id;
+  }
+  return it->second;
 }
 
 absl::Status TypeFactory::MakeEnumType(
     const google::protobuf::EnumDescriptor* enum_descriptor, const EnumType** result,
     absl::Span<const std::string> catalog_name_path) {
   GOOGLESQL_RET_CHECK_NE(enum_descriptor, nullptr);
-  *result =
-      MakeEnumTypeImpl(enum_descriptor, catalog_name_path, /*is_opaque=*/false);
+  GOOGLESQL_ASSIGN_OR_RETURN(*result, MakeEnumTypeImpl(enum_descriptor, catalog_name_path,
+                                             /*is_opaque=*/false));
   return absl::OkStatus();
 }
 
@@ -431,16 +507,16 @@ absl::Status TypeFactory::MakeEnumType(
     const google::protobuf::EnumDescriptor* enum_descriptor, const Type** result,
     absl::Span<const std::string> catalog_name_path) {
   GOOGLESQL_RET_CHECK_NE(enum_descriptor, nullptr);
-  *result =
-      MakeEnumTypeImpl(enum_descriptor, catalog_name_path, /*is_opaque=*/false);
+  GOOGLESQL_ASSIGN_OR_RETURN(*result, MakeEnumTypeImpl(enum_descriptor, catalog_name_path,
+                                             /*is_opaque=*/false));
   return absl::OkStatus();
 }
 
 absl::Status TypeFactory::MakeOpaqueEnumType(
     const google::protobuf::EnumDescriptor* enum_descriptor, const EnumType** result,
     absl::Span<const std::string> catalog_name_path) {
-  *result =
-      MakeEnumTypeImpl(enum_descriptor, catalog_name_path, /*is_opaque=*/true);
+  GOOGLESQL_ASSIGN_OR_RETURN(*result, MakeEnumTypeImpl(enum_descriptor, catalog_name_path,
+                                             /*is_opaque=*/true));
   return absl::OkStatus();
 }
 
@@ -473,7 +549,7 @@ absl::Status TypeFactory::MakeRangeType(const Type* element_type,
     return ::googlesql_base::InvalidArgumentErrorBuilder()
            << "Range type would exceed nesting depth limit of " << depth_limit;
   }
-  absl::MutexLock lock(&store_->mutex_);
+  absl::MutexLock lock(store_->mutex_);
   *result = MakeTypeWithChildElementType(element_type, cached_range_types_);
   return absl::OkStatus();
 }
@@ -512,7 +588,7 @@ absl::Status TypeFactory::MakeRowType(const Table* table,
   *result = nullptr;
   GOOGLESQL_RET_CHECK(table != nullptr);
 
-  *result = TakeOwnership(new RowType(this, table, table_name));
+  *result = TakeOwnership(new RowType(*this, table, table_name));
   return absl::OkStatus();
 }
 
@@ -523,31 +599,32 @@ absl::Status TypeFactory::MakeRowType(const Table* table,
                      reinterpret_cast<const RowType**>(result));
 }
 
-absl::Status TypeFactory::MakeRowType(
+absl::Status TypeFactory::MakeTableType(
     const Table* table, const std::string& table_name, bool multi_row,
     std::vector<const Column*> bound_columns, const Table* bound_source_table,
-    std::vector<const Column*> bound_source_columns, const RowType** result) {
+    std::vector<const Column*> bound_source_columns,
+    const TableRefType** result) {
   GOOGLESQL_RET_CHECK(table != nullptr);
 
-  // When making a join RowType, we also construct and bind in a corresponding
-  // non-join RowType as its element_type.  This is owned by the same
-  // TypeFactory.
+  // When making a TableRefType, we also construct and bind in a
+  // corresponding RowType as its element_type.  This is owned
+  // by the same TypeFactory.
   const RowType* element_type =
-      TakeOwnership(new RowType(this, table, table_name));
+      TakeOwnership(new RowType(*this, table, table_name));
 
-  *result = TakeOwnership(new RowType(
-      this, table, table_name, multi_row, std::move(bound_columns),
+  *result = TakeOwnership(new TableRefType(
+      *this, table, table_name, multi_row, std::move(bound_columns),
       bound_source_table, std::move(bound_source_columns), element_type));
   return absl::OkStatus();
 }
 
-absl::Status TypeFactory::MakeRowType(
+absl::Status TypeFactory::MakeTableType(
     const Table* table, const std::string& table_name, bool multi_row,
     std::vector<const Column*> bound_columns, const Table* bound_source_table,
     std::vector<const Column*> bound_source_columns, const Type** result) {
-  return MakeRowType(table, table_name, multi_row, std::move(bound_columns),
-                     bound_source_table, std::move(bound_source_columns),
-                     reinterpret_cast<const RowType**>(result));
+  return MakeTableType(table, table_name, multi_row, std::move(bound_columns),
+                       bound_source_table, std::move(bound_source_columns),
+                       reinterpret_cast<const TableRefType**>(result));
 }
 
 absl::StatusOr<const Type*> TypeFactory::MakeMapTypeImpl(
@@ -569,13 +646,13 @@ absl::StatusOr<const Type*> TypeFactory::MakeMapTypeImpl(
 
   // Cannot use TypeFactory::MakeTypeWithChildElementType here because we have a
   // pair of types.
-  absl::MutexLock lock(&store_->mutex_);
+  absl::MutexLock lock(store_->mutex_);
   auto type_pair = std::make_pair(key_type, value_type);
   auto it = cached_map_types_.find(type_pair);
   if (it == cached_map_types_.end()) {
     auto [inserted_it, _] = cached_map_types_.insert(
         {type_pair,
-         TakeOwnershipLocked(new MapType(this, key_type, value_type))});
+         TakeOwnershipLocked(new MapType(*this, key_type, value_type))});
     it = inserted_it;
   }
   return it->second;
@@ -661,11 +738,11 @@ absl::Status TypeFactory::MakeGraphElementTypeFromVector(
     AddDependency(itr->value_type);
   }
 
-  absl::MutexLock lock(&store_->mutex_);
+  absl::MutexLock lock(store_->mutex_);
   const internal::GraphReference* cached_graph_reference =
       FindOrCreateCatalogName(graph_reference);
   *result = TakeOwnershipLocked(new GraphElementType(
-      cached_graph_reference, element_kind, this, std::move(property_type_set),
+      cached_graph_reference, element_kind, *this, std::move(property_type_set),
       max_nesting_depth + 1, is_dynamic));
   return absl::OkStatus();
 }
@@ -713,9 +790,9 @@ absl::Status TypeFactory::MakeGraphPathType(const GraphElementType* node_type,
            << depth_limit;
   }
 
-  absl::MutexLock lock(&store_->mutex_);
+  absl::MutexLock lock(store_->mutex_);
   *result = TakeOwnershipLocked(
-      new GraphPathType(this, node_type, edge_type, max_nesting_depth + 1));
+      new GraphPathType(*this, node_type, edge_type, max_nesting_depth + 1));
   return absl::OkStatus();
 }
 
@@ -735,8 +812,8 @@ absl::StatusOr<const Type*> TypeFactory::MakeMeasureType(
   AddDependency(result_type);
 
   // Not cached as every MeasureType is unique for now.
-  absl::MutexLock l(&store_->mutex_);
-  return TakeOwnershipLocked(new MeasureType(this, result_type));
+  absl::MutexLock l(store_->mutex_);
+  return TakeOwnershipLocked(new MeasureType(*this, result_type));
 }
 
 absl::StatusOr<const ExtendedType*> TypeFactory::InternalizeExtendedType(
@@ -744,7 +821,7 @@ absl::StatusOr<const ExtendedType*> TypeFactory::InternalizeExtendedType(
   GOOGLESQL_RET_CHECK(extended_type);
   GOOGLESQL_RET_CHECK_EQ(extended_type->type_store_, store_);
 
-  absl::MutexLock lock(&store_->mutex_);
+  absl::MutexLock lock(store_->mutex_);
   auto [it, inserted] = cached_extended_types_.emplace(extended_type.get());
   if (!inserted) {
     // Type is already present in the cache. Return existing type, so
@@ -972,7 +1049,7 @@ absl::Status TypeFactory::DeserializeAnnotationMap(
 
 const AnnotationMap* TypeFactory::TakeOwnershipInternal(
     const AnnotationMap* annotation_map) {
-  absl::MutexLock lock(&store_->mutex_);
+  absl::MutexLock lock(store_->mutex_);
   store_->owned_annotation_maps_.push_back(annotation_map);
   estimated_memory_used_by_types_ +=
       annotation_map->GetEstimatedOwnedMemoryBytesSize();
@@ -1187,6 +1264,12 @@ static const EnumType* s_unsupported_fields_enum_type() {
 static const Type* s_uuid_type() {
   static const Type* s_uuid_type = new SimpleType(s_type_factory(), TYPE_UUID);
   return s_uuid_type;
+}
+
+static const Type* s_column_list_spec_type() {
+  static const Type* s_column_list_spec_type =
+      new SimpleType(s_type_factory(), TYPE_COLUMN_LIST_SPEC);
+  return s_column_list_spec_type;
 }
 
 static const EnumType* GetArrayFindModeEnumType() {
@@ -1477,6 +1560,7 @@ const EnumType* UnsupportedFieldsEnumType() {
   return s_unsupported_fields_enum_type();
 }
 const Type* UuidType() { return s_uuid_type(); }
+const Type* ColumnListSpecType() { return s_column_list_spec_type(); }
 
 const ArrayType* Int32ArrayType() { return s_int32_array_type(); }
 const ArrayType* Int64ArrayType() { return s_int64_array_type(); }
@@ -1552,6 +1636,8 @@ const Type* TypeFromSimpleTypeKind(TypeKind type_kind) {
       return TokenListType();
     case TYPE_UUID:
       return UuidType();
+    case TYPE_COLUMN_LIST_SPEC:
+      return ColumnListSpecType();
     default:
       GOOGLESQL_VLOG(1) << "Could not build static Type from type: "
               << Type::TypeKindToString(type_kind, PRODUCT_INTERNAL);
@@ -1705,7 +1791,7 @@ void TypeFactory::AddDependency(const Type* /*absl_nonnull*/ other_type) {
   if (other_store == store_ || other_store == s_type_factory()->store_) return;
 
   {
-    absl::MutexLock l(&store_->mutex_);
+    absl::MutexLock l(store_->mutex_);
     if (!googlesql_base::InsertIfNotPresent(&store_->depends_on_factories_, other_store)) {
       return;  // Already had it.
     }
@@ -1724,7 +1810,7 @@ void TypeFactory::AddDependency(const Type* /*absl_nonnull*/ other_type) {
     }
   }
   {
-    absl::MutexLock l(&other_store->mutex_);
+    absl::MutexLock l(other_store->mutex_);
     if (googlesql_base::InsertIfNotPresent(&other_store->factories_depending_on_this_,
                                 store_)) {
       if (other_store->keep_alive_while_referenced_from_value_) {

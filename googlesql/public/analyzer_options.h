@@ -71,6 +71,14 @@ struct StringVectorCaseLess {
 // achieve case-insensitive matching.
 typedef std::map<std::string, const Type*> QueryParametersMap;
 
+struct GraphPropertyDefinitionInfo {
+  const Type* type = nullptr;
+  bool is_same_name_column_def = false;
+};
+// TODO: Consider changing the map key type to IdString for consistency.
+typedef absl::flat_hash_map<std::string, GraphPropertyDefinitionInfo>
+    GraphPropertyDefinitionMap;
+
 // Key = name path of system variable.  Value = type of variable.
 // Name elements in the key do not include the "@@" prefix.
 // For example, if @@foo.bar has type INT32, the corresponding map entry is:
@@ -206,7 +214,7 @@ struct AllowedHintsAndOptions {
           {"group_selection_strategy",
            {types::DifferentialPrivacyGroupSelectionStrategyEnumType()}},
           {"min_privacy_units_per_group", {types::Int64Type()}},
-  };
+      };
 
   // Options allowed in ResolvedDifferentialPrivacyAggregateScan.
   absl::flat_hash_map<std::string, AllowedOptionProperties>
@@ -222,7 +230,7 @@ struct AllowedHintsAndOptions {
           {"group_selection_strategy",
            {types::DifferentialPrivacyGroupSelectionStrategyEnumType()}},
           {"min_privacy_units_per_group", {types::Int64Type()}},
-  };
+      };
 
  private:
   absl::Status AddHintImpl(absl::string_view qualifier, absl::string_view name,
@@ -338,7 +346,8 @@ class AnalyzerOptions {
   ABSL_MUST_USE_RESULT bool rewrite_enabled(ResolvedASTRewrite rewrite) const {
     return data_->enabled_rewrites.contains(rewrite);
   }
-  // Returns the set of rewrites that are enabled by default.
+  // Returns the set of rewrites that are enabled by default - all rewrites
+  // marked default_enabled=true and not marked in_development=true.
   static absl::btree_set<ResolvedASTRewrite> DefaultRewrites();
 
   // Adds new non-built-in rewriter that will be applied before all built-in
@@ -510,12 +519,42 @@ class AnalyzerOptions {
   void SetLookupCatalogColumnCallback(
       const LookupCatalogColumnCallback& lookup_catalog_column_callback);
 
+  // Replaces the entire pre-rewrite callback chain with a single callback,
+  // preserving the historical "set replaces" semantics.
+  ABSL_DEPRECATED("Use AddPreRewriteCallback instead.")
   void SetPreRewriteCallback(const PreRewriteCallback& pre_rewrite_callback) {
-    data_->pre_rewrite_callback = std::move(pre_rewrite_callback);
+    data_->pre_rewrite_callbacks.clear();
+    if (pre_rewrite_callback != nullptr) {
+      data_->pre_rewrite_callbacks.push_back(pre_rewrite_callback);
+    }
   }
 
+  // Appends a callback to the pre-rewrite callback chain. Callbacks run in the
+  // order they were registered; the first to return a non-OK status
+  // short-circuits the rest.
+  void AddPreRewriteCallback(PreRewriteCallback pre_rewrite_callback) {
+    if (pre_rewrite_callback != nullptr) {
+      data_->pre_rewrite_callbacks.push_back(std::move(pre_rewrite_callback));
+    }
+  }
+
+  // Inserts a callback at the front of the chain so it runs before any
+  // previously registered callbacks.
+  void PrependPreRewriteCallback(PreRewriteCallback pre_rewrite_callback) {
+    if (pre_rewrite_callback != nullptr) {
+      data_->pre_rewrite_callbacks.insert(data_->pre_rewrite_callbacks.begin(),
+                                          std::move(pre_rewrite_callback));
+    }
+  }
+
+  absl::Span<const PreRewriteCallback> pre_rewrite_callbacks() const {
+    return data_->pre_rewrite_callbacks;
+  }
+
+  ABSL_DEPRECATED("Use pre_rewrite_callbacks() instead.")
   PreRewriteCallback pre_rewrite_callback() const {
-    return data_->pre_rewrite_callback;
+    const auto& chain = data_->pre_rewrite_callbacks;
+    return chain.empty() ? nullptr : chain.front();
   }
 
   // Get the named expression columns added.
@@ -526,7 +565,7 @@ class AnalyzerOptions {
     return data_->expression_columns;
   }
 
-  const QueryParametersMap& graph_properties() const {
+  const GraphPropertyDefinitionMap& graph_properties() const {
     return data_->graph_properties;
   }
 
@@ -911,7 +950,7 @@ class AnalyzerOptions {
     QueryParametersMap expression_columns;
 
     // Maps of graph properties. The keys are lowercased.
-    QueryParametersMap graph_properties;
+    GraphPropertyDefinitionMap graph_properties;
 
     // Maps system variables to their types.
     SystemVariablesMap system_variables;
@@ -922,13 +961,13 @@ class AnalyzerOptions {
     // Input table to use for ResolvedSubpipelineStmt.
     const Table* /*absl_nullable*/ default_table_for_subpipeline_stmt = nullptr;
 
-    // Callback function runs after the initial resolve, before any rewriters
-    // run. This can be used for query validations before rewriters making
-    // changes (e.g. rewriter can introduce nodes that are unsupported for
-    // public queries and we want throw an error if the node was also included
-    // in the original query) Note that if the callback returns an error, the
-    // analyzer will return that same error.
-    PreRewriteCallback pre_rewrite_callback = nullptr;
+    // Callbacks run after the initial resolve, before any rewriters run. This
+    // can be used for query validations before rewriters making changes (e.g.
+    // rewriter can introduce nodes that are unsupported for public queries and
+    // we want throw an error if the node was also included in the original
+    // query). Callbacks run in vector order; the first to return a non-OK
+    // status short-circuits the rest and the analyzer returns that error.
+    std::vector<PreRewriteCallback> pre_rewrite_callbacks;
 
     // Defined positional parameters. Only used in positional parameter mode.
     // Index 0 corresponds with the query parameter at position 1 and so on.

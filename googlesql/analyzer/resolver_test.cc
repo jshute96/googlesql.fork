@@ -55,11 +55,11 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -107,11 +107,16 @@ class ResolverTest : public ::testing::Test {
         FEATURE_RANGE_TYPE);
     analyzer_options_.mutable_language()->EnableLanguageFeature(
         FEATURE_UUID_TYPE);
+    analyzer_options_.mutable_language()->EnableLanguageFeature(
+        FEATURE_DECLARATIVE_TYPE_FRAMEWORK);
+    analyzer_options_.mutable_language()->EnableLanguageFeature(
+        FEATURE_VECTOR_TYPE);
     analyzer_options_.CreateDefaultArenasIfNotSet();
     sample_catalog_ = std::make_unique<SampleCatalog>(
         analyzer_options_.language(), &type_factory_);
     resolver_ = std::make_unique<Resolver>(sample_catalog_->catalog(),
-                                           &type_factory_, &analyzer_options_);
+                                           &type_factory_, &analyzer_options_,
+                                           analyzer_output_properties_);
     // Initialize the resolver state, which is necessary because the tests do
     // not necessarily call the public methods that call Reset().
     resolver_->Reset("" /* sql */);
@@ -122,8 +127,10 @@ class ResolverTest : public ::testing::Test {
   // Resets 'resolver_' with a new Catalog.  Does not take ownership of
   // 'catalog'.
   void ResetResolver(Catalog* catalog) {
+    analyzer_output_properties_ = AnalyzerOutputProperties();
     resolver_ =
-        std::make_unique<Resolver>(catalog, &type_factory_, &analyzer_options_);
+        std::make_unique<Resolver>(catalog, &type_factory_, &analyzer_options_,
+                                   analyzer_output_properties_);
     resolver_->Reset("" /* sql */);
   }
 
@@ -201,12 +208,13 @@ class ResolverTest : public ::testing::Test {
         << "Query: " << query
         << "\nParsed/Unparsed expression: " << Unparse(parsed_expression);
     if (error_template.empty()) {
-      GOOGLESQL_RETURN_IF_ERROR(resolver_->CoerceExprToType(
-          parsed_expression, target_type, mode, &resolved_expression));
+      GOOGLESQL_RETURN_IF_ERROR(resolver_->CoerceExprToType(parsed_expression,
+                                                  target_type, TypeModifiers(),
+                                                  mode, &resolved_expression));
     } else {
-      GOOGLESQL_RETURN_IF_ERROR(
-          resolver_->CoerceExprToType(parsed_expression, target_type, mode,
-                                      error_template, &resolved_expression));
+      GOOGLESQL_RETURN_IF_ERROR(resolver_->CoerceExprToType(
+          parsed_expression, target_type, TypeModifiers(), mode, error_template,
+          &resolved_expression));
     }
     return resolved_expression;
   }
@@ -508,6 +516,7 @@ class ResolverTest : public ::testing::Test {
   TypeFactory type_factory_;
   std::unique_ptr<SampleCatalog> sample_catalog_;
   AnalyzerOptions analyzer_options_;
+  AnalyzerOutputProperties analyzer_output_properties_;
   std::unique_ptr<Resolver> resolver_;
   std::unique_ptr<const NameScope> name_scope_;
   // Save the parser output so that memories are not freed when we use them in
@@ -603,6 +612,9 @@ TEST_F(ResolverTest, ResolveTypeInvalidTypeNameTests) {
   EXPECT_THAT(
       resolver_->ResolveTypeName("timestamp(1)", &type),
       StatusIs(_, HasSubstr("TIMESTAMP precision must be 0, 3, 6, 9, or 12")));
+
+  EXPECT_THAT(resolver_->ResolveTypeName("vector(0)", &type),
+              StatusIs(_, HasSubstr("VECTOR length must be greater than 0")));
 
   EXPECT_THAT(
       resolver_->ResolveTypeName("string collate 'abc'", &type),
@@ -2192,7 +2204,7 @@ TEST(FunctionArgumentInfoTest, BasicUse) {
     FunctionArgumentTypeOptions options(
         schema, /*extra_relation_input_columns_allowed=*/true);
     GOOGLESQL_ASSERT_OK(info.AddRelationArg(
-        name2, FunctionArgumentType(SignatureArgumentKind::ARG_TYPE_RELATION,
+        name2, FunctionArgumentType(SignatureArgumentKind::ARG_KIND_RELATION,
                                     options)));
     EXPECT_TRUE(info.HasArg(name2));
     EXPECT_EQ(info.FindScalarArg(name2), nullptr);
@@ -2212,7 +2224,7 @@ TEST(FunctionArgumentInfoTest, BasicUse) {
     IdString name3 = IdString::MakeGlobal("name3");
     GOOGLESQL_ASSERT_OK(info.AddScalarArg(
         name3, ResolvedArgumentDef::SCALAR,
-        FunctionArgumentType(SignatureArgumentKind::ARG_TYPE_ARBITRARY,
+        FunctionArgumentType(SignatureArgumentKind::ARG_KIND_EXPR_ARBITRARY,
                              /*num_occurrences=*/1),
         /*annotation_map=*/nullptr));
     EXPECT_TRUE(info.contains_templated_arguments());
@@ -2226,7 +2238,7 @@ TEST(FunctionArgumentInfoTest, BasicUse) {
     IdString name4 = IdString::MakeGlobal("name4");
     FunctionArgumentTypeOptions empty_options;
     GOOGLESQL_ASSERT_OK(info.AddRelationArg(
-        name4, FunctionArgumentType(SignatureArgumentKind::ARG_TYPE_RELATION,
+        name4, FunctionArgumentType(SignatureArgumentKind::ARG_KIND_RELATION,
                                     empty_options,
                                     /*num_occurrences=*/1)));
     EXPECT_TRUE(info.HasArg(name4));

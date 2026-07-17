@@ -38,12 +38,12 @@
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "absl/functional/bind_front.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -831,7 +831,7 @@ void GetDatetimeDiffTruncLastNextFunctions(
       },
       require_civil_time_types.Copy().set_post_resolution_argument_constraint(
           [](const FunctionSignature& /*signature*/,
-             const std::vector<InputArgumentType>& arguments,
+             absl::Span<const InputArgumentType> arguments,
              const LanguageOptions& language_options) {
             return CheckDateDatetimeTimeTimestampDiffArguments(
                 "DATETIME_DIFF", arguments, language_options);
@@ -1245,7 +1245,7 @@ void GetDatetimeFormatFunctions(TypeFactory* type_factory,
         {string_type,
          string_type,
          {types::Int64Type(), FunctionArgumentTypeOptions()
-                                  .set_must_be_analysis_constant(true)
+                                  .set_must_be_analysis_constant()
                                   .set_argument_name("precision", kNamedOnly)}},
         FN_PARSE_TIMESTAMP_WITH_PRECISION,
         FunctionSignatureOptions().AddRequiredLanguageFeature(
@@ -1254,7 +1254,7 @@ void GetDatetimeFormatFunctions(TypeFactory* type_factory,
         {string_type,
          string_type,
          {types::Int64Type(), FunctionArgumentTypeOptions()
-                                  .set_must_be_analysis_constant(true)
+                                  .set_must_be_analysis_constant()
                                   .set_argument_name("precision", kNamedOnly)},
          {string_type, FunctionArgumentTypeOptions().set_argument_name(
                            "timezone", kNamedOnly)}},
@@ -1521,9 +1521,15 @@ void GetArithmeticFunctions(TypeFactory* type_factory,
         FN_MULTIPLY_BIGNUMERIC,
         has_bignumeric_type_argument},
        {interval_type, {interval_type, int64_type}, FN_MULTIPLY_INTERVAL_INT64},
+       {interval_type, {int64_type, interval_type}, FN_MULTIPLY_INT64_INTERVAL},
        {interval_type,
-        {int64_type, interval_type},
-        FN_MULTIPLY_INT64_INTERVAL}},
+        {interval_type, double_type},
+        FN_MULTIPLY_INTERVAL_DOUBLE,
+        has_floating_point_argument},
+       {interval_type,
+        {double_type, interval_type},
+        FN_MULTIPLY_DOUBLE_INTERVAL,
+        has_floating_point_argument}},
       FunctionOptions()
           .set_supports_safe_error_mode(false)
           .set_sql_name("*")
@@ -1656,9 +1662,10 @@ namespace {
 void GetAnyAggregateFunctions(TypeFactory* type_factory,
                               const GoogleSQLBuiltinFunctionOptions& options,
                               NameToFunctionMap* functions) {
-  InsertSimpleFunction(functions, options, "any_value", Function::AGGREGATE,
-                       {{ARG_TYPE_ANY_1, {ARG_TYPE_ANY_1}, FN_ANY_VALUE}},
-                       DefaultAggregateFunctionOptions());
+  InsertSimpleFunction(
+      functions, options, "any_value", Function::AGGREGATE,
+      {{ARG_KIND_EXPR_ANY_1, {ARG_KIND_EXPR_ANY_1}, FN_ANY_VALUE}},
+      DefaultAggregateFunctionOptions());
 }
 
 void GetCountFunctions(TypeFactory* type_factory,
@@ -1668,7 +1675,7 @@ void GetCountFunctions(TypeFactory* type_factory,
   const Type* bool_type = type_factory->get_bool();
 
   InsertFunction(functions, options, "count", Function::AGGREGATE,
-                 {{int64_type, {ARG_TYPE_ANY_1}, FN_COUNT}},
+                 {{int64_type, {ARG_KIND_EXPR_ANY_1}, FN_COUNT}},
                  DefaultAggregateFunctionOptions());
 
   InsertSimpleFunction(functions, options, "$count_star", Function::AGGREGATE,
@@ -1805,8 +1812,8 @@ void GetMinMaxFunctions(TypeFactory* type_factory,
   // or array).
   InsertFunction(
       functions, options, "min", Function::AGGREGATE,
-      {{ARG_TYPE_ANY_1,
-        {ARG_TYPE_ANY_1},
+      {{ARG_KIND_EXPR_ANY_1,
+        {ARG_KIND_EXPR_ANY_1},
         FN_MIN,
         FunctionSignatureOptions().set_uses_operation_collation()}},
       DefaultAggregateFunctionOptions().set_pre_resolution_argument_constraint(
@@ -1814,8 +1821,8 @@ void GetMinMaxFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "max", Function::AGGREGATE,
-      {{ARG_TYPE_ANY_1,
-        {ARG_TYPE_ANY_1},
+      {{ARG_KIND_EXPR_ANY_1,
+        {ARG_KIND_EXPR_ANY_1},
         FN_MAX,
         FunctionSignatureOptions().set_uses_operation_collation()}},
       DefaultAggregateFunctionOptions().set_pre_resolution_argument_constraint(
@@ -1831,7 +1838,7 @@ void GetGroupingFunctions(TypeFactory* type_factory,
           FEATURE_GROUPING_BUILTIN)) {
     InsertFunction(
         functions, options, "grouping", Function::AGGREGATE,
-        {{int64_type, {ARG_TYPE_ANY_1}, FN_GROUPING}},
+        {{int64_type, {ARG_KIND_EXPR_ANY_1}, FN_GROUPING}},
         DefaultAggregateFunctionOptions()
             .set_post_resolution_argument_constraint(
                 absl::bind_front(&CheckArgumentsSupportGrouping, "Grouping"))
@@ -1876,9 +1883,9 @@ void GetMergeFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "array_agg", Function::AGGREGATE,
-      {{{ARG_ARRAY_TYPE_ANY_1,
+      {{{ARG_KIND_EXPR_ARRAY_ANY_1,
          FunctionArgumentTypeOptions().set_uses_array_element_for_collation()},
-        {ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_ANY_1},
         FN_ARRAY_AGG}},
       DefaultAggregateFunctionOptions()
           .set_pre_resolution_argument_constraint(&CheckArrayAggArguments)
@@ -1888,7 +1895,9 @@ void GetMergeFunctions(TypeFactory* type_factory,
 
   InsertSimpleFunction(
       functions, options, "array_concat_agg", Function::AGGREGATE,
-      {{ARG_ARRAY_TYPE_ANY_1, {ARG_ARRAY_TYPE_ANY_1}, FN_ARRAY_CONCAT_AGG}},
+      {{ARG_KIND_EXPR_ARRAY_ANY_1,
+        {ARG_KIND_EXPR_ARRAY_ANY_1},
+        FN_ARRAY_CONCAT_AGG}},
       DefaultAggregateFunctionOptions()
           .set_pre_resolution_argument_constraint(&CheckArrayConcatArguments)
           .set_supports_order_by(true)
@@ -1940,20 +1949,20 @@ void GetPercentileFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "percentile_disc", Function::AGGREGATE,
-      {{ARG_TYPE_ANY_1,
-        {{ARG_TYPE_ANY_1, comparable},
+      {{ARG_KIND_EXPR_ANY_1,
+        {{ARG_KIND_EXPR_ANY_1, comparable},
          {double_type, non_null_non_agg_between_0_and_1}},
         FN_PERCENTILE_DISC,
         FunctionSignatureOptions().set_uses_operation_collation()},
-       {ARG_TYPE_ANY_1,
-        {{ARG_TYPE_ANY_1, comparable},
+       {ARG_KIND_EXPR_ANY_1,
+        {{ARG_KIND_EXPR_ANY_1, comparable},
          {numeric_type, non_null_non_agg_between_0_and_1}},
         FN_PERCENTILE_DISC_NUMERIC,
         FunctionSignatureOptions()
             .set_uses_operation_collation()
             .set_constraints(&CheckLastArgumentHasNumericOrBigNumericType)},
-       {ARG_TYPE_ANY_1,
-        {{ARG_TYPE_ANY_1, comparable},
+       {ARG_KIND_EXPR_ANY_1,
+        {{ARG_KIND_EXPR_ANY_1, comparable},
          {bignumeric_type, non_null_non_agg_between_0_and_1}},
         FN_PERCENTILE_DISC_BIGNUMERIC,
         FunctionSignatureOptions()
@@ -2051,7 +2060,7 @@ void GetApproxFunctions(TypeFactory* type_factory,
 
   InsertFunction(functions, options, "approx_count_distinct", AGGREGATE,
                  {{int64_type,
-                   {{ARG_TYPE_ANY_1, supports_grouping}},
+                   {{ARG_KIND_EXPR_ANY_1, supports_grouping}},
                    FN_APPROX_COUNT_DISTINCT,
                    FunctionSignatureOptions().set_uses_operation_collation()}},
                  aggregate_analytic_function_options);
@@ -2062,8 +2071,9 @@ void GetApproxFunctions(TypeFactory* type_factory,
   // approx_top_sum functions with collated arguments.
   InsertFunction(
       functions, options, "approx_quantiles", AGGREGATE,
-      {{ARG_ARRAY_TYPE_ANY_1,
-        {{ARG_TYPE_ANY_1, comparable}, {int64_type, non_null_positive_non_agg}},
+      {{ARG_KIND_EXPR_ARRAY_ANY_1,
+        {{ARG_KIND_EXPR_ANY_1, comparable},
+         {int64_type, non_null_positive_non_agg}},
         FN_APPROX_QUANTILES,
         FunctionSignatureOptions()
             .set_uses_operation_collation()
@@ -2073,8 +2083,8 @@ void GetApproxFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "approx_top_count", AGGREGATE,
-      {{ARG_TYPE_ARBITRARY,  // Return type will be overridden.
-        {{ARG_TYPE_ANY_1, supports_grouping},
+      {{ARG_KIND_EXPR_ARBITRARY,  // Return type will be overridden.
+        {{ARG_KIND_EXPR_ANY_1, supports_grouping},
          {int64_type, non_null_positive_non_agg}},
         FN_APPROX_TOP_COUNT,
         FunctionSignatureOptions()
@@ -2087,8 +2097,8 @@ void GetApproxFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "approx_top_sum", AGGREGATE,
-      {{ARG_TYPE_ARBITRARY,  // Return type will be overridden.
-        {{ARG_TYPE_ANY_1, supports_grouping},
+      {{ARG_KIND_EXPR_ARBITRARY,  // Return type will be overridden.
+        {{ARG_KIND_EXPR_ANY_1, supports_grouping},
          int64_type,
          {int64_type, non_null_positive_non_agg}},
         FN_APPROX_TOP_SUM_INT64,
@@ -2097,8 +2107,8 @@ void GetApproxFunctions(TypeFactory* type_factory,
             .set_rejects_collation()
             .set_compute_result_annotations_callback(
                 &ComputeAnnotationsForTopStruct)},
-       {ARG_TYPE_ARBITRARY,  // Return type will be overridden.
-        {{ARG_TYPE_ANY_1, supports_grouping},
+       {ARG_KIND_EXPR_ARBITRARY,  // Return type will be overridden.
+        {{ARG_KIND_EXPR_ANY_1, supports_grouping},
          uint64_type,
          {int64_type, non_null_positive_non_agg}},
         FN_APPROX_TOP_SUM_UINT64,
@@ -2107,8 +2117,8 @@ void GetApproxFunctions(TypeFactory* type_factory,
             .set_rejects_collation()
             .set_compute_result_annotations_callback(
                 &ComputeAnnotationsForTopStruct)},
-       {ARG_TYPE_ARBITRARY,  // Return type will be overridden.
-        {{ARG_TYPE_ANY_1, supports_grouping},
+       {ARG_KIND_EXPR_ARBITRARY,  // Return type will be overridden.
+        {{ARG_KIND_EXPR_ANY_1, supports_grouping},
          double_type,
          {int64_type, non_null_positive_non_agg}},
         FN_APPROX_TOP_SUM_DOUBLE,
@@ -2117,8 +2127,8 @@ void GetApproxFunctions(TypeFactory* type_factory,
             .set_rejects_collation()
             .set_compute_result_annotations_callback(
                 &ComputeAnnotationsForTopStruct)},
-       {ARG_TYPE_ARBITRARY,  // Return type will be overridden.
-        {{ARG_TYPE_ANY_1, supports_grouping},
+       {ARG_KIND_EXPR_ARBITRARY,  // Return type will be overridden.
+        {{ARG_KIND_EXPR_ANY_1, supports_grouping},
          numeric_type,
          {int64_type, non_null_positive_non_agg}},
         FN_APPROX_TOP_SUM_NUMERIC,
@@ -2126,8 +2136,8 @@ void GetApproxFunctions(TypeFactory* type_factory,
             .set_rejects_collation()
             .set_compute_result_annotations_callback(
                 &ComputeAnnotationsForTopStruct)},
-       {ARG_TYPE_ARBITRARY,  // Return type will be overridden.
-        {{ARG_TYPE_ANY_1, supports_grouping},
+       {ARG_KIND_EXPR_ARBITRARY,  // Return type will be overridden.
+        {{ARG_KIND_EXPR_ANY_1, supports_grouping},
          bignumeric_type,
          {int64_type, non_null_positive_non_agg}},
         FN_APPROX_TOP_SUM_BIGNUMERIC,
@@ -2330,38 +2340,40 @@ void GetAnalyticFunctions(TypeFactory* type_factory,
   // argument defaults to NULL.
   InsertFunction(
       functions, options, "lead", ANALYTIC,
-      {{ARG_TYPE_ANY_1,
-        {ARG_TYPE_ANY_1,
+      {{ARG_KIND_EXPR_ANY_1,
+        {ARG_KIND_EXPR_ANY_1,
          {int64_type, optional_non_null_non_agg},
          // If present, the third argument must be a constant or parameter.
          // TODO: b/18709755: Give an error if it isn't.
-         {ARG_TYPE_ANY_1, OPTIONAL}},
+         {ARG_KIND_EXPR_ANY_1, OPTIONAL}},
         FN_LEAD}},
       required_order_disallowed_frame);
   InsertFunction(
       functions, options, "lag", ANALYTIC,
-      {{ARG_TYPE_ANY_1,
-        {ARG_TYPE_ANY_1,
+      {{ARG_KIND_EXPR_ANY_1,
+        {ARG_KIND_EXPR_ANY_1,
          {int64_type, optional_non_null_non_agg},
          // If present, the third argument must be a constant or parameter.
          // TODO: b/18709755: Give an error if it isn't.
-         {ARG_TYPE_ANY_1, OPTIONAL}},
+         {ARG_KIND_EXPR_ANY_1, OPTIONAL}},
         FN_LAG}},
       required_order_disallowed_frame);
 
-  InsertFunction(
-      functions, options, "first_value", ANALYTIC,
-      {{ARG_TYPE_ANY_1, {{ARG_TYPE_ANY_1, non_null}}, FN_FIRST_VALUE}},
-      required_order_allowed_frame_and_null_handling);
+  InsertFunction(functions, options, "first_value", ANALYTIC,
+                 {{ARG_KIND_EXPR_ANY_1,
+                   {{ARG_KIND_EXPR_ANY_1, non_null}},
+                   FN_FIRST_VALUE}},
+                 required_order_allowed_frame_and_null_handling);
   InsertFunction(
       functions, options, "last_value", ANALYTIC,
-      {{ARG_TYPE_ANY_1, {{ARG_TYPE_ANY_1, non_null}}, FN_LAST_VALUE}},
+      {{ARG_KIND_EXPR_ANY_1, {{ARG_KIND_EXPR_ANY_1, non_null}}, FN_LAST_VALUE}},
       required_order_allowed_frame_and_null_handling);
-  InsertFunction(functions, options, "nth_value", ANALYTIC,
-                 {{ARG_TYPE_ANY_1,
-                   {ARG_TYPE_ANY_1, {int64_type, non_null_positive_non_agg}},
-                   FN_NTH_VALUE}},
-                 required_order_allowed_frame_and_null_handling);
+  InsertFunction(
+      functions, options, "nth_value", ANALYTIC,
+      {{ARG_KIND_EXPR_ANY_1,
+        {ARG_KIND_EXPR_ANY_1, {int64_type, non_null_positive_non_agg}},
+        FN_NTH_VALUE}},
+      required_order_allowed_frame_and_null_handling);
 }
 
 void GetLogicFunctions(TypeFactory* type_factory,
@@ -2375,7 +2387,7 @@ void GetLogicFunctions(TypeFactory* type_factory,
       FunctionArgumentType::REPEATED;
 
   InsertSimpleFunction(functions, options, "$is_null", SCALAR,
-                       {{bool_type, {ARG_TYPE_ANY_1}, FN_IS_NULL}},
+                       {{bool_type, {ARG_KIND_EXPR_ANY_1}, FN_IS_NULL}},
                        FunctionOptions()
                            .set_supports_safe_error_mode(false)
                            .set_get_sql_callback(absl::bind_front(

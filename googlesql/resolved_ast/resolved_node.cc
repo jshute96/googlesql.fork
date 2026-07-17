@@ -45,6 +45,7 @@
 #include "googlesql/base/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -55,7 +56,6 @@
 #include "absl/types/span.h"
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -145,10 +145,10 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
 
   if (fields.empty()) {
     AppendAnnotations(node, config.annotations, output);
-    *output += "\n";
+    *output += '\n';
   } else if (multiline) {
     AppendAnnotations(node, config.annotations, output);
-    *output += "\n";
+    *output += '\n';
 
     for (const DebugStringField& field : fields) {
       const bool is_last_field = (&field == &fields.back());
@@ -198,19 +198,18 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
               (!is_last_node || (!print_field_name && !is_last_field)
                    ? glyphs.tree_vertical
                    : glyphs.tree_space);
-      absl::string_view node_connector =
-          is_last_node ? glyphs.tree_last : glyphs.tree_branch;
+          absl::string_view node_connector =
+              is_last_node ? glyphs.tree_last : glyphs.tree_branch;
 
           DebugStringImpl(
               node, config,
               absl::StrCat(prefix1, field_name_indent, field_value_indent),
-              absl::StrCat(prefix1, field_name_indent, node_connector),
-              output);
+              absl::StrCat(prefix1, field_name_indent, node_connector), output);
         }
       }
     }
   } else {
-    *output += "(";
+    *output += '(';
     for (const DebugStringField& field : fields) {
       absl::string_view column_created_string =
           config.print_created_columns && field.column_created ? "{c}" : "";
@@ -226,9 +225,9 @@ void ResolvedNode::DebugStringImpl(const ResolvedNode* node,
                         accessed_string, "=", field.value);
       }
     }
-    *output += ")";
+    *output += ')';
     AppendAnnotations(node, config.annotations, output);
-    *output += "\n";
+    *output += '\n';
   }
 }
 
@@ -599,6 +598,19 @@ std::string ResolvedExtendedCastElement::GetNameForDebugString(
       function_ != nullptr ? function_->DebugString() : "<unknown>", ")");
 }
 
+void ResolvedFunctionRef::CollectDebugStringFields(
+    std::vector<DebugStringField>* fields) const {
+  SUPER::CollectDebugStringFields(fields);
+}
+
+std::string ResolvedFunctionRef::GetNameForDebugString(
+    const DebugStringConfig& config) const {
+  return absl::StrCat(
+      "FunctionRef(function=",
+      function_ != nullptr ? function_->DebugString() : "<unknown>",
+      ", signature=", signature_->DebugString(), ")");
+}
+
 // ResolvedMakeProtoField gets formatted as
 //   <field>[(format=TIMESTAMP_MILLIS)] := <expr>
 // with <expr>'s children printed as its own children.  The required proto
@@ -653,9 +665,12 @@ void ResolvedOption::CollectDebugStringFields(
 
 std::string ResolvedOption::GetNameForDebugString(
     const DebugStringConfig& config) const {
+  if (assignment_op_ == ResolvedOption::FROM) {
+    return "FROM";
+  }
   const std::string prefix = absl::StrCat(
       qualifier_.empty() ? ""
-                          : absl::StrCat(ToIdentifierLiteral(qualifier_), "."),
+                         : absl::StrCat(ToIdentifierLiteral(qualifier_), "."),
       ToIdentifierLiteral(name_));
   if (GetParseLocationRangeOrNULL() == nullptr &&
       assignment_op_ == ResolvedOption::DEFAULT_ASSIGN) {
@@ -745,6 +760,50 @@ std::string ResolvedWindowFrameExpr::GetBoundaryTypeString() const {
   return BoundaryTypeToString(boundary_type_);
 }
 
+std::string ResolvedWithinBoundExpr::BoundKindToString(BoundKind bound_kind) {
+  switch (bound_kind) {
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+      return "UNBOUNDED PRECEDING";
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+      return "UNBOUNDED FOLLOWING";
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+      return "PERIOD PRECEDING";
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+      return "PERIOD FOLLOWING";
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+      return "INTERVAL PRECEDING";
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+      return "INTERVAL FOLLOWING";
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+      return "ANCHOR TIMESTAMP";
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return "TIMESTAMP";
+    default:
+      ABSL_LOG(ERROR) << "Invalid within bound kind: " << bound_kind;
+      return absl::StrCat("INVALID_WITHIN_BOUND_KIND(", bound_kind, ")");
+  }
+}
+
+std::string ResolvedWithinBoundExpr::GetBoundKindString() const {
+  return BoundKindToString(bound_kind_);
+}
+
+void ResolvedWithinBoundExpr::CollectDebugStringFields(
+    std::vector<DebugStringField>* fields) const {
+  SUPER::CollectDebugStringFields(fields);
+  if (expr_ != nullptr) {
+    // Use empty name to avoid printing "expr=" with extra indentation.
+    fields->emplace_back("", expr_.get(), expr_accessed(),
+                         /*column_created_in=*/false);
+  }
+}
+
+std::string ResolvedWithinBoundExpr::GetNameForDebugString(
+    const DebugStringConfig& config) const {
+  return absl::StrCat(node_kind_string(),
+                      "(within_bound_kind=", GetBoundKindString(), ")");
+}
+
 std::string ResolvedInsertStmt::InsertModeToString(InsertMode insert_mode) {
   switch (insert_mode) {
     case ResolvedInsertStmt::OR_ERROR:
@@ -822,6 +881,8 @@ std::string ResolvedDropIndexStmt::IndexTypeToString(IndexType index_type) {
       return "INDEX_SEARCH";
     case INDEX_VECTOR:
       return "INDEX_VECTOR";
+    case INDEX_AI:
+      return "INDEX_AI";
     case INDEX_DEFAULT:
       return "INDEX";
   }
@@ -895,6 +956,17 @@ absl::StatusOr<TypeParameters> ResolvedColumnAnnotations::GetFullTypeParameters(
           TypeParameters value_parameter,
           child_list(1)->GetFullTypeParameters(type->AsMap()->value_type()));
       child_parameters.push_back(value_parameter);
+    } else if (type->IsGraphElement()) {
+      const GraphElementType* graph_element_type = type->AsGraphElement();
+      GOOGLESQL_RET_CHECK_LE(child_list_size(),
+                   graph_element_type->property_types().size());
+      child_parameters.resize(graph_element_type->property_types().size());
+      for (int i = 0; i < child_list_size(); ++i) {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            child_parameters[i],
+            child_list(i)->GetFullTypeParameters(
+                graph_element_type->property_types()[i].value_type));
+      }
     } else {
       GOOGLESQL_RET_CHECK_FAIL() << "ResolvedColumnAnnotations has children, which is "
                           "unexpected for type: "

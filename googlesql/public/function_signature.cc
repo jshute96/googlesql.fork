@@ -37,8 +37,10 @@
 #include "googlesql/public/parse_location.h"
 #include "googlesql/public/strings.h"
 #include "googlesql/public/table_valued_function.h"
+#include "googlesql/public/types/collation.h"
 #include "googlesql/public/types/type.h"
 #include "googlesql/public/types/type_deserializer.h"
+#include "googlesql/public/types/type_modifiers.h"
 #include "googlesql/resolved_ast/serialization.pb.h"
 #include "googlesql/base/case.h"
 #include "absl/algorithm/container.h"
@@ -48,6 +50,7 @@
 #include "googlesql/base/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
@@ -60,7 +63,6 @@
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status.h"
 #include "googlesql/base/status_builder.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -72,39 +74,40 @@ namespace {
 // others (model, relation, descriptor, connection, void, etc).
 bool CanHaveDefaultValue(SignatureArgumentKind kind) {
   switch (kind) {
-    case ARG_TYPE_FIXED:
-    case ARG_TYPE_ANY_1:
-    case ARG_TYPE_ANY_2:
-    case ARG_TYPE_ANY_3:
-    case ARG_TYPE_ANY_4:
-    case ARG_TYPE_ANY_5:
-    case ARG_ARRAY_TYPE_ANY_1:
-    case ARG_ARRAY_TYPE_ANY_2:
-    case ARG_ARRAY_TYPE_ANY_3:
-    case ARG_ARRAY_TYPE_ANY_4:
-    case ARG_ARRAY_TYPE_ANY_5:
-    case ARG_PROTO_MAP_ANY:
-    case ARG_PROTO_MAP_KEY_ANY:
-    case ARG_PROTO_MAP_VALUE_ANY:
-    case ARG_PROTO_ANY:
-    case ARG_STRUCT_ANY:
-    case ARG_ENUM_ANY:
-    case ARG_TYPE_ARBITRARY:
-    case ARG_RANGE_TYPE_ANY_1:
-    case ARG_MAP_TYPE_ANY_1_2:
+    case ARG_KIND_EXPR_FIXED:
+    case ARG_KIND_EXPR_ANY_1:
+    case ARG_KIND_EXPR_ANY_2:
+    case ARG_KIND_EXPR_ANY_3:
+    case ARG_KIND_EXPR_ANY_4:
+    case ARG_KIND_EXPR_ANY_5:
+    case ARG_KIND_EXPR_ARRAY_ANY_1:
+    case ARG_KIND_EXPR_ARRAY_ANY_2:
+    case ARG_KIND_EXPR_ARRAY_ANY_3:
+    case ARG_KIND_EXPR_ARRAY_ANY_4:
+    case ARG_KIND_EXPR_ARRAY_ANY_5:
+    case ARG_KIND_EXPR_PROTO_MAP_ANY:
+    case ARG_KIND_EXPR_PROTO_MAP_KEY_ANY:
+    case ARG_KIND_EXPR_PROTO_MAP_VALUE_ANY:
+    case ARG_KIND_EXPR_PROTO_ANY:
+    case ARG_KIND_EXPR_STRUCT_ANY:
+    case ARG_KIND_EXPR_ENUM_ANY:
+    case ARG_KIND_EXPR_ARBITRARY:
+    case ARG_KIND_EXPR_RANGE_ANY_1:
+    case ARG_KIND_EXPR_MAP_ANY_1_2:
+    case ARG_KIND_EXPR_STRING_ANY:
       return true;
-    case ARG_TYPE_RELATION:
-    case ARG_TYPE_VOID:
-    case ARG_TYPE_MODEL:
-    case ARG_TYPE_CONNECTION:
-    case ARG_TYPE_DESCRIPTOR:
-    case ARG_TYPE_GRAPH_NODE:
-    case ARG_TYPE_GRAPH_EDGE:
-    case ARG_TYPE_GRAPH_ELEMENT:
-    case ARG_TYPE_GRAPH_PATH:
-    case ARG_TYPE_SEQUENCE:
-    case ARG_TYPE_GRAPH:
-    case ARG_MEASURE_TYPE_ANY_1:
+    case ARG_KIND_RELATION:
+    case ARG_KIND_VOID:
+    case ARG_KIND_MODEL:
+    case ARG_KIND_CONNECTION:
+    case ARG_KIND_DESCRIPTOR:
+    case ARG_KIND_EXPR_GRAPH_NODE:
+    case ARG_KIND_EXPR_GRAPH_EDGE:
+    case ARG_KIND_EXPR_GRAPH_ELEMENT:
+    case ARG_KIND_EXPR_GRAPH_PATH:
+    case ARG_KIND_SEQUENCE:
+    case ARG_KIND_GRAPH:
+    case ARG_KIND_EXPR_MEASURE_ANY_1:
       return false;
     default:
       ABSL_DCHECK(false) << "Invalid signature argument kind: " << kind;
@@ -225,6 +228,7 @@ absl::Status FunctionArgumentTypeOptions::Deserialize(
     const TypeDeserializer& type_deserializer, SignatureArgumentKind arg_kind,
     const Type* arg_type, FunctionArgumentTypeOptions* options) {
   options->set_cardinality(options_proto.cardinality());
+
   options->data_->constness_level = options_proto.constness_level();
 
   // Migration code between constness_level and the deprecated constness flags.
@@ -348,7 +352,7 @@ absl::StatusOr<std::unique_ptr<FunctionArgumentType>>
 FunctionArgumentType::Deserialize(const FunctionArgumentTypeProto& proto,
                                   const TypeDeserializer& type_deserializer) {
   const Type* type = nullptr;
-  if (proto.kind() == ARG_TYPE_FIXED) {
+  if (proto.kind() == ARG_KIND_EXPR_FIXED) {
     GOOGLESQL_ASSIGN_OR_RETURN(type, type_deserializer.Deserialize(proto.type()));
   }
 
@@ -356,14 +360,25 @@ FunctionArgumentType::Deserialize(const FunctionArgumentTypeProto& proto,
   GOOGLESQL_RETURN_IF_ERROR(FunctionArgumentTypeOptions::Deserialize(
       proto.options(), type_deserializer, proto.kind(), type, &options));
 
-  if (type != nullptr) {
-    // <type> can not be nullptr when proto.kind() == ARG_TYPE_FIXED
-    return std::make_unique<FunctionArgumentType>(type, options,
-                                                  proto.num_occurrences());
+  std::optional<TypeModifiers> type_modifiers;
+  if (proto.has_type_modifiers()) {
+    GOOGLESQL_RET_CHECK(proto.kind() == ARG_KIND_EXPR_FIXED);
+    GOOGLESQL_ASSIGN_OR_RETURN(TypeModifiers tm,
+                     TypeModifiers::Deserialize(proto.type_modifiers()));
+    type_modifiers = std::move(tm);
+  } else if (proto.kind() == ARG_KIND_EXPR_FIXED) {
+    // If not set, concrete args get empty type modifiers.
+    type_modifiers = TypeModifiers();
   }
 
-  if (proto.kind() == ARG_TYPE_LAMBDA) {
-    auto result = std::make_unique<FunctionArgumentType>(ARG_TYPE_LAMBDA);
+  if (type != nullptr) {
+    // <type> can not be nullptr when proto.kind() == ARG_KIND_EXPR_FIXED
+    return std::make_unique<FunctionArgumentType>(
+        type, options, proto.num_occurrences(), std::move(type_modifiers));
+  }
+
+  if (proto.kind() == ARG_KIND_LAMBDA) {
+    auto result = std::make_unique<FunctionArgumentType>(ARG_KIND_LAMBDA);
     std::vector<FunctionArgumentType> lambda_argument_types;
     for (const FunctionArgumentTypeProto& arg_proto :
          proto.lambda().argument()) {
@@ -382,7 +397,8 @@ FunctionArgumentType::Deserialize(const FunctionArgumentTypeProto& proto,
   }
 
   return std::make_unique<FunctionArgumentType>(proto.kind(), options,
-                                                proto.num_occurrences());
+                                                proto.num_occurrences(),
+                                                std::move(type_modifiers));
 }
 
 absl::Status FunctionArgumentTypeOptions::Serialize(
@@ -392,6 +408,7 @@ absl::Status FunctionArgumentTypeOptions::Serialize(
   if (procedure_argument_mode() != FunctionEnums::NOT_SET) {
     options_proto->set_procedure_argument_mode(procedure_argument_mode());
   }
+
   if (data_->constness_level != ConstnessLevelProto::CONSTNESS_UNSPECIFIED) {
     options_proto->set_constness_level(data_->constness_level);
   }
@@ -504,6 +521,11 @@ absl::Status FunctionArgumentType::Serialize(
   GOOGLESQL_RETURN_IF_ERROR(options().Serialize(type(), proto->mutable_options(),
                                       file_descriptor_set_map));
 
+  if (type_modifiers_.has_value() && !type_modifiers_->IsEmpty()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        type_modifiers_->Serialize(proto->mutable_type_modifiers()));
+  }
+
   if (IsLambda()) {
     for (const FunctionArgumentType& arg_type : lambda().argument_types()) {
       GOOGLESQL_RETURN_IF_ERROR(arg_type.Serialize(
@@ -522,7 +544,8 @@ FunctionArgumentType FunctionArgumentType::Lambda(
     FunctionArgumentTypeOptions options) {
   // For now, we don't have the use cases of non REQUIRED values.
   FunctionArgumentType arg_type =
-      FunctionArgumentType(ARG_TYPE_LAMBDA, options);
+      FunctionArgumentType(ARG_KIND_LAMBDA, options);
+
   arg_type.lambda_ = std::make_shared<ArgumentTypeLambda>(
       std::move(lambda_argument_types), std::move(lambda_body_type));
   arg_type.num_occurrences_ = 1;
@@ -552,6 +575,12 @@ std::string FunctionArgumentTypeOptions::OptionsDebugString() const {
   if (data_->constness_level == ConstnessLevelProto::IMMUTABLE_CONST) {
     options.push_back("must_be_immutable_constant: true");
   }
+  if (data_->constness_level == ConstnessLevelProto::STABLE_CONST) {
+    options.push_back("must_be_stable_constant: true");
+  }
+  if (data_->constness_level == ConstnessLevelProto::QUERY_CONST) {
+    options.push_back("must_be_query_constant: true");
+  }
   if (data_->constness_level ==
       ConstnessLevelProto::LEGACY_CONSTANT_EXPRESSION) {
     options.push_back("must_be_constant_expression: true");
@@ -573,6 +602,8 @@ std::string FunctionArgumentTypeOptions::OptionsDebugString() const {
         "argument_alias_kind: ",
         FunctionEnums::ArgumentAliasKind_Name(data_->argument_alias_kind)));
   }
+  // No need to print type constraints, as those are handled in the printing
+  // of the type itself, e.g. ANY STRING.
   if (options.empty()) {
     return "";
   } else {
@@ -597,6 +628,10 @@ std::string FunctionArgumentTypeOptions::GetSQLDeclaration(
     options.push_back("/*must_be_analysis_constant*/");
   if (data_->constness_level == ConstnessLevelProto::IMMUTABLE_CONST)
     options.push_back("/*must_be_immutable_constant*/");
+  if (data_->constness_level == ConstnessLevelProto::STABLE_CONST)
+    options.push_back("/*must_be_stable_constant*/");
+  if (data_->constness_level == ConstnessLevelProto::QUERY_CONST)
+    options.push_back("/*must_be_query_constant*/");
   if (data_->constness_level == ConstnessLevelProto::LEGACY_CONSTANT_EXPRESSION)
     options.push_back("/*must_be_constant_expression*/");
 
@@ -617,72 +652,74 @@ std::string FunctionArgumentTypeOptions::GetSQLDeclaration(
 std::string FunctionArgumentType::SignatureArgumentKindToString(
     SignatureArgumentKind kind) {
   switch (kind) {
-    case ARG_TYPE_FIXED:
+    case ARG_KIND_EXPR_FIXED:
       return "FIXED";
-    case ARG_TYPE_ANY_1:
+    case ARG_KIND_EXPR_ANY_1:
       return "<T1>";
-    case ARG_TYPE_ANY_2:
+    case ARG_KIND_EXPR_ANY_2:
       return "<T2>";
-    case ARG_TYPE_ANY_3:
+    case ARG_KIND_EXPR_ANY_3:
       return "<T3>";
-    case ARG_TYPE_ANY_4:
+    case ARG_KIND_EXPR_ANY_4:
       return "<T4>";
-    case ARG_TYPE_ANY_5:
+    case ARG_KIND_EXPR_ANY_5:
       return "<T5>";
-    case ARG_ARRAY_TYPE_ANY_1:
+    case ARG_KIND_EXPR_ARRAY_ANY_1:
       return "<array<T1>>";
-    case ARG_ARRAY_TYPE_ANY_2:
+    case ARG_KIND_EXPR_ARRAY_ANY_2:
       return "<array<T2>>";
-    case ARG_ARRAY_TYPE_ANY_3:
+    case ARG_KIND_EXPR_ARRAY_ANY_3:
       return "<array<T3>>";
-    case ARG_ARRAY_TYPE_ANY_4:
+    case ARG_KIND_EXPR_ARRAY_ANY_4:
       return "<array<T4>>";
-    case ARG_ARRAY_TYPE_ANY_5:
+    case ARG_KIND_EXPR_ARRAY_ANY_5:
       return "<array<T5>>";
-    case ARG_PROTO_MAP_ANY:
+    case ARG_KIND_EXPR_PROTO_MAP_ANY:
       return "<proto_map<proto_K, proto_V>>";
-    case ARG_PROTO_MAP_KEY_ANY:
+    case ARG_KIND_EXPR_PROTO_MAP_KEY_ANY:
       return "<proto_K>";
-    case ARG_PROTO_MAP_VALUE_ANY:
+    case ARG_KIND_EXPR_PROTO_MAP_VALUE_ANY:
       return "<proto_V>";
-    case ARG_PROTO_ANY:
+    case ARG_KIND_EXPR_PROTO_ANY:
       return "<proto>";
-    case ARG_STRUCT_ANY:
+    case ARG_KIND_EXPR_STRUCT_ANY:
       return "<struct>";
-    case ARG_ENUM_ANY:
+    case ARG_KIND_EXPR_ENUM_ANY:
       return "<enum>";
-    case ARG_TYPE_RELATION:
+    case ARG_KIND_RELATION:
       return "ANY TABLE";
-    case ARG_TYPE_MODEL:
+    case ARG_KIND_MODEL:
       return "ANY MODEL";
-    case ARG_TYPE_CONNECTION:
+    case ARG_KIND_CONNECTION:
       return "ANY CONNECTION";
-    case ARG_TYPE_DESCRIPTOR:
+    case ARG_KIND_DESCRIPTOR:
       return "ANY DESCRIPTOR";
-    case ARG_TYPE_ARBITRARY:
+    case ARG_KIND_EXPR_ARBITRARY:
       return "<arbitrary>";
-    case ARG_TYPE_VOID:
+    case ARG_KIND_VOID:
       return "<void>";
-    case ARG_TYPE_LAMBDA:
+    case ARG_KIND_LAMBDA:
       return "<function<T->T>>";
-    case ARG_RANGE_TYPE_ANY_1:
+    case ARG_KIND_EXPR_RANGE_ANY_1:
       return "<range<T>>";
-    case ARG_TYPE_GRAPH_NODE:
+    case ARG_KIND_EXPR_GRAPH_NODE:
       return "<graph_node>";
-    case ARG_TYPE_GRAPH_EDGE:
+    case ARG_KIND_EXPR_GRAPH_EDGE:
       return "<graph_edge>";
-    case ARG_TYPE_GRAPH_ELEMENT:
+    case ARG_KIND_EXPR_GRAPH_ELEMENT:
       return "<graph_element>";
-    case ARG_TYPE_GRAPH_PATH:
+    case ARG_KIND_EXPR_GRAPH_PATH:
       return "<graph_path>";
-    case ARG_TYPE_GRAPH:
+    case ARG_KIND_GRAPH:
       return "ANY GRAPH";
-    case ARG_TYPE_SEQUENCE:
+    case ARG_KIND_SEQUENCE:
       return "ANY SEQUENCE";
-    case ARG_MEASURE_TYPE_ANY_1:
+    case ARG_KIND_EXPR_MEASURE_ANY_1:
       return "<measure<T1>>";
-    case ARG_MAP_TYPE_ANY_1_2:
+    case ARG_KIND_EXPR_MAP_ANY_1_2:
       return "<map<T1, T2>>";
+    case ARG_KIND_EXPR_STRING_ANY:
+      return "ANY STRING";
     case __SignatureArgumentKind__switch_must_have_a_default__:
       break;  // Handling this case is only allowed internally.
   }
@@ -712,66 +749,68 @@ FunctionArgumentType::SimpleOptions(ArgumentCardinality cardinality) {
 FunctionArgumentType::FunctionArgumentType(
     SignatureArgumentKind kind, const Type* type,
     std::shared_ptr<const FunctionArgumentTypeOptions> options,
-    int num_occurrences)
+    int num_occurrences, std::optional<TypeModifiers> type_modifiers)
     : kind_(kind),
       num_occurrences_(num_occurrences),
       type_(type),
-      options_(std::move(options)) {
-  ABSL_DCHECK_EQ(kind == ARG_TYPE_FIXED, type != nullptr);
+      options_(std::move(options)),
+      type_modifiers_(std::move(type_modifiers)) {
+  ABSL_DCHECK_EQ(kind == ARG_KIND_EXPR_FIXED, type != nullptr);
 }
 
 FunctionArgumentType::FunctionArgumentType(SignatureArgumentKind kind,
                                            ArgumentCardinality cardinality,
                                            int num_occurrences)
     : FunctionArgumentType(kind, /*type=*/nullptr, SimpleOptions(cardinality),
-                           num_occurrences) {}
+                           num_occurrences, std::nullopt) {}
 
-FunctionArgumentType::FunctionArgumentType(SignatureArgumentKind kind,
-                                           FunctionArgumentTypeOptions options,
-                                           int num_occurrences)
+FunctionArgumentType::FunctionArgumentType(
+    SignatureArgumentKind kind, FunctionArgumentTypeOptions options,
+    int num_occurrences, std::optional<TypeModifiers> type_modifiers)
     : FunctionArgumentType(
           kind, /*type=*/nullptr,
           std::make_shared<FunctionArgumentTypeOptions>(std::move(options)),
-          num_occurrences) {}
+          num_occurrences, std::move(type_modifiers)) {}
 
 FunctionArgumentType::FunctionArgumentType(SignatureArgumentKind kind,
                                            int num_occurrences)
     : FunctionArgumentType(kind, /*type=*/nullptr, SimpleOptions(),
-                           num_occurrences) {}
+                           num_occurrences, std::nullopt) {}
 
 FunctionArgumentType::FunctionArgumentType(const Type* type,
                                            ArgumentCardinality cardinality,
                                            int num_occurrences)
-    : FunctionArgumentType(ARG_TYPE_FIXED, type, SimpleOptions(cardinality),
-                           num_occurrences) {}
+    : FunctionArgumentType(ARG_KIND_EXPR_FIXED, type,
+                           SimpleOptions(cardinality), num_occurrences,
+                           TypeModifiers()) {}
 
-FunctionArgumentType::FunctionArgumentType(const Type* type,
-                                           FunctionArgumentTypeOptions options,
-                                           int num_occurrences)
+FunctionArgumentType::FunctionArgumentType(
+    const Type* type, FunctionArgumentTypeOptions options, int num_occurrences,
+    std::optional<TypeModifiers> type_modifiers)
     : FunctionArgumentType(
-          ARG_TYPE_FIXED, type,
+          ARG_KIND_EXPR_FIXED, type,
           std::make_shared<FunctionArgumentTypeOptions>(std::move(options)),
-          num_occurrences) {}
+          num_occurrences, std::move(type_modifiers)) {}
 
 FunctionArgumentType::FunctionArgumentType(const Type* type,
                                            int num_occurrences)
-    : FunctionArgumentType(ARG_TYPE_FIXED, type, SimpleOptions(),
-                           num_occurrences) {}
+    : FunctionArgumentType(ARG_KIND_EXPR_FIXED, type, SimpleOptions(),
+                           num_occurrences, TypeModifiers()) {}
 
 FunctionArgumentType::FunctionArgumentType(const Type* type,
                                            int num_occurrences,
                                            SignatureArgumentKind original_kind)
-    : FunctionArgumentType(ARG_TYPE_FIXED, type, SimpleOptions(),
-                           num_occurrences) {
+    : FunctionArgumentType(ARG_KIND_EXPR_FIXED, type, SimpleOptions(),
+                           num_occurrences, TypeModifiers()) {
   ABSL_DCHECK(IsConcrete());
   original_kind_ = original_kind;
 }
 
 bool FunctionArgumentType::IsConcrete() const {
-  if (kind_ != ARG_TYPE_FIXED && kind_ != ARG_TYPE_RELATION &&
-      kind_ != ARG_TYPE_MODEL && kind_ != ARG_TYPE_CONNECTION &&
-      kind_ != ARG_TYPE_LAMBDA && kind_ != ARG_TYPE_SEQUENCE &&
-      kind_ != ARG_TYPE_GRAPH && kind_ != ARG_TYPE_VOID) {
+  if (kind_ != ARG_KIND_EXPR_FIXED && kind_ != ARG_KIND_RELATION &&
+      kind_ != ARG_KIND_MODEL && kind_ != ARG_KIND_CONNECTION &&
+      kind_ != ARG_KIND_LAMBDA && kind_ != ARG_KIND_SEQUENCE &&
+      kind_ != ARG_KIND_GRAPH && kind_ != ARG_KIND_VOID) {
     return false;
   }
   if (num_occurrences_ < 0) {
@@ -779,7 +818,7 @@ bool FunctionArgumentType::IsConcrete() const {
   }
 
   // Lambda is concrete if all args and body are concrete.
-  if (kind_ == ARG_TYPE_LAMBDA) {
+  if (kind_ == ARG_KIND_LAMBDA) {
     for (const auto& arg : lambda().argument_types()) {
       if (!arg.IsConcrete()) {
         return false;
@@ -794,7 +833,7 @@ bool FunctionArgumentType::IsTemplated() const {
   // It is templated if it is not a fixed scalar, it is not a fixed relation,
   // and it is not a void argument. It is also templated if it is a lambda that
   // has a templated argument or body.
-  if (kind_ == ARG_TYPE_LAMBDA) {
+  if (kind_ == ARG_KIND_LAMBDA) {
     for (const FunctionArgumentType& arg_type : lambda().argument_types()) {
       if (arg_type.IsTemplated()) {
         return true;
@@ -802,31 +841,40 @@ bool FunctionArgumentType::IsTemplated() const {
     }
     return lambda().body_type().IsTemplated();
   }
-  return kind_ != ARG_TYPE_FIXED && !IsFixedRelation() && !IsVoid();
+  return kind_ != ARG_KIND_EXPR_FIXED && !IsFixedRelation() && !IsVoid();
 }
 
 bool FunctionArgumentType::IsScalar() const {
-  return kind_ == ARG_TYPE_FIXED || kind_ == ARG_TYPE_ANY_1 ||
-         kind_ == ARG_TYPE_ANY_2 || kind_ == ARG_TYPE_ANY_3 ||
-         kind_ == ARG_TYPE_ANY_4 || kind_ == ARG_TYPE_ANY_5 ||
-         kind_ == ARG_ARRAY_TYPE_ANY_1 || kind_ == ARG_ARRAY_TYPE_ANY_2 ||
-         kind_ == ARG_ARRAY_TYPE_ANY_3 || kind_ == ARG_ARRAY_TYPE_ANY_4 ||
-         kind_ == ARG_ARRAY_TYPE_ANY_5 || kind_ == ARG_PROTO_MAP_ANY ||
-         kind_ == ARG_PROTO_MAP_KEY_ANY || kind_ == ARG_PROTO_MAP_VALUE_ANY ||
-         kind_ == ARG_PROTO_ANY || kind_ == ARG_STRUCT_ANY ||
-         kind_ == ARG_ENUM_ANY || kind_ == ARG_TYPE_ARBITRARY ||
-         kind_ == ARG_TYPE_GRAPH_NODE || kind_ == ARG_TYPE_GRAPH_EDGE ||
-         kind_ == ARG_TYPE_GRAPH_ELEMENT || kind_ == ARG_TYPE_GRAPH_PATH ||
-         kind_ == ARG_RANGE_TYPE_ANY_1 || kind_ == ARG_MAP_TYPE_ANY_1_2;
+  return kind_ == ARG_KIND_EXPR_FIXED || kind_ == ARG_KIND_EXPR_ANY_1 ||
+         kind_ == ARG_KIND_EXPR_ANY_2 || kind_ == ARG_KIND_EXPR_ANY_3 ||
+         kind_ == ARG_KIND_EXPR_ANY_4 || kind_ == ARG_KIND_EXPR_ANY_5 ||
+         kind_ == ARG_KIND_EXPR_ARRAY_ANY_1 ||
+         kind_ == ARG_KIND_EXPR_ARRAY_ANY_2 ||
+         kind_ == ARG_KIND_EXPR_ARRAY_ANY_3 ||
+         kind_ == ARG_KIND_EXPR_ARRAY_ANY_4 ||
+         kind_ == ARG_KIND_EXPR_ARRAY_ANY_5 ||
+         kind_ == ARG_KIND_EXPR_PROTO_MAP_ANY ||
+         kind_ == ARG_KIND_EXPR_PROTO_MAP_KEY_ANY ||
+         kind_ == ARG_KIND_EXPR_PROTO_MAP_VALUE_ANY ||
+         kind_ == ARG_KIND_EXPR_PROTO_ANY ||
+         kind_ == ARG_KIND_EXPR_STRUCT_ANY || kind_ == ARG_KIND_EXPR_ENUM_ANY ||
+         kind_ == ARG_KIND_EXPR_ARBITRARY ||
+         kind_ == ARG_KIND_EXPR_GRAPH_NODE ||
+         kind_ == ARG_KIND_EXPR_GRAPH_EDGE ||
+         kind_ == ARG_KIND_EXPR_GRAPH_ELEMENT ||
+         kind_ == ARG_KIND_EXPR_GRAPH_PATH ||
+         kind_ == ARG_KIND_EXPR_RANGE_ANY_1 ||
+         kind_ == ARG_KIND_EXPR_MAP_ANY_1_2 ||
+         kind_ == ARG_KIND_EXPR_STRING_ANY;
 }
 
 // Intentionally restrictive for known functional programming functions. If this
 // is to be expanded in the future, make sure type inference part of signature
 // matching works as intended.
 static bool IsLambdaAllowedArgKind(const SignatureArgumentKind kind) {
-  return kind == ARG_TYPE_FIXED || kind == ARG_TYPE_ANY_1 ||
-         kind == ARG_TYPE_ANY_2 || kind == ARG_TYPE_ANY_3 ||
-         kind == ARG_TYPE_ANY_4 || kind == ARG_TYPE_ANY_5;
+  return kind == ARG_KIND_EXPR_FIXED || kind == ARG_KIND_EXPR_ANY_1 ||
+         kind == ARG_KIND_EXPR_ANY_2 || kind == ARG_KIND_EXPR_ANY_3 ||
+         kind == ARG_KIND_EXPR_ANY_4 || kind == ARG_KIND_EXPR_ANY_5;
 }
 
 absl::Status FunctionArgumentType::CheckLambdaArgType(
@@ -854,10 +902,47 @@ absl::Status FunctionArgumentType::CheckLambdaArgType(
                                                      simple_options_proto))
       << "Only REQUIRED simple options are supported by function-type "
          "arguments";
+
+  if (arg_type.kind() == ARG_KIND_EXPR_FIXED) {
+    GOOGLESQL_RET_CHECK(arg_type.type_modifiers().has_value() &&
+              arg_type.type_modifiers()->IsEmpty())
+        << "ARG_KIND_EXPR_FIXED lambda argument must have empty type modifiers";
+  } else {
+    GOOGLESQL_RET_CHECK(!arg_type.type_modifiers().has_value())
+        << "Non ARG_KIND_EXPR_FIXED lambda argument cannot have type modifiers";
+  }
   return absl::OkStatus();
 }
 
 absl::Status FunctionArgumentType::IsValid(ProductMode product_mode) const {
+  if (kind_ == ARG_KIND_EXPR_FIXED) {
+    if (!type_modifiers_.has_value()) {
+      return MakeSqlError() << "TypeModifiers must be present for kind "
+                               "ARG_KIND_EXPR_FIXED: "
+                            << DebugString();
+    }
+    if (!type_modifiers_->type_parameters().IsEmpty()) {
+      absl::Status status = type_->ValidateResolvedTypeParameters(
+          type_modifiers_->type_parameters(), product_mode);
+      if (!status.ok()) {
+        return MakeSqlError() << status.message() << ": " << DebugString();
+      }
+    }
+
+    const Collation& collation = type_modifiers_->collation();
+    if (!collation.HasCompatibleStructure(type_)) {
+      return MakeSqlError() << "Collation must have compatible structure with "
+                               "the argument type: "
+                            << DebugString();
+    }
+  } else {
+    if (type_modifiers_.has_value()) {
+      return MakeSqlError() << "TypeModifiers are only applicable for kind "
+                               "ARG_KIND_EXPR_FIXED: "
+                            << DebugString();
+    }
+  }
+
   switch (cardinality()) {
     case REPEATED:
       if (IsConcrete()) {
@@ -920,9 +1005,11 @@ absl::Status FunctionArgumentType::IsValid(ProductMode product_mode) const {
   }
 
   if (IsLambda()) {
+    // We do not check TypeModifiers on lambda arguments, because their syntax
+    // never allows TypeModifiers.
     if (lambda_ == nullptr) {
       return absl::InternalError(
-          "FunctionArgumentType with ARG_TYPE_LAMBDA constructed directly is "
+          "FunctionArgumentType with ARG_KIND_LAMBDA constructed directly is "
           "not allowed. Use FunctionArgumentType::Lambda instead.");
     }
     GOOGLESQL_RET_CHECK_EQ(cardinality(), REQUIRED);
@@ -931,6 +1018,14 @@ absl::Status FunctionArgumentType::IsValid(ProductMode product_mode) const {
     }
     GOOGLESQL_RETURN_IF_ERROR(CheckLambdaArgType(lambda().body_type()));
   }
+
+  if (IsRelation() && options_->has_relation_input_schema()) {
+    const TVFRelation& relation = options_->relation_input_schema();
+    for (const auto& column : relation.columns()) {
+      GOOGLESQL_RETURN_IF_ERROR(column.IsValid(PRODUCT_EXTERNAL));
+    }
+  }
+
   return absl::OkStatus();
 }
 
@@ -956,71 +1051,73 @@ std::string FunctionArgumentType::UserFacingName(
   }
   if (type() == nullptr) {
     switch (kind()) {
-      case ARG_ARRAY_TYPE_ANY_1:
+      case ARG_KIND_EXPR_ARRAY_ANY_1:
         return print_template_details ? "ARRAY<T1>" : "ARRAY";
-      case ARG_ARRAY_TYPE_ANY_2:
+      case ARG_KIND_EXPR_ARRAY_ANY_2:
         return print_template_details ? "ARRAY<T2>" : "ARRAY";
-      case ARG_ARRAY_TYPE_ANY_3:
+      case ARG_KIND_EXPR_ARRAY_ANY_3:
         return print_template_details ? "ARRAY<T3>" : "ARRAY";
-      case ARG_ARRAY_TYPE_ANY_4:
+      case ARG_KIND_EXPR_ARRAY_ANY_4:
         return print_template_details ? "ARRAY<T4>" : "ARRAY";
-      case ARG_ARRAY_TYPE_ANY_5:
+      case ARG_KIND_EXPR_ARRAY_ANY_5:
         return print_template_details ? "ARRAY<T5>" : "ARRAY";
-      case ARG_PROTO_ANY:
+      case ARG_KIND_EXPR_PROTO_ANY:
         return "PROTO";
-      case ARG_STRUCT_ANY:
+      case ARG_KIND_EXPR_STRUCT_ANY:
         return "STRUCT";
-      case ARG_ENUM_ANY:
+      case ARG_KIND_EXPR_ENUM_ANY:
         return "ENUM";
-      case ARG_PROTO_MAP_ANY:
+      case ARG_KIND_EXPR_PROTO_MAP_ANY:
         return "PROTO_MAP";
-      case ARG_PROTO_MAP_KEY_ANY:
+      case ARG_KIND_EXPR_PROTO_MAP_KEY_ANY:
         return "PROTO_MAP_KEY";
-      case ARG_PROTO_MAP_VALUE_ANY:
+      case ARG_KIND_EXPR_PROTO_MAP_VALUE_ANY:
         return "PROTO_MAP_VALUE";
-      case ARG_TYPE_ANY_1:
+      case ARG_KIND_EXPR_ANY_1:
         return print_template_details ? "T1" : "ANY";
-      case ARG_TYPE_ANY_2:
+      case ARG_KIND_EXPR_ANY_2:
         return print_template_details ? "T2" : "ANY";
-      case ARG_TYPE_ANY_3:
+      case ARG_KIND_EXPR_ANY_3:
         return print_template_details ? "T3" : "ANY";
-      case ARG_TYPE_ANY_4:
+      case ARG_KIND_EXPR_ANY_4:
         return print_template_details ? "T4" : "ANY";
-      case ARG_TYPE_ANY_5:
+      case ARG_KIND_EXPR_ANY_5:
         return print_template_details ? "T5" : "ANY";
-      case ARG_TYPE_ARBITRARY:
+      case ARG_KIND_EXPR_ARBITRARY:
         return "ANY";
-      case ARG_TYPE_RELATION:
+      case ARG_KIND_EXPR_STRING_ANY:
+        return "ANY STRING";
+      case ARG_KIND_RELATION:
         return "TABLE";
-      case ARG_TYPE_MODEL:
+      case ARG_KIND_MODEL:
         return "MODEL";
-      case ARG_TYPE_CONNECTION:
+      case ARG_KIND_CONNECTION:
         return "CONNECTION";
-      case ARG_TYPE_DESCRIPTOR:
+      case ARG_KIND_DESCRIPTOR:
         return "DESCRIPTOR";
-      case ARG_TYPE_VOID:
+      case ARG_KIND_VOID:
         return "VOID";
-      case ARG_TYPE_LAMBDA:
+      case ARG_KIND_LAMBDA:
         return "FUNCTION";
-      case ARG_RANGE_TYPE_ANY_1:
+      case ARG_KIND_EXPR_RANGE_ANY_1:
         return "RANGE";
-      case ARG_TYPE_GRAPH_NODE:
+      case ARG_KIND_EXPR_GRAPH_NODE:
         return "GRAPH_NODE";
-      case ARG_TYPE_GRAPH_EDGE:
+      case ARG_KIND_EXPR_GRAPH_EDGE:
         return "GRAPH_EDGE";
-      case ARG_TYPE_GRAPH_ELEMENT:
+      case ARG_KIND_EXPR_GRAPH_ELEMENT:
         return "GRAPH_ELEMENT";
-      case ARG_TYPE_GRAPH_PATH:
+      case ARG_KIND_EXPR_GRAPH_PATH:
         return "GRAPH_PATH";
-      case ARG_TYPE_GRAPH:
+      case ARG_KIND_GRAPH:
         return "GRAPH";
-      case ARG_TYPE_SEQUENCE:
+      case ARG_KIND_SEQUENCE:
         return "SEQUENCE";
-      case ARG_MAP_TYPE_ANY_1_2:
+      case ARG_KIND_EXPR_MAP_ANY_1_2:
         return print_template_details ? "MAP<T1, T2>" : "MAP";
-      case ARG_MEASURE_TYPE_ANY_1:
+      case ARG_KIND_EXPR_MEASURE_ANY_1:
         return print_template_details ? "MEASURE<T1>" : "MEASURE";
-      case ARG_TYPE_FIXED:
+      case ARG_KIND_EXPR_FIXED:
       default:
         // We really should have had type() != nullptr in this case.
         ABSL_DCHECK(type() != nullptr) << DebugString();
@@ -1085,10 +1182,13 @@ std::string FunctionArgumentType::DebugString(bool verbose) const {
     absl::StrAppend(&result, type_->DebugString());
   } else if (IsRelation() && options_->has_relation_input_schema()) {
     result = options_->relation_input_schema().DebugString();
-  } else if (kind_ == ARG_TYPE_ARBITRARY) {
+  } else if (kind_ == ARG_KIND_EXPR_ARBITRARY) {
     absl::StrAppend(&result, "ANY TYPE");
   } else {
     absl::StrAppend(&result, SignatureArgumentKindToString(kind_));
+  }
+  if (type_modifiers_.has_value() && !type_modifiers_->IsEmpty()) {
+    absl::StrAppend(&result, " ", type_modifiers_->DebugString());
   }
   if (verbose) {
     absl::StrAppend(&result, options_->OptionsDebugString());
@@ -1127,13 +1227,27 @@ std::string FunctionArgumentType::GetSQLDeclaration(
   }
   // TODO: Consider using UserFacingName() here.
   if (type_ != nullptr) {
-    absl::StrAppend(&result,
-                    type_->TypeName(product_mode, use_external_float32));
+    std::string type_name;
+    if (type_modifiers_.has_value()) {
+      auto type_name_with_modifiers = type_->TypeNameWithModifiers(
+          *type_modifiers_, product_mode, use_external_float32);
+      if (type_name_with_modifiers.ok()) {
+        type_name = type_name_with_modifiers.value();
+      } else {
+        // This should never be hit since we should only ever have valid args in
+        // the signature.
+        type_name = absl::StrCat("ERROR: ",
+                                 type_name_with_modifiers.status().message());
+      }
+    } else {
+      type_name = type_->TypeName(product_mode, use_external_float32);
+    }
+    absl::StrAppend(&result, type_name);
   } else if (options_->has_relation_input_schema()) {
     absl::StrAppend(
         &result,
         options_->relation_input_schema().GetSQLDeclaration(product_mode));
-  } else if (kind_ == ARG_TYPE_ARBITRARY) {
+  } else if (kind_ == ARG_KIND_EXPR_ARBITRARY) {
     absl::StrAppend(&result, "ANY TYPE");
   } else {
     absl::StrAppend(&result, SignatureArgumentKindToString(kind_));
@@ -1410,39 +1524,16 @@ FunctionSignature::GetComputeResultAnnotationsCallback() const {
 }
 
 namespace {
-absl::StatusOr<bool> HasColumnWithCollation(const TVFRelation& relation) {
-  for (const TVFSchemaColumn& column : relation.columns()) {
-    if (column.annotation_map != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(Collation collation,
-                       Collation::MakeCollation(*column.annotation_map));
-      if (!collation.Empty()) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 // Decides if a FunctionSignature should have "RETURNS" clause in its SQL
 // declaration based on its <result_type> field.
 absl::StatusOr<bool> ShouldHaveReturnsClauseInSQLDeclaration(
     const FunctionArgumentType& result_type) {
-  if (result_type.IsVoid() || result_type.kind() == ARG_TYPE_ARBITRARY) {
+  if (result_type.IsVoid() || result_type.kind() == ARG_KIND_EXPR_ARBITRARY) {
     return false;
   }
 
   if (result_type.IsRelation()) {
     if (!result_type.options().has_relation_input_schema()) {
-      return false;
-    }
-
-    // When TVF query has collated output columns, if an explicit result schema
-    // is present, the analyzer will throw an error. To avoid failing the
-    // reparsing test, we do not generate "RETURNS" clause for this situation.
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        bool has_column_with_collation,
-        HasColumnWithCollation(result_type.options().relation_input_schema()));
-    if (has_column_with_collation) {
       return false;
     }
   }
@@ -1463,7 +1554,9 @@ std::string FunctionSignature::GetSQLDeclaration(
     bool use_external_float32) const {
   std::string out = "(";
   for (int i = 0; i < arguments_.size(); ++i) {
-    if (i > 0) out += ", ";
+    if (i > 0) {
+      absl::StrAppend(&out, ", ");
+    }
     if (arguments_[i].options().procedure_argument_mode() !=
         FunctionEnums::NOT_SET) {
       absl::StrAppend(&out,
@@ -1495,50 +1588,55 @@ std::string FunctionSignature::GetSQLDeclaration(
 
 namespace {
 inline bool IsRelatedToAny1(SignatureArgumentKind kind) {
-  return kind == ARG_TYPE_ANY_1 || kind == ARG_ARRAY_TYPE_ANY_1 ||
-         kind == ARG_MAP_TYPE_ANY_1_2 || kind == ARG_RANGE_TYPE_ANY_1 ||
-         kind == ARG_MEASURE_TYPE_ANY_1;
+  return kind == ARG_KIND_EXPR_ANY_1 || kind == ARG_KIND_EXPR_ARRAY_ANY_1 ||
+         kind == ARG_KIND_EXPR_MAP_ANY_1_2 ||
+         kind == ARG_KIND_EXPR_RANGE_ANY_1 ||
+         kind == ARG_KIND_EXPR_MEASURE_ANY_1;
 }
 
 inline bool IsRelatedToAny2(SignatureArgumentKind kind) {
-  return kind == ARG_TYPE_ANY_2 || kind == ARG_ARRAY_TYPE_ANY_2 ||
-         kind == ARG_MAP_TYPE_ANY_1_2;
+  return kind == ARG_KIND_EXPR_ANY_2 || kind == ARG_KIND_EXPR_ARRAY_ANY_2 ||
+         kind == ARG_KIND_EXPR_MAP_ANY_1_2;
 }
 
 // Returns true if `kind_1` is an ARRAY templated type of `kind_2`
 static inline bool TemplatedKindRelatedArrayType(
     const SignatureArgumentKind kind_1, const SignatureArgumentKind kind_2) {
-  return (kind_1 == ARG_ARRAY_TYPE_ANY_1 && IsRelatedToAny1(kind_2)) ||
-         (kind_1 == ARG_ARRAY_TYPE_ANY_2 && IsRelatedToAny2(kind_2)) ||
-         (kind_1 == ARG_ARRAY_TYPE_ANY_3 && kind_2 == ARG_TYPE_ANY_3) ||
-         (kind_1 == ARG_ARRAY_TYPE_ANY_4 && kind_2 == ARG_TYPE_ANY_4) ||
-         (kind_1 == ARG_ARRAY_TYPE_ANY_5 && kind_2 == ARG_TYPE_ANY_5);
+  return (kind_1 == ARG_KIND_EXPR_ARRAY_ANY_1 && IsRelatedToAny1(kind_2)) ||
+         (kind_1 == ARG_KIND_EXPR_ARRAY_ANY_2 && IsRelatedToAny2(kind_2)) ||
+         (kind_1 == ARG_KIND_EXPR_ARRAY_ANY_3 &&
+          kind_2 == ARG_KIND_EXPR_ANY_3) ||
+         (kind_1 == ARG_KIND_EXPR_ARRAY_ANY_4 &&
+          kind_2 == ARG_KIND_EXPR_ANY_4) ||
+         (kind_1 == ARG_KIND_EXPR_ARRAY_ANY_5 && kind_2 == ARG_KIND_EXPR_ANY_5);
 }
 
 // Returns true if `kind_1` is a PROTO_MAP templated type of `kind_2`
 static inline bool TemplatedKindRelatedProtoMapType(
     const SignatureArgumentKind kind_1, const SignatureArgumentKind kind_2) {
-  return (kind_1 == ARG_PROTO_MAP_ANY && kind_2 == ARG_PROTO_MAP_KEY_ANY) ||
-         (kind_1 == ARG_PROTO_MAP_ANY && kind_2 == ARG_PROTO_MAP_VALUE_ANY);
+  return (kind_1 == ARG_KIND_EXPR_PROTO_MAP_ANY &&
+          kind_2 == ARG_KIND_EXPR_PROTO_MAP_KEY_ANY) ||
+         (kind_1 == ARG_KIND_EXPR_PROTO_MAP_ANY &&
+          kind_2 == ARG_KIND_EXPR_PROTO_MAP_VALUE_ANY);
 }
 
 // Returns true if `kind_1` is a RANGE templated type of `kind_2`
 static inline bool TemplatedKindRelatedRangeType(
     const SignatureArgumentKind kind_1, const SignatureArgumentKind kind_2) {
-  return (kind_1 == ARG_RANGE_TYPE_ANY_1 && IsRelatedToAny1(kind_2));
+  return (kind_1 == ARG_KIND_EXPR_RANGE_ANY_1 && IsRelatedToAny1(kind_2));
 }
 
 // Returns true if `kind_1` is a MAP templated type of `kind_2`
 static inline bool TemplatedKindRelatedMapType(
     const SignatureArgumentKind kind_1, const SignatureArgumentKind kind_2) {
-  return (kind_1 == ARG_MAP_TYPE_ANY_1_2 && IsRelatedToAny1(kind_2)) ||
-         (kind_1 == ARG_MAP_TYPE_ANY_1_2 && IsRelatedToAny2(kind_2));
+  return (kind_1 == ARG_KIND_EXPR_MAP_ANY_1_2 && IsRelatedToAny1(kind_2)) ||
+         (kind_1 == ARG_KIND_EXPR_MAP_ANY_1_2 && IsRelatedToAny2(kind_2));
 }
 
 // Returns true if `kind_1` is a MEASURE templated type of `kind_2`
 static inline bool TemplatedKindRelatedMeasureType(
     const SignatureArgumentKind kind_1, const SignatureArgumentKind kind_2) {
-  return (kind_1 == ARG_MEASURE_TYPE_ANY_1 && IsRelatedToAny1(kind_2));
+  return (kind_1 == ARG_KIND_EXPR_MEASURE_ANY_1 && IsRelatedToAny1(kind_2));
 }
 
 // Returns true if `kind_1` is a templated type containing `kind_2`
@@ -1558,7 +1656,7 @@ bool FunctionArgumentType::TemplatedKindIsRelated(
   if (!IsTemplated()) {
     return false;
   }
-  if (kind_ == ARG_TYPE_ARBITRARY || kind == ARG_TYPE_ARBITRARY) {
+  if (kind_ == ARG_KIND_EXPR_ARBITRARY || kind == ARG_KIND_EXPR_ARBITRARY) {
     return false;
   }
   if (kind_ == kind) {
@@ -1592,17 +1690,18 @@ absl::Status FunctionSignature::IsValid(ProductMode product_mode) const {
   // For other templated result types (such as ANY_TYPE_1, ANY_PROTO, etc.)
   // the result's templated kind must match a templated kind from an argument
   // since the result type will be determined based on an argument type.
-  if (result_type_.IsTemplated() && result_type_.kind() != ARG_TYPE_ARBITRARY &&
+  if (result_type_.IsTemplated() &&
+      result_type_.kind() != ARG_KIND_EXPR_ARBITRARY &&
       !result_type_.IsRelation()) {
     // Templated map type must match both templated key and value arguments.
-    if (result_type_.kind() == ARG_MAP_TYPE_ANY_1_2) {
+    if (result_type_.kind() == ARG_KIND_EXPR_MAP_ANY_1_2) {
       const bool has_arg_type_any_1 =
           absl::c_find_if(arguments_, [](auto& arg) {
-            return arg.TemplatedKindIsRelated(ARG_TYPE_ANY_1);
+            return arg.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1);
           }) != arguments_.end();
       const bool has_arg_type_any_2 =
           absl::c_find_if(arguments_, [](auto& arg) {
-            return arg.TemplatedKindIsRelated(ARG_TYPE_ANY_2);
+            return arg.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2);
           }) != arguments_.end();
       if (!has_arg_type_any_1 || !has_arg_type_any_2) {
         return MakeSqlError()
