@@ -24,9 +24,9 @@
 #include <vector>
 
 #include "googlesql/parser/ast_node.h"
+#include "googlesql/parser/parse_tree_format.h"
 #include "googlesql/public/language_options.h"
 #include "googlesql/public/parse_location.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -333,76 +333,18 @@ constexpr int kDefaultIndent = 2;
 // ===========================================================================
 //                         FORMATTER CONFIGURATION
 //
-// How each AST node lays its children out as a box. This is the declarative
-// part of the formatter: the framework below is generic, and a node's layout
-// is just a choice from this small vocabulary. Most nodes need no entry -- the
-// layout is inferred from structure (a leading keyword + children => a clause;
-// comma-separated children => a list; otherwise a flat flow). Add an entry here
-// only to override that inference or to select a special layout.
+// How each AST node lays its children out as a box is declared *declaratively*
+// on the AST nodes and fields themselves, via NodeFormat / FieldFormat
+// attributes in parser/gen_parse_tree.py. The generator resolves attribute
+// inheritance through the class hierarchy and emits a per-node-kind table
+// (parse_tree_format_generated.cc); this formatter is a generic engine that
+// consults it via GetASTNodeFormat().
 //
-// The layouts:
-//   kFlow      Children/keywords flow inline with no break points. Default for
-//              expressions, function calls, paths, leaves.
-//   kFlowWrap  Like kFlow, but may break before each operator and continue on
-//              the next line at the same indent. Used for AND/OR chains.
-//   kList      Comma-separated items: inline if they fit, else one per line,
-//              each comma tucked inside its item's box.
-//   kClause    A leading keyword followed by content (the content uses its own
-//              layout); content drops to an indented line when it doesn't fit.
-//   kVertical  Children each start a new line (a query's clause / pipe-op list).
-//   kSelect    SELECT/AGGREGATE: keyword + select list on one line, remaining
-//              clauses stacked, GROUP BY forced to its own aligned line.
-//   kParen     A parenthesized subquery/expression: inline "(...)" if it fits,
-//              else its contents indent between the parentheses.
-//   kPipeOp    A "|>" pipe operator.
-//   kStatements  A statement list (scripts): one statement per line.
-//   kCall      A function call: callee + parenthesized argument list that
-//              breaks one-argument-per-line when it doesn't fit.
-//   kSetOp     A set operation (UNION/INTERSECT/EXCEPT): operands stacked with
-//              the operator on its own line between them.
-//   kCase      A searched CASE expression: WHEN/ELSE arms each on their own
-//              line, END dedented to the CASE column.
-//   kJoin      A FROM table list: comma-separated tables break one per line;
-//              explicit JOINs stay inline.
+// Most nodes declare nothing: the layout is inferred here from structure (a
+// leading keyword + children => a clause; comma-separated children => a list;
+// otherwise a flat flow). The ASTFormatLayout values, field roles, and their
+// meanings are documented in parser/parse_tree_format.h.
 // ===========================================================================
-enum class Layout {
-  kFlow,
-  kFlowWrap,
-  kList,
-  kClause,
-  kVertical,
-  kSelect,
-  kParen,
-  kPipeOp,
-  kStatements,
-  kCall,
-  kSetOp,
-  kCase,
-  kJoin,
-  kTablePath,  // a table reference; its name path gets its own region
-};
-
-// Per-node-kind layout overrides. Node kinds are GetNodeKindString() values
-// (the AST class name without the "AST" prefix). Pipe operators (kind starting
-// with "Pipe") are mapped to kPipeOp separately, by prefix.
-const absl::flat_hash_map<absl::string_view, Layout>& LayoutConfig() {
-  static const auto* const config =
-      new absl::flat_hash_map<absl::string_view, Layout>{
-          {"Query", Layout::kVertical},
-          {"Select", Layout::kSelect},
-          {"ExpressionSubquery", Layout::kParen},
-          {"TableSubquery", Layout::kParen},
-          {"StatementList", Layout::kStatements},
-          {"AndExpr", Layout::kFlowWrap},
-          {"OrExpr", Layout::kFlowWrap},
-          {"FunctionCall", Layout::kCall},
-          {"SetOperation", Layout::kSetOp},
-          {"CaseNoValueExpression", Layout::kCase},
-          {"Join", Layout::kJoin},
-          {"TablePathExpression", Layout::kTablePath},
-      };
-  return *config;
-}
 
 class Builder {
  public:
@@ -420,13 +362,25 @@ class Builder {
 
   DocPtr Build(const ASTNode* node, Ctx ctx, DocPtr trailer = nullptr) {
     const std::string kind = node->GetNodeKindString();
-    DocPtr inner = BuildInner(node, kind, ctx);
+    DocPtr inner = BuildInner(node, ctx);
     std::vector<DocPtr> parts;
     parts.push_back(Tag(absl::StrCat("<div class=\"ast ast-", kind, "\">")));
     parts.push_back(inner);
     if (trailer != nullptr) parts.push_back(trailer);
     parts.push_back(Tag("</div>"));
-    return Concat(std::move(parts));
+    DocPtr result = Concat(std::move(parts));
+    // If this node's formatting parent designated it as a named colour region
+    // (a field with a `region` attribute, e.g. a table reference's name path),
+    // wrap it in that region here -- so the rule lives on the parent's field
+    // declaration rather than in a per-node builder.
+    const ASTNode* parent = node->parent();
+    if (parent != nullptr) {
+      const ASTNodeFormat& pf = GetASTNodeFormat(parent->node_kind());
+      if (pf.region_child != nullptr && pf.region_child(*parent) == node) {
+        return RegionAnnotated(pf.region_class, node, std::move(result));
+      }
+    }
+    return result;
   }
 
  private:
@@ -446,9 +400,10 @@ class Builder {
     for (int i = 0; i < node->num_children(); ++i) {
       const ASTNode* c = node->child(i);
       if (c == nullptr) continue;
-      // The pipe-JOIN LHS placeholder stands in for the pipe input; its source
-      // range spans the whole join, so rendering it would duplicate the join.
-      if (c->GetNodeKindString() == "PipeJoinLhsPlaceholder") continue;
+      // Nodes marked skip (e.g. the pipe-JOIN LHS placeholder, whose source
+      // range spans the whole join it stands in for) are never rendered by
+      // their parent, as doing so would duplicate sibling text.
+      if (GetASTNodeFormat(c->node_kind()).skip) continue;
       const int s = c->start_location().GetByteOffset();
       const int e = c->end_location().GetByteOffset();
       if (s < 0 || e <= s || s < ns || e > ne) continue;
@@ -716,95 +671,77 @@ class Builder {
     return Group(Concat(std::move(parts)));
   }
 
-  // Chooses the layout for `kind`: a configured override if present, the pipe
-  // operator layout for "Pipe*", otherwise inferred from the node's structure.
-  Layout ResolveLayout(const std::string& kind, const std::vector<Piece>& ps) {
-    if (StartsWith(kind, "Pipe")) return Layout::kPipeOp;
-    const auto& config = LayoutConfig();
-    auto it = config.find(kind);
-    if (it != config.end()) return it->second;
+  // Resolves the layout for `node`: its declared ASTFormatLayout (from the
+  // generated format table) if any, otherwise inferred from structure. Never
+  // returns kDefault (that is the "infer" sentinel, resolved here).
+  ASTFormatLayout ResolveLayout(const ASTNode* node,
+                                const std::vector<Piece>& ps) {
+    ASTFormatLayout layout = GetASTNodeFormat(node->node_kind()).layout;
+    if (layout != ASTFormatLayout::kDefault) return layout;
     // Structural inference. A leading keyword gap with child content is a
     // clause. (Requiring a child avoids misclassifying a leaf whose text
     // happens to start with a letter, e.g. an identifier.)
     if (!ps.empty() && ps[0].child == nullptr && IsKeywordGap(ps[0]) &&
         HasAnyChild(ps)) {
-      return Layout::kClause;
+      return ASTFormatLayout::kClause;
     }
-    if (IsCommaList(ps, 0)) return Layout::kList;
-    return Layout::kFlow;
+    if (IsCommaList(ps, 0)) return ASTFormatLayout::kList;
+    return ASTFormatLayout::kFlow;
   }
 
-  DocPtr BuildInner(const ASTNode* node, const std::string& kind, Ctx ctx) {
-    DocPtr inner = BuildLayout(node, kind, ctx);
-    // A resolved function call or a statement gets its own clickable region
-    // carrying its info. (Only when the annotator has info for it, so parse-mode
-    // rendering -- which has no annotator -- is unaffected.)
-    if (annotate_ &&
-        (kind == "FunctionCall" || absl::EndsWith(kind, "Statement"))) {
+  DocPtr BuildInner(const ASTNode* node, Ctx ctx) {
+    DocPtr inner = BuildLayout(node, ctx);
+    // A node with an `info_region` attribute (e.g. a function call or a
+    // statement) gets its own clickable region carrying its info -- but only
+    // when the annotator has info for it, so parse-mode rendering (no
+    // annotator) is unaffected.
+    const ASTNodeFormat& fmt = GetASTNodeFormat(node->node_kind());
+    if (annotate_ && !fmt.info_region.empty()) {
       std::string info = annotate_(node);
       if (!info.empty()) {
-        absl::string_view cls = kind == "FunctionCall" ? "func" : "stmt";
-        return Region(cls, Concat({std::move(inner), NodeInfoBox(info)}));
+        return Region(fmt.info_region,
+                      Concat({std::move(inner), NodeInfoBox(info)}));
       }
     }
     return inner;
   }
 
-  DocPtr BuildLayout(const ASTNode* node, const std::string& kind, Ctx ctx) {
+  DocPtr BuildLayout(const ASTNode* node, Ctx ctx) {
     std::vector<Piece> ps = Pieces(node);
-    switch (ResolveLayout(kind, ps)) {
-      case Layout::kVertical:
+    switch (ResolveLayout(node, ps)) {
+      case ASTFormatLayout::kStack:
         return BuildVertical(node, ps, ctx);
-      case Layout::kSelect:
-        return BuildSelect(ps, ctx);
-      case Layout::kParen:
-        return BuildParen(ps, ctx);
-      case Layout::kStatements:
+      case ASTFormatLayout::kKeywordStack:
+        return BuildSelect(node, ps, ctx);
+      case ASTFormatLayout::kParen:
+        return BuildParen(node, ps, ctx);
+      case ASTFormatLayout::kStatements:
         return BuildStatementList(ps, ctx);
-      case Layout::kPipeOp:
+      case ASTFormatLayout::kPipeOp:
         return BuildPipe(ps, ctx);
-      case Layout::kClause:
+      case ASTFormatLayout::kClause:
         return BuildClause(ps, ctx);
-      case Layout::kList:
+      case ASTFormatLayout::kList:
         return BuildListBody(ps, 0, ctx);
-      case Layout::kFlowWrap:
+      case ASTFormatLayout::kFlowWrap:
         return BuildFlow(ps, ctx, /*wrap=*/true);
-      case Layout::kCall:
+      case ASTFormatLayout::kCall:
         return BuildCall(ps, ctx);
-      case Layout::kSetOp:
+      case ASTFormatLayout::kSetChain:
         return BuildSetOp(node, ctx);
-      case Layout::kCase:
-        return BuildCase(ps, ctx);
-      case Layout::kJoin:
+      case ASTFormatLayout::kCase:
+        return BuildCase(node, ps, ctx);
+      case ASTFormatLayout::kJoin:
         return BuildJoin(node, ps, ctx);
-      case Layout::kTablePath:
-        return BuildTablePath(ps, ctx);
-      case Layout::kFlow:
+      case ASTFormatLayout::kFlow:
+        return BuildFlow(ps, ctx, /*wrap=*/false);
+      case ASTFormatLayout::kDefault:
+      case ASTFormatLayout::kCustom:
+        // kDefault is resolved away by ResolveLayout; kCustom has no builder
+        // registered yet, so both fall back to a lossless inline flow.
         return BuildFlow(ps, ctx, /*wrap=*/false);
     }
     return BuildFlow(ps, ctx, /*wrap=*/false);
-  }
-
-  // A table reference: the table-name path is wrapped in its own (orange)
-  // region so it can be highlighted and (later) clicked. Other children (e.g.
-  // an alias) render normally.
-  DocPtr BuildTablePath(const std::vector<Piece>& ps, Ctx ctx) {
-    std::vector<DocPtr> parts;
-    bool named = false;
-    for (const Piece& p : ps) {
-      if (p.child != nullptr) {
-        if (!named && p.child->GetNodeKindString() == "PathExpression") {
-          parts.push_back(RegionAnnotated("table", p.child, Build(p.child, ctx)));
-          named = true;
-        } else {
-          parts.push_back(Build(p.child, ctx));
-        }
-      } else {
-        DocPtr g = GapInline(p);
-        if (g->kind != Kind::kNil) parts.push_back(g);
-      }
-    }
-    return Concat(std::move(parts));
   }
 
   // Inline rendering: children + literal gaps. With `wrap`, an inter-child gap
@@ -959,7 +896,12 @@ class Builder {
   // SELECT / AGGREGATE: the keyword and its select list go on the first line
   // (the list wraps when too long); every other clause child (FROM, WHERE,
   // GROUP BY, HAVING, ...) drops to its own line aligned with the keyword.
-  DocPtr BuildSelect(const std::vector<Piece>& ps, Ctx ctx) {
+  DocPtr BuildSelect(const ASTNode* node, const std::vector<Piece>& ps,
+                     Ctx ctx) {
+    // The field with role 'head' stays on the keyword line; all others stack.
+    const ASTNodeFormat& fmt = GetASTNodeFormat(node->node_kind());
+    const ASTNode* head = fmt.head_child != nullptr ? fmt.head_child(*node)
+                                                     : nullptr;
     std::string keyword;
     size_t first = 0;
     DocPtr keyword_rest = nullptr;  // e.g. a comment right after SELECT
@@ -985,9 +927,8 @@ class Builder {
     }
     bool attached_list = false;
     for (size_t k = 0; k < kids.size(); ++k) {
-      const std::string ck = kids[k]->GetNodeKindString();
-      if (k == 0 && ck == "SelectList") {
-        // List stays on the keyword line, wrapping under it when long.
+      if (k == 0 && kids[k] == head) {
+        // Head field stays on the keyword line, wrapping under it when long.
         parts.push_back(Group(Nest(
             ctx.clause_cont, Concat({Line(" "), Build(kids[k], ctx)}))));
         attached_list = true;
@@ -1028,15 +969,22 @@ class Builder {
 
   // Parenthesized subquery: inline "(...)" if it fits, else the contents indent
   // on their own lines between the parentheses.
-  DocPtr BuildParen(const std::vector<Piece>& ps, Ctx ctx) {
+  DocPtr BuildParen(const ASTNode* node, const std::vector<Piece>& ps,
+                    Ctx ctx) {
     Ctx inner_ctx = ctx;
     inner_ctx.flatten_query = true;
     inner_ctx.subquery_depth = ctx.subquery_depth + 1;
-    // The first child is the parenthesized query/expression; any later children
-    // (e.g. a table alias) follow the closing paren.
+    // The body is the field with role 'paren_body'; any later children (e.g. a
+    // table alias) follow the closing paren. Fall back to the first child if no
+    // paren_body role is declared.
+    const ASTNodeFormat& fmt = GetASTNodeFormat(node->node_kind());
+    const ASTNode* body_node = fmt.paren_body_child != nullptr
+                                   ? fmt.paren_body_child(*node)
+                                   : nullptr;
     size_t body_idx = ps.size();
     for (size_t i = 0; i < ps.size(); ++i) {
-      if (ps[i].child != nullptr) {
+      if (ps[i].child != nullptr &&
+          (body_node == nullptr || ps[i].child == body_node)) {
         body_idx = i;
         break;
       }
@@ -1088,7 +1036,8 @@ class Builder {
     bool has_pipe = false;
     for (const Piece& p : ps) {
       if (p.child != nullptr &&
-          StartsWith(p.child->GetNodeKindString(), "Pipe")) {
+          GetASTNodeFormat(p.child->node_kind()).layout ==
+              ASTFormatLayout::kPipeOp) {
         has_pipe = true;
         break;
       }
@@ -1164,15 +1113,19 @@ class Builder {
   }
 
   // A set operation (UNION / INTERSECT / EXCEPT): the operands stack with the
-  // operator on its own line between them. (The metadata-list child overlaps
-  // the operand ranges, so the operands are taken directly from the node and
-  // the operator text is read from the gaps between them.)
+  // operator on its own line between them. (The metadata-list child, marked
+  // with role 'skip', overlaps the operand ranges, so the operands are taken
+  // directly from the node and the operator text is read from the gaps between
+  // them.)
   DocPtr BuildSetOp(const ASTNode* node, Ctx ctx) {
+    const ASTNodeFormat& fmt = GetASTNodeFormat(node->node_kind());
     std::vector<const ASTNode*> operands;
     for (int i = 0; i < node->num_children(); ++i) {
       const ASTNode* c = node->child(i);
       if (c == nullptr) continue;
-      if (StartsWith(c->GetNodeKindString(), "SetOperation")) continue;
+      if (fmt.is_skipped_child != nullptr && fmt.is_skipped_child(*node, *c)) {
+        continue;
+      }
       if (c->start_location().GetByteOffset() < 0) continue;
       operands.push_back(c);
     }
@@ -1201,9 +1154,16 @@ class Builder {
     return Concat(std::move(parts));
   }
 
-  // A searched CASE expression: each WHEN/ELSE arm starts a new line indented
-  // under CASE, and END dedents back to the CASE column. Stays inline if short.
-  DocPtr BuildCase(const std::vector<Piece>& ps, Ctx ctx) {
+  // A keyworded arm construct (e.g. a searched CASE): each arm keyword (from
+  // break_before_keywords, e.g. WHEN/ELSE) starts a new line indented under
+  // the header keyword, and the footer keyword (e.g. END) dedents back to the
+  // header column. Any other keyword gap (e.g. THEN) stays inline as a
+  // connector. Stays on one line if short. All keywords come from the node's
+  // format spec, so the same engine serves any construct of this shape.
+  DocPtr BuildCase(const ASTNode* node, const std::vector<Piece>& ps, Ctx ctx) {
+    const ASTNodeFormat& fmt = GetASTNodeFormat(node->node_kind());
+    const absl::string_view header = fmt.header_keyword;
+    const absl::string_view footer = fmt.footer_keyword;
     std::vector<DocPtr> body;
     for (size_t i = 0; i < ps.size(); ++i) {
       const Piece& p = ps[i];
@@ -1213,24 +1173,31 @@ class Builder {
       }
       std::string c =
           std::string(absl::StripAsciiWhitespace(CollapseWs(GapText(p))));
-      if (i == 0 && StartsWith(c, "CASE")) {
-        c = std::string(absl::StripAsciiWhitespace(c.substr(4)));
+      if (i == 0 && !header.empty() && StartsWith(c, header)) {
+        c = std::string(absl::StripAsciiWhitespace(c.substr(header.size())));
       }
-      if (c == "END" || StartsWith(c, "END ") || c.empty()) continue;
-      if (StartsWith(c, "WHEN")) {
-        body.push_back(Line(" "));
-        body.push_back(Esc("WHEN "));
-      } else if (StartsWith(c, "ELSE")) {
-        body.push_back(Line(" "));
-        body.push_back(Esc("ELSE "));
-      } else if (StartsWith(c, "THEN")) {
-        body.push_back(Esc(" THEN "));
-      } else {
-        body.push_back(Esc(absl::StrCat(c, " ")));
+      if (c.empty()) continue;
+      if (!footer.empty() && (c == footer || StartsWith(c, absl::StrCat(footer, " ")))) {
+        continue;  // footer is emitted by the wrapper below
+      }
+      bool is_arm = false;
+      for (absl::string_view kw : fmt.break_before_keywords) {
+        if (StartsWith(c, kw)) {
+          body.push_back(Line(" "));
+          body.push_back(Esc(absl::StrCat(c, " ")));
+          is_arm = true;
+          break;
+        }
+      }
+      if (!is_arm) {
+        // A connector keyword (e.g. THEN) stays inline with spaces on both
+        // sides, since the surrounding operands render without them.
+        body.push_back(Esc(absl::StrCat(" ", c, " ")));
       }
     }
-    return Group(Concat({Esc("CASE"), Nest(kDefaultIndent, Concat(body)),
-                         Line(" "), Esc("END")}));
+    return Group(Concat({Esc(std::string(header)),
+                         Nest(kDefaultIndent, Concat(body)), Line(" "),
+                         Esc(std::string(footer))}));
   }
 
   // Recursively collects the table operands of a comma-only join (which is
@@ -1299,9 +1266,10 @@ class Builder {
     });
     for (const ASTNode* c : kids) {
       const std::string k = c->GetNodeKindString();
-      // Skip the pipe-JOIN LHS placeholder (the implicit pipe input); its range
-      // spans the whole join, so emitting it would duplicate the join text.
-      if (k == "PipeJoinLhsPlaceholder") continue;
+      // Skip nodes marked skip (e.g. the pipe-JOIN LHS placeholder, the
+      // implicit pipe input, whose range spans the whole join -- emitting it
+      // would duplicate the join text).
+      if (GetASTNodeFormat(c->node_kind()).skip) continue;
       if (k == "Join") {
         FlattenJoinItems(c, items);
       } else {
