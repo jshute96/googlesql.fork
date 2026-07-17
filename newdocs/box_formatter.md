@@ -62,7 +62,8 @@ Split into pieces (children = ●, gaps = ░░):
   SELECT  a  ,   b   FROM  t
   (gap)  (c) (g) (c) (gap) (c)
 
-Each ● recurses; each ░ is re-emitted verbatim (whitespace collapsed).
+Each ● recurses; each ░ is re-emitted from its tokens (inter-token
+whitespace collapsed, token interiors untouched).
 ```
 
 ---
@@ -125,8 +126,8 @@ attaches. Even then, the *text* they print still comes from source substrings.
 Almost everything is copied. The few synthesized strings are structural
 punctuation that the special layouts re-emit rather than dig out of a gap:
 
-- **Copied verbatim** (with internal whitespace collapsed to single spaces by
-  `CollapseWs`, keeping token spacing like `" = "`): all gap text — keywords,
+- **Copied verbatim** (with the whitespace *between* tokens collapsed to single
+  spaces, keeping token spacing like `" = "`): all gap text — keywords,
   operators, punctuation — every leaf's text, and all comments.
 - **Synthesized** to match the source: the `,` between list items; the `(` and
   `)` around a subquery or a function-call argument list; the canonical
@@ -140,6 +141,41 @@ recognize falls back to an inline flow of its original text, which is lossless.
 The header comments call this out as **best-effort**: the goal is faithful
 *visualization*, so it does not promise byte-exact round-tripping the way a
 dedicated formatter would.
+
+### Gap text is handled as real lexer tokens, not scanned characters
+
+"With the whitespace between tokens collapsed" is doing real work, and getting
+it right requires knowing where the tokens are. The formatter does **not**
+scan gap text character by character; up front, `SqlToBoxHtml` runs the actual
+GoogleSQL lexer over the statement (`GetParseTokens`, from
+`//googlesql/public:parse_helpers`, with `include_comments = true`) and keeps
+the resulting tokens — keywords, symbols, identifiers, literal values, and
+comments — each with its byte range. Gap and leaf rendering is then driven by
+those tokens (`NormalizeCode`, `CommentSpansIn`):
+
+- **Each token is an atom, copied byte-for-byte.** Only the whitespace
+  *between* tokens is normalized; a token's interior is never touched. So a
+  string or quoted identifier that contains whitespace or a comment marker
+  survives exactly — `'John  Smith'` keeps its double space, `'#ff0000'` and
+  `'a--b'` are not mistaken for comments.
+- **Comments come from `COMMENT` tokens**, with exact ranges — not from
+  searching gap text for `--` / `#` / `/*`. A `#` inside a string can never be
+  read as the start of a comment.
+
+This matters because leaf literals and identifiers flow through the same gap
+path as ordinary gap text (a string literal is a leaf whose whole range is one
+`VALUE` token). Before the tokenizer was used, character-level scanning would
+collapse whitespace *inside* string literals and treat comment markers inside
+strings as real comments; the token model removes that whole class of bug.
+
+If tokenization fails — essentially impossible for a statement that already
+parsed — the formatter falls back to the old character-level whitespace
+collapsing and `--`/`#`/`/*` comment scan, so it still produces output.
+
+> The `language_options` parameter to `SqlToBoxHtml` exists for exactly this: it
+> is passed to the lexer so tokenization matches the dialect the query was
+> parsed under. The sibling `parser/html_formatter.cc` uses `GetParseTokens` the
+> same way to locate comments.
 
 ---
 
@@ -502,7 +538,9 @@ One statement per line, `;` attached.
 
 ## Comments
 
-Comments are found textually inside gaps (`--`, `#`, `/* … */`). A line comment,
+Comments do not appear in the AST, so they are located from the lexer's
+`COMMENT` tokens (see *Gap text is handled as real lexer tokens*, above) —
+precisely, never by guessing from gap characters. A line comment (`--` / `#`),
 or any comment containing a newline, forces a `HardLine` after it so the
 original line structure of the comment survives. Between stacked items (query
 clauses, pipe operators) a trailing comment is attached to the *current* line

@@ -185,6 +185,35 @@ TEST(BoxFormatterTest, HtmlIsEscaped) {
   EXPECT_THAT(BoxHtml("SELECT '<a>' AS x"), HasSubstr("&lt;a&gt;"));
 }
 
+TEST(BoxFormatterTest, HashInStringIsNotAComment) {
+  // A '#' inside a string literal must not be treated as a comment. With the
+  // token-based gap handling the literal is one VALUE token, copied verbatim.
+  EXPECT_THAT(Box("SELECT '#ff0000' AS c"), Eq("SELECT '#ff0000' AS c"));
+  EXPECT_THAT(BoxHtml("SELECT '#ff0000' AS c"), Not(HasSubstr("sql-comment")));
+}
+
+TEST(BoxFormatterTest, DashDashInStringIsNotAComment) {
+  EXPECT_THAT(Box("SELECT 'a--b' AS c"), Eq("SELECT 'a--b' AS c"));
+  EXPECT_THAT(BoxHtml("SELECT 'a--b' AS c"), Not(HasSubstr("sql-comment")));
+}
+
+TEST(BoxFormatterTest, WhitespaceInsideStringIsPreserved) {
+  // Whitespace inside a string literal is part of its value and must survive;
+  // only whitespace *between* tokens is normalized.
+  EXPECT_THAT(Box("SELECT 'John  Smith' AS n"), Eq("SELECT 'John  Smith' AS n"));
+}
+
+TEST(BoxFormatterTest, WhitespaceInsideQuotedIdentifierIsPreserved) {
+  EXPECT_THAT(Box("SELECT 1 AS `a  b`"), Eq("SELECT 1 AS `a  b`"));
+}
+
+TEST(BoxFormatterTest, RealCommentStillDetectedAfterString) {
+  // A genuine comment following a string is still found (and forces a break).
+  std::string out = Box("SELECT '#ff0000' -- note\n|> WHERE x");
+  EXPECT_THAT(out, HasSubstr("'#ff0000'"));
+  EXPECT_THAT(out, HasSubstr("-- note"));
+}
+
 TEST(BoxFormatterTest, SetOperationStacks) {
   EXPECT_THAT(Box("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3"),
               Eq("SELECT 1\nUNION ALL\nSELECT 2\nUNION ALL\nSELECT 3"));

@@ -27,6 +27,8 @@
 #include "googlesql/parser/parse_tree_format.h"
 #include "googlesql/public/language_options.h"
 #include "googlesql/public/parse_location.h"
+#include "googlesql/public/parse_resume_location.h"
+#include "googlesql/public/parse_tokens.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -330,6 +332,48 @@ bool StartsWith(absl::string_view s, absl::string_view prefix) {
 // up under the operator name instead (see BuildPipe).
 constexpr int kDefaultIndent = 2;
 
+// One lexer token, from the real GoogleSQL tokenizer (GetParseTokens): a
+// keyword, symbol, identifier, literal value, or comment, with its byte range
+// [begin, end) in the source. The formatter treats each token as an atom whose
+// bytes are copied verbatim, so whitespace or comment markers *inside* a string
+// or quoted identifier (e.g. '#ff0000', 'a  b') are never mistaken for
+// formatting or comments.
+struct Token {
+  int begin;
+  int end;
+  bool comment;
+};
+
+// Runs the real lexer over the root's source range and returns its tokens
+// (including comments) in source order. Comments do not appear in the AST, so
+// this is also how they are located. Returns empty on any tokenization failure
+// -- a parseable statement essentially always tokenizes, but if it does not the
+// formatter falls back to character-level gap handling.
+std::vector<Token> Tokenize(absl::string_view sql,
+                            const LanguageOptions& language_options,
+                            absl::string_view filename, int root_start,
+                            int root_end) {
+  ParseResumeLocation resume =
+      ParseResumeLocation::FromStringView(filename, sql);
+  resume.set_byte_position(root_start);
+  ParseTokenOptions options;
+  options.include_comments = true;
+  options.language_options = language_options;
+  std::vector<ParseToken> parse_tokens;
+  if (!GetParseTokens(options, &resume, &parse_tokens).ok()) return {};
+  std::vector<Token> tokens;
+  for (const ParseToken& t : parse_tokens) {
+    if (t.IsEndOfInput()) break;
+    const ParseLocationRange r = t.GetLocationRange();
+    const int b = r.start().GetByteOffset();
+    const int e = r.end().GetByteOffset();
+    if (b >= root_end) break;
+    if (b < root_start || e > root_end || e <= b) continue;
+    tokens.push_back({b, e, t.IsComment()});
+  }
+  return tokens;
+}
+
 // ===========================================================================
 //                         FORMATTER CONFIGURATION
 //
@@ -348,8 +392,12 @@ constexpr int kDefaultIndent = 2;
 
 class Builder {
  public:
-  Builder(absl::string_view sql, BoxAnnotator annotate)
-      : sql_(sql), annotate_(std::move(annotate)) {}
+  Builder(absl::string_view sql, std::vector<Token> tokens,
+          BoxAnnotator annotate)
+      : sql_(sql),
+        tokens_(std::move(tokens)),
+        have_tokens_(!tokens_.empty()),
+        annotate_(std::move(annotate)) {}
 
   // ctx.flatten_query: whether a Query may be laid out inline (true inside a
   // subquery's parentheses) vs. always stacked (false at the top level).
@@ -480,81 +528,77 @@ class Builder {
     return out;
   }
 
-  DocPtr ClauseSep(Ctx ctx) {
-    return ctx.flatten_query ? Line(" ") : HardLine();
-  }
-
-  bool GapHasComment(const Piece& p) const {
-    absl::string_view g = GapText(p);
-    return absl::StrContains(g, "--") || absl::StrContains(g, "/*") ||
-           absl::StrContains(g, "#");
-  }
-
-  // Renders a literal gap as inline escaped text (with comments wrapped).
-  DocPtr GapInline(const Piece& p) {
-    if (!GapHasComment(p)) {
-      std::string c = CollapseWs(GapText(p));
-      return c.empty() ? Nil() : Esc(c);
+  // True if the source range [begin, end) contains any whitespace.
+  bool HasWhitespace(int begin, int end) const {
+    for (int i = begin; i < end; ++i) {
+      if (absl::ascii_isspace(static_cast<unsigned char>(sql_[i]))) return true;
     }
-    return GapWithComments(p);
+    return false;
   }
 
-  // Splits a gap into code / comment fragments, wrapping comments in their own
-  // div. A line comment or a comment containing a newline forces a hard break
-  // afterwards so the original line structure of comments is preserved.
-  DocPtr GapWithComments(const Piece& p) {
-    absl::string_view g = GapText(p);
-    std::vector<DocPtr> parts;
+  // The half-open index range [lo, hi) of tokens_ whose start offset lies in
+  // [begin, end). Tokens are sorted by start, so this is two binary searches.
+  std::pair<size_t, size_t> TokenRange(int begin, int end) const {
+    const auto lo = std::lower_bound(
+        tokens_.begin(), tokens_.end(), begin,
+        [](const Token& t, int v) { return t.begin < v; });
+    const auto hi = std::lower_bound(
+        lo, tokens_.end(), end,
+        [](const Token& t, int v) { return t.begin < v; });
+    return {static_cast<size_t>(lo - tokens_.begin()),
+            static_cast<size_t>(hi - tokens_.begin())};
+  }
+
+  // The inline text of a source range, with each real (non-comment) token
+  // copied verbatim as an atom and only the whitespace *between* tokens
+  // collapsed to single spaces (leading/trailing space kept, matching
+  // CollapseWs). This is the token-aware replacement for CollapseWs on gap and
+  // leaf text: because token interiors are untouched, a string or quoted
+  // identifier containing whitespace or a comment marker (e.g. '#ff0000',
+  // 'a  b') is preserved exactly. Falls back to CollapseWs if tokenization was
+  // unavailable.
+  std::string NormalizeCode(int begin, int end) const {
+    if (!have_tokens_) return CollapseWs(sql_.substr(begin, end - begin));
+    std::string out;
+    int cursor = begin;
+    bool pending = false;  // whitespace/comment seen since the last emitted token
+    const auto [lo, hi] = TokenRange(begin, end);
+    for (size_t i = lo; i < hi; ++i) {
+      const Token& t = tokens_[i];
+      if (t.comment) {  // comments are handled by the comment-aware paths
+        pending = true;
+        cursor = t.end;
+        continue;
+      }
+      if (cursor < t.begin && HasWhitespace(cursor, t.begin)) pending = true;
+      if (pending) out += ' ';
+      pending = false;
+      out.append(sql_.data() + t.begin, t.end - t.begin);
+      cursor = t.end;
+    }
+    if (cursor < end && HasWhitespace(cursor, end)) pending = true;
+    if (pending) out += ' ';
+    return out;
+  }
+
+  // The [start, end) byte ranges of comment tokens within [begin, end). Falls
+  // back to a character scan (--, #, /* */) if tokenization was unavailable.
+  std::vector<std::pair<int, int>> CommentSpansIn(int begin, int end) const {
+    std::vector<std::pair<int, int>> spans;
+    if (have_tokens_) {
+      const auto [lo, hi] = TokenRange(begin, end);
+      for (size_t i = lo; i < hi; ++i) {
+        if (tokens_[i].comment) {
+          spans.push_back({tokens_[i].begin, tokens_[i].end});
+        }
+      }
+      return spans;
+    }
+    absl::string_view g = sql_.substr(begin, end - begin);
     size_t i = 0;
     while (i < g.size()) {
-      size_t dashes = g.find("--", i);
-      size_t hash = g.find('#', i);
-      size_t line = std::min(dashes, hash);
-      size_t block = g.find("/*", i);
-      size_t next = std::min(line, block);
-      if (next == absl::string_view::npos) {
-        std::string code = CollapseWs(g.substr(i));
-        if (!code.empty() && code != " ") parts.push_back(Esc(code));
-        break;
-      }
-      std::string code = CollapseWs(g.substr(i, next - i));
-      if (!code.empty() && code != " ") parts.push_back(Esc(code));
-      bool is_line = (next == line);
-      size_t cend;
-      if (is_line) {
-        cend = g.find('\n', next);
-        if (cend == absl::string_view::npos) cend = g.size();
-      } else {
-        cend = g.find("*/", next);
-        cend = (cend == absl::string_view::npos) ? g.size() : cend + 2;
-      }
-      absl::string_view comment = g.substr(next, cend - next);
-      parts.push_back(Tag("<div class=\"sql-comment\">"));
-      parts.push_back(Esc(comment));
-      parts.push_back(Tag("</div>"));
-      if (is_line || absl::StrContains(comment, "\n")) {
-        parts.push_back(HardLine());
-      }
-      i = cend;
-    }
-    return parts.empty() ? Nil() : Concat(std::move(parts));
-  }
-
-  // Renders only the comments in a gap, each as " <div sql-comment>...</div>",
-  // with no surrounding code or line breaks. Used between stacked items (e.g.
-  // query clauses / pipe operators) where the container already provides the
-  // line break, so a trailing comment attaches to the current line instead of
-  // introducing blank lines.
-  DocPtr InlineComments(const Piece& p) {
-    absl::string_view g = GapText(p);
-    std::vector<DocPtr> parts;
-    size_t i = 0;
-    while (i < g.size()) {
-      size_t dashes = g.find("--", i);
-      size_t hash = g.find('#', i);
-      size_t block = g.find("/*", i);
-      size_t line = std::min(dashes, hash);
-      size_t next = std::min(line, block);
+      size_t line = std::min(g.find("--", i), g.find('#', i));
+      size_t next = std::min(line, g.find("/*", i));
       if (next == absl::string_view::npos) break;
       const bool is_line = (next == line);
       size_t cend;
@@ -565,11 +609,84 @@ class Builder {
         cend = g.find("*/", next);
         cend = (cend == absl::string_view::npos) ? g.size() : cend + 2;
       }
+      spans.push_back(
+          {begin + static_cast<int>(next), begin + static_cast<int>(cend)});
+      i = cend;
+    }
+    return spans;
+  }
+
+  bool RangeHasComment(int begin, int end) const {
+    if (have_tokens_) {
+      const auto [lo, hi] = TokenRange(begin, end);
+      for (size_t i = lo; i < hi; ++i) {
+        if (tokens_[i].comment) return true;
+      }
+      return false;
+    }
+    absl::string_view g = sql_.substr(begin, end - begin);
+    return absl::StrContains(g, "--") || absl::StrContains(g, "/*") ||
+           absl::StrContains(g, "#");
+  }
+
+  // A line comment (-- or #) or any comment containing a newline forces a hard
+  // break after it, so the original line structure of comments is preserved.
+  bool CommentForcesBreak(absl::string_view comment) const {
+    return absl::StartsWith(comment, "--") || absl::StartsWith(comment, "#") ||
+           absl::StrContains(comment, "\n");
+  }
+
+  DocPtr ClauseSep(Ctx ctx) {
+    return ctx.flatten_query ? Line(" ") : HardLine();
+  }
+
+  bool GapHasComment(const Piece& p) const {
+    return RangeHasComment(p.begin, p.end);
+  }
+
+  // Renders a literal gap as inline escaped text (with comments wrapped).
+  DocPtr GapInline(const Piece& p) { return GapWithComments(p.begin, p.end); }
+
+  // Renders a source range as inline code interleaved with comment divs: code
+  // segments (token-verbatim, whitespace collapsed) between comment tokens,
+  // each comment wrapped in its own div and forcing a hard break when it is a
+  // line comment or spans multiple lines. With no comments this is just the
+  // inline code text.
+  DocPtr GapWithComments(int begin, int end) {
+    std::vector<std::pair<int, int>> spans = CommentSpansIn(begin, end);
+    if (spans.empty()) {
+      std::string c = NormalizeCode(begin, end);
+      return c.empty() ? Nil() : Esc(c);
+    }
+    std::vector<DocPtr> parts;
+    int seg = begin;
+    for (const auto& [cs, ce] : spans) {
+      std::string code = NormalizeCode(seg, cs);
+      if (!code.empty() && code != " ") parts.push_back(Esc(code));
+      absl::string_view comment = sql_.substr(cs, ce - cs);
+      parts.push_back(Tag("<div class=\"sql-comment\">"));
+      parts.push_back(Esc(comment));
+      parts.push_back(Tag("</div>"));
+      if (CommentForcesBreak(comment)) parts.push_back(HardLine());
+      seg = ce;
+    }
+    std::string code = NormalizeCode(seg, end);
+    if (!code.empty() && code != " ") parts.push_back(Esc(code));
+    return parts.empty() ? Nil() : Concat(std::move(parts));
+  }
+
+  // Renders only the comments in a range, each as " <div sql-comment>...</div>",
+  // with no surrounding code or line breaks. Used between stacked items (e.g.
+  // query clauses / pipe operators) where the container already provides the
+  // line break, so a trailing comment attaches to the current line instead of
+  // introducing blank lines.
+  DocPtr InlineComments(int begin, int end) {
+    std::vector<DocPtr> parts;
+    for (const auto& [cs, ce] : CommentSpansIn(begin, end)) {
       parts.push_back(Esc(" "));
       parts.push_back(Tag("<div class=\"sql-comment\">"));
-      parts.push_back(Esc(g.substr(next, cend - next)));
+      parts.push_back(Esc(sql_.substr(cs, ce - cs)));
       parts.push_back(Tag("</div>"));
-      i = cend;
     }
     return parts.empty() ? Nil() : Concat(std::move(parts));
   }
@@ -771,10 +888,10 @@ class Builder {
                                   IsParenthesizedQuery(ps, i + 1);
         const bool after_query = i > 0 && IsParenthesizedQuery(ps, i - 1);
         if (GapHasComment(p)) {
-          parts.push_back(GapWithComments(p));
+          parts.push_back(GapWithComments(p.begin, p.end));
           continue;
         }
-        std::string c = CollapseWs(GapText(p));
+        std::string c = NormalizeCode(p.begin, p.end);
         // The "(" / ")" around a parenthesized Query are emitted by
         // BuildParenQuery, so strip them here to avoid duplication.
         if (before_query && !c.empty() && c.back() == '(') c.pop_back();
@@ -803,11 +920,11 @@ class Builder {
       return false;
     }
     if (i > 0 && ps[i - 1].child == nullptr) {
-      std::string c = CollapseWs(GapText(ps[i - 1]));
+      std::string c = NormalizeCode(ps[i - 1].begin, ps[i - 1].end);
       if (!c.empty() && c.back() == '(') return true;
     }
     if (i + 1 < ps.size() && ps[i + 1].child == nullptr) {
-      std::string c = CollapseWs(GapText(ps[i + 1]));
+      std::string c = NormalizeCode(ps[i + 1].begin, ps[i + 1].end);
       if (!c.empty() && c.front() == ')') return true;
     }
     return false;
@@ -839,7 +956,7 @@ class Builder {
     int kw_end = ps[0].end;
     LeadingKeyword(ps[0], &kw_end);
     std::string keyword = std::string(absl::StripAsciiWhitespace(
-        CollapseWs(sql_.substr(ps[0].begin, kw_end - ps[0].begin))));
+        NormalizeCode(ps[0].begin, kw_end)));
     // Content is the pieces after the keyword. If the keyword gap has leftover
     // text (e.g. a comment after SELECT), keep it as a leading content piece.
     std::vector<Piece> content_pieces(ps.begin() + 1, ps.end());
@@ -909,9 +1026,9 @@ class Builder {
       int kw_end = ps[0].end;
       LeadingKeyword(ps[0], &kw_end);
       keyword = std::string(absl::StripAsciiWhitespace(
-          CollapseWs(sql_.substr(ps[0].begin, kw_end - ps[0].begin))));
+          NormalizeCode(ps[0].begin, kw_end)));
       if (HasNonWhitespace(kw_end, ps[0].end)) {
-        keyword_rest = GapWithComments(Piece{nullptr, kw_end, ps[0].end});
+        keyword_rest = GapWithComments(kw_end, ps[0].end);
       }
       first = 1;
     }
@@ -959,7 +1076,7 @@ class Builder {
         // put a space after the bare "|>" before the operator; for most
         // operators the gap's trailing space supplies it, but for `|> JOIN` the
         // following Join node's range swallows the space.
-        std::string c = CollapseWs(GapText(p));
+        std::string c = NormalizeCode(p.begin, p.end);
         if (c == "|>") c = "|> ";
         if (!c.empty()) parts.push_back(Esc(c));
       }
@@ -1064,7 +1181,7 @@ class Builder {
         }
         first = false;
       } else if (GapHasComment(p)) {
-        parts.push_back(InlineComments(p));
+        parts.push_back(InlineComments(p.begin, p.end));
       }
     }
     // No Group here: at the top level the clause separators (HardLine) always
@@ -1141,8 +1258,7 @@ class Builder {
       const int ge = operands[i]->start_location().GetByteOffset();
       std::string op;
       if (gb >= 0 && ge >= gb) {
-        op = std::string(absl::StripAsciiWhitespace(
-            CollapseWs(sql_.substr(gb, ge - gb))));
+        op = std::string(absl::StripAsciiWhitespace(NormalizeCode(gb, ge)));
       }
       parts.push_back(ClauseSep(ctx));
       if (!op.empty()) {
@@ -1171,8 +1287,8 @@ class Builder {
         body.push_back(Build(p.child, ctx));
         continue;
       }
-      std::string c =
-          std::string(absl::StripAsciiWhitespace(CollapseWs(GapText(p))));
+      std::string c = std::string(
+          absl::StripAsciiWhitespace(NormalizeCode(p.begin, p.end)));
       if (i == 0 && !header.empty() && StartsWith(c, header)) {
         c = std::string(absl::StripAsciiWhitespace(c.substr(header.size())));
       }
@@ -1341,15 +1457,17 @@ class Builder {
         parts.push_back(Build(p.child, ctx));
         first = false;
       } else {
-        std::string c = CollapseWs(GapText(p));
+        std::string c = NormalizeCode(p.begin, p.end);
         if (StartsWith(c, ";")) parts.push_back(Esc(";"));
-        else if (GapHasComment(p)) parts.push_back(GapWithComments(p));
+        else if (GapHasComment(p)) parts.push_back(GapWithComments(p.begin, p.end));
       }
     }
     return Concat(std::move(parts));
   }
 
   absl::string_view sql_;
+  std::vector<Token> tokens_;  // real lexer tokens, sorted by start offset
+  bool have_tokens_;           // false if tokenization failed (fall back to raw)
   BoxAnnotator annotate_;
 };
 
@@ -1365,9 +1483,15 @@ absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
   GOOGLESQL_RET_CHECK_GE(root_start, 0);
   GOOGLESQL_RET_CHECK_LE(root_start, root_end);
   GOOGLESQL_RET_CHECK_LE(root_end, static_cast<int>(sql.size()));
-  (void)language_options;  // Comments are detected directly from gap text.
 
-  Builder builder(sql, std::move(annotate));
+  // Tokenize with the real lexer so gap text (keywords, operators, comments)
+  // and leaf literals/identifiers are handled as tokens rather than scanned
+  // character by character.
+  std::vector<Token> tokens = Tokenize(sql, language_options,
+                                       root->start_location().filename(),
+                                       root_start, root_end);
+
+  Builder builder(sql, std::move(tokens), std::move(annotate));
   Builder::Ctx ctx;
   ctx.flatten_query = false;
   DocPtr doc = builder.Build(root, ctx);

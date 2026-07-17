@@ -54,9 +54,12 @@ using BoxAnnotator = std::function<std::string(const ASTNode*)>;
 //   * A subquery's contents indent on their own lines when they don't fit
 //     inline within parentheses.
 //
-// `root` must come from a parse of `sql`. `language_options` is used when
-// re-tokenizing to find comments. Best-effort: unrecognized nodes fall back to
-// an inline rendering of their original text.
+// `root` must come from a parse of `sql`. `language_options` is used to
+// re-tokenize `sql` with the real lexer, so gap text and leaf literals are
+// handled as tokens (correctly preserving strings/identifiers that contain
+// whitespace or comment markers, and locating comments precisely). Best-effort:
+// unrecognized nodes fall back to an inline rendering of their original text,
+// and if tokenization fails the formatter falls back to character-level gaps.
 absl::StatusOr<std::string> SqlToBoxHtml(absl::string_view sql,
                                          const ASTNode* root,
                                          const LanguageOptions& language_options,
