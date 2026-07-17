@@ -436,7 +436,7 @@ FORMAT_LAYOUT_TO_ENUM = {
 class NodeFormat:
   """Formatting attributes for an AST node class.
 
-  Passed as AddNode(format=NodeFormat(...)).  All attributes are inherited by
+  Passed as AddNode(node_format=NodeFormat(...)).  All attributes are inherited by
   subclasses (nearest definition wins, attribute by attribute), so shared
   behavior belongs on abstract nodes: e.g. ASTPipeOperator declares
   layout='pipe' once for every pipe operator, and ASTStatement declares
@@ -482,7 +482,7 @@ class NodeFormat:
 class FieldFormat:
   """Formatting attributes for one field of an AST node.
 
-  Passed as Field(format=FieldFormat(...)).  Roles let the formatter identify
+  Passed as Field(field_format=FieldFormat(...)).  Roles let the formatter identify
   which child plays which part in the node's layout via the field's typed
   getter, instead of matching on child node kinds.  A role field must be a
   node pointer (not a vector or scalar) with generated getters.
@@ -518,7 +518,7 @@ def Field(
     getter_is_override = False,
     visibility = Visibility.PRIVATE,
     serialize_default_value = True,
-    format = None,
+    field_format = None,
 ):
   """Make a field to put in a node class.
 
@@ -542,7 +542,7 @@ def Field(
     visibility: Indicates whether field is private or protected.
     serialize_default_value: If false, the serializer will skip this field when
       it has a default value.
-    format: Optional FieldFormat giving this field's role in the node's
+    field_format: Optional FieldFormat giving this field's role in the node's
       formatter layout. See the FieldFormat class docs.
 
   Returns:
@@ -642,7 +642,7 @@ def Field(
       'is_enum': is_enum,
       'enum_value': enum_value,
       'serialize_default_value': serialize_default_value,
-      'format': format,
+      'field_format': field_format,
   }
 
 
@@ -683,7 +683,7 @@ class TreeGenerator:
               custom_debug_string_comment = None,
               init_fields_order = None,
               gen_init_fields = None,
-              format = None):
+              node_format = None):
     """Add a node class to be generated.
 
     Args:
@@ -716,7 +716,7 @@ class TreeGenerator:
         generation of a default InitFields() method, in which case a custom
         InitFields() must be provide in extra_private_defs. Not applicable to
         non-final classes.
-      format: Optional NodeFormat giving this node's formatter layout
+      node_format: Optional NodeFormat giving this node's formatter layout
         attributes. Inherited by subclasses (attribute by attribute), so
         abstract classes may declare formatting for a whole category of
         nodes. See the NodeFormat class docs and parse_tree_format.h.
@@ -806,7 +806,7 @@ class TreeGenerator:
         'node_kind_oneof_value': GetNodeKindOneOfValue(name),
         'init_fields_order': init_fields_order,
         'javadoc': JavaDoc(comment, 2),
-        'format': format,
+        'node_format': node_format,
     }
 
     self.nodes.append(node_dict)
@@ -971,7 +971,7 @@ class TreeGenerator:
           'skip_fields': [],
       }
       for n in chain:
-        node_format = n['format']
+        node_format = n['node_format']
         if node_format is not None:
           if node_format.layout is not None:
             spec['layout'] = FORMAT_LAYOUT_TO_ENUM[node_format.layout]
@@ -986,7 +986,7 @@ class TreeGenerator:
           if node_format.info_region:
             spec['info_region'] = node_format.info_region
         for field in n['fields']:
-          field_format = field['format']
+          field_format = field['field_format']
           if field_format is None:
             continue
           assert field['is_node_ptr'], (
@@ -1118,7 +1118,7 @@ def main(argv):
   bool IsStatement() const final { return true; }
   bool IsSqlStatement() const override { return true; }
       """,
-      format=NodeFormat(info_region='stmt'),
+      node_format=NodeFormat(info_region='stmt'),
     )
 
   gen.AddNode(
@@ -1263,7 +1263,7 @@ def main(argv):
           ),
       ],
       use_custom_debug_string=True,
-      format=NodeFormat(layout='stack'),
+      node_format=NodeFormat(layout='stack'),
   )
 
   gen.AddNode(
@@ -1308,7 +1308,7 @@ def main(argv):
       This is the superclass of all ASTPipe* operators, representing one
       pipe operation in a chain.
       """,
-      format=NodeFormat(layout='pipe'),
+      node_format=NodeFormat(layout='pipe'),
   )
 
   gen.AddNode(
@@ -1849,7 +1849,7 @@ def main(argv):
       tag_id=5,
       parent='ASTQueryExpression',
       use_custom_debug_string=True,
-      format=NodeFormat(layout='keyword_stack'),
+      node_format=NodeFormat(layout='keyword_stack'),
       fields=[
           Field('hint', 'ASTHint', tag_id=2),
           Field('with_modifier', 'ASTWithModifier', tag_id=3),
@@ -1860,7 +1860,7 @@ def main(argv):
               'ASTSelectList',
               tag_id=6,
               field_loader=FieldLoaderMethod.REQUIRED,
-              format=FieldFormat(role='head'),
+              field_format=FieldFormat(role='head'),
           ),
           Field('from_clause', 'ASTFromClause', tag_id=7),
           Field('where_clause', 'ASTWhereClause', tag_id=8),
@@ -2236,7 +2236,7 @@ def main(argv):
               comment="""
                Exactly one of path_exp or unnest_expr must be non-NULL.
               """,
-              format=FieldFormat(region='table')),
+              field_format=FieldFormat(region='table')),
           Field(
               'unnest_expr',
               'ASTUnnestExpression',
@@ -2277,7 +2277,7 @@ def main(argv):
       fields=[],
       # Its source range spans the whole join it stands in for, so rendering
       # it would duplicate the join text.
-      format=NodeFormat(skip=True),
+      node_format=NodeFormat(skip=True),
   )
 
   gen.AddNode(
@@ -2324,7 +2324,7 @@ def main(argv):
       name='ASTAndExpr',
       tag_id=20,
       parent='ASTExpression',
-      format=NodeFormat(layout='wrap'),
+      node_format=NodeFormat(layout='wrap'),
       fields=[
           Field(
               'conjuncts',
@@ -2441,7 +2441,7 @@ def main(argv):
       name='ASTOrExpr',
       tag_id=24,
       parent='ASTExpression',
-      format=NodeFormat(layout='wrap'),
+      node_format=NodeFormat(layout='wrap'),
       fields=[
           Field(
               'disjuncts',
@@ -2754,7 +2754,7 @@ def main(argv):
       tag_id=34,
       parent='ASTTableExpression',
       use_custom_debug_string=True,
-      format=NodeFormat(layout='join'),
+      node_format=NodeFormat(layout='join'),
       comment="""
       Joins could introduce multiple scans and cannot have aliases.
       It can also represent a JOIN with a list of consecutive ON/USING
@@ -3260,7 +3260,7 @@ def main(argv):
       tag_id=45,
       parent='ASTExpression',
       use_custom_debug_string=True,
-      format=NodeFormat(layout='call', info_region='func'),
+      node_format=NodeFormat(layout='call', info_region='func'),
       fields=[
           Field(
               'function',
@@ -3820,7 +3820,7 @@ def main(argv):
       name='ASTCaseNoValueExpression',
       tag_id=60,
       parent='ASTExpression',
-      format=NodeFormat(
+      node_format=NodeFormat(
           layout='case',
           header_keyword='CASE',
           break_before_keywords=['WHEN', 'ELSE'],
@@ -3983,7 +3983,7 @@ def main(argv):
       comment="""
       A subquery in an expression.  (Not in the FROM clause.)
       """,
-      format=NodeFormat(layout='paren'),
+      node_format=NodeFormat(layout='paren'),
       fields=[
           Field(
               'hint',
@@ -3994,7 +3994,7 @@ def main(argv):
               'ASTQuery',
               tag_id=3,
               field_loader=FieldLoaderMethod.REQUIRED,
-              format=FieldFormat(role='paren_body')),
+              field_format=FieldFormat(role='paren_body')),
           Field(
               'modifier',
               SCALAR_MODIFIER,
@@ -4202,7 +4202,7 @@ def main(argv):
       tag_id=77,
       parent='ASTQueryExpression',
       use_custom_debug_string=True,
-      format=NodeFormat(layout='set_chain'),
+      node_format=NodeFormat(layout='set_chain'),
       fields=[
           Field(
               'metadata',
@@ -4210,7 +4210,7 @@ def main(argv):
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED,
               # The metadata list's source range overlaps the operands'.
-              format=FieldFormat(role='skip'),
+              field_format=FieldFormat(role='skip'),
           ),
           Field(
               'inputs',
@@ -4409,14 +4409,14 @@ def main(argv):
       extra_public_defs="""
   const ASTAlias* alias() const override { return alias_; }
       """,
-      format=NodeFormat(layout='paren'),
+      node_format=NodeFormat(layout='paren'),
       fields=[
           Field(
               'subquery',
               'ASTQuery',
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED,
-              format=FieldFormat(role='paren_body'),
+              field_format=FieldFormat(role='paren_body'),
           ),
           Field('alias', 'ASTAlias', tag_id=3, gen_setters_and_getters=False),
           Field('is_lateral', SCALAR_BOOL, tag_id=4),
@@ -4822,7 +4822,7 @@ def main(argv):
       Contains a list of statements.  Variable declarations allowed only at the
       start of the list, and only if variable_declarations_allowed() is true.
       """,
-      format=NodeFormat(layout='statements'),
+      node_format=NodeFormat(layout='statements'),
       fields=[
           Field(
               'statement_list',
