@@ -146,25 +146,72 @@ dedicated formatter would.
 ## Computing the layout: a Wadler/Oppen pretty-printer
 
 Piece-splitting says *what* to print; a small pretty-printer decides *where the
-line breaks go*. The builder first turns the tree into a **document** (`Doc`)
-made of layout primitives, then a `Renderer` walks that document to produce the
-final string. This is the classic Wadler/Oppen design: a construct is printed
-**flat** (on one line) if it fits in the remaining width, otherwise **broken**
-across indented lines.
+line breaks go*. This happens in two stages, both in `box_formatter.cc`:
 
-The `Doc` primitives:
+1. **Build** (`class Builder`) walks the AST top-down and turns it into a
+   **document** (`Doc`) — an intermediate tree of layout primitives that
+   encodes *possible* line breaks but no actual columns yet.
+2. **Render** (`class Renderer`) walks that `Doc` once and produces the final
+   string, deciding at each optional break whether to keep things flat or break.
 
-| Primitive | Meaning |
-|---|---|
-| `Text(html, width)` | Literal output carrying its **visible** width. HTML tags are emitted as `Tag(...)` = zero width, so decoration never affects the fit math. |
-| `Line(flat=" ")` | A break point: prints `flat` (usually a space) when its group is flat, or a newline + indent when broken. |
-| `HardLine()` | Always a newline, and **forces every enclosing group to break**. |
-| `Nest(n, doc)` | Adds `n` columns to the indent used by breaks inside `doc`. |
-| `Group(doc)` | Prints `doc` flat if it fits, else broken. The unit of the flat/break decision. |
-| `Concat`, `Nil` | Sequence; nothing. |
-| `ColorPush(cls)` / `ColorPop()` | Open/close a colored box region (below). |
+This is the classic Wadler/Oppen design: a construct is printed **flat** (on one
+line) if it fits in the remaining width, otherwise **broken** across indented
+lines.
 
-The fit decision, made when the renderer reaches a `Group`:
+### From AST nodes to a `Doc`
+
+The `Doc` is built by recursion that mirrors the AST. The heart of it is
+`Builder::Build(node)`, called once per AST node:
+
+- it splits the node into pieces (`Pieces`, above),
+- looks up the node's layout (`GetASTNodeFormat`, or inference),
+- dispatches to the matching `Build<Layout>` helper (`BuildSelect`,
+  `BuildParen`, `BuildJoin`, …), which assembles a `Doc` by calling the
+  primitive constructors (`Text`, `Line`, `Group`, `Nest`, `Concat`) and, for
+  each child piece, **calling `Build(child)` again** — so the child's `Doc`
+  subtree is spliced in where it belongs;
+- finally wraps the result in the node's `<div class="ast ast-Kind">` tags (and
+  any colored region).
+
+So there is **one `Doc` subtree per AST node**, and because `Build` recurses,
+those subtrees nest to form a single `Doc` for the whole statement. Gap text
+becomes `Text`/`Esc` leaves; the whitespace *between* pieces becomes `Line` or
+`HardLine` (a possible or forced break); a construct whose parts should stay
+together-or-all-break is wrapped in a `Group`. Nothing about columns or fitting
+is decided during this Build stage — that is the renderer's job.
+
+### The `Doc` data structure
+
+A `Doc` is an immutable tree node (`std::shared_ptr<const Doc>`, aliased
+`DocPtr`). Every `Doc` has a `Kind` tag plus a few fields, only some of which
+apply to each kind, and a `children` vector for the composite kinds:
+
+```
+Doc {
+  Kind kind;                     // which primitive this is
+  std::string html;  int width;  // kText: the output bytes + visible width
+  std::string flat_html;         // kLine: what to print when flat (usually " ")
+  bool hard;                     // kLine: is this a HardLine?
+  int nest;                      // kNest: how many columns to add
+  std::vector<DocPtr> children;  // kConcat / kGroup / kNest: sub-docs
+}
+```
+
+The leaf kinds carry data and have no children; the composite kinds carry
+children and no data:
+
+| Kind | Role | Children? |
+|---|---|---|
+| `kNil` | The empty document — renders nothing. Used as a "no-op" return (e.g. an empty gap) so callers don't special-case null. | no |
+| `kText` | Literal output carrying its **visible** width. HTML tags are emitted via `Tag(...)` as `kText` with width 0, so decoration never affects the fit math; visible SQL text uses `Esc(...)` (escaped, real width). | no |
+| `kLine` | An **optional** break point: prints `flat_html` (usually a space) when its enclosing group is flat, or a newline + indent when broken. | no |
+| `kLine` with `hard=true` | A **forced** break (`HardLine`): always a newline, and forces every enclosing group to break. | no |
+| `kNest` | Adds `nest` columns to the indent used by breaks inside its child. | one |
+| `kGroup` | The flat-or-broken decision unit: renders its child flat if it fits, else broken. | one |
+| `kConcat` | Sequence: render each child in order. This is the glue that holds a builder's `{Text, Line, child-Doc, …}` list together. | many |
+| `kColorPush(cls)` / `kColorPop` | Open / close a colored box region (see below). Emitted as a bracketing pair inside a `kConcat` by `Region(cls, inner)`. | no |
+
+The fit decision, made when the renderer reaches a `kGroup`:
 
 ```
 group is flat  ⇔  the group contains no HardLine
@@ -199,7 +246,8 @@ expanded, never half-broken.
 
 The renderer tracks the absolute output column (`col_`). When a break emits
 indentation it does **not** use the absolute indent directly: each colored
-region (below) is a CSS *inline-block box* that already provides its own left
+region (the `rect` boxes described in *The HTML / CSS model*, below) is a CSS
+*inline-block box* that already provides its own left
 offset, so the renderer indents **relative to the innermost open region's left
 edge**. It keeps a stack of region base columns for exactly this. This is an
 implementation detail of the coloring, invisible in the plain-text layout but
@@ -218,22 +266,56 @@ The rendered string is text plus two families of `<div>`:
   (in `tools/execute_query/web/style.css`), each shrink-wraps to its widest
   line, so nested regions render as visibly nested rectangles.
 
-The region classes carry the color scheme:
+### Where the colors come from
 
-| Class | What it boxes |
-|---|---|
-| `q-whole` | A whole standard (non-pipe) query — one solid grey block. |
-| `seg-<family>-a` / `-b` | Alternating tints for each segment of a pipe query (the leading `FROM` query and each `\|>` operator). |
-| `subq-blue` / `subq-green` | A subquery **body**, alternating by nesting depth so each level contrasts with its parent. The parentheses stay the parent's color. |
-| `table` | A table reference's name path, so table names are individually highlightable. |
-| `func` / `stmt` | A clickable info region around a function call / statement, present only when the annotator supplies info for it. |
+The colors are a collaboration between two layers, and it helps to be precise
+about which does what:
 
-Hidden `<div class="node-info">…</div>` carriers hold the annotator's HTML
-(zero layout width, hidden by CSS); the viewer's JavaScript reads them to build
-the click-to-open info panel. The `BoxAnnotator annotate` callback is how the
-analyzer's resolver info reaches the formatter without the parser layer
-depending on analyzer types — the caller (which has resolved the query) hands
-back ready-made HTML per node.
+- **`box_formatter.cc` chooses a *class name* per region** — it never emits a
+  color value. When a builder wants a colored box it calls
+  `Region("<cls>", inner)` (or `RegionAnnotated`), which brackets `inner` with
+  `kColorPush("<cls>")` / `kColorPop`; the renderer turns those into
+  `<div class="rect <cls>">…</div>`. The class name encodes the region's *role*
+  and, where relevant, its nesting depth — the small bits of logic that pick it
+  are `SubqueryColor(depth)` (alternates `subq-blue` / `subq-green`), the
+  pipe-segment `family` + `-a`/`-b` alternation in `BuildVertical`, and the
+  fixed `q-whole` / `table` / `func` / `stmt` names at their call sites.
+- **`style.css` defines the actual colors** — the `.rect.subq-blue`,
+  `.rect.seg-grey-a`, etc. rules in `tools/execute_query/web/style.css` are
+  where each class becomes a real `background-color`. Changing the palette is a
+  CSS edit; the formatter is unaware of it.
+
+So "colored by depth" means: the builder counts subquery nesting depth and picks
+`subq-blue` vs `subq-green`; CSS maps those two names to two contrasting
+backgrounds. The class names the formatter can emit are:
+
+| Class | What it boxes | Chosen by |
+|---|---|---|
+| `q-whole` | A whole standard (non-pipe) query — one solid grey block. | `BuildVertical` (top-level, non-pipe query) |
+| `seg-<family>-a` / `-b` | Alternating tints for each segment of a pipe query (the leading `FROM` query and each `\|>` operator); `<family>` is grey/blue/green by subquery depth. | `BuildVertical` (pipe query) |
+| `subq-blue` / `subq-green` | A subquery **body**, alternating by nesting depth so each level contrasts with its parent. The parentheses stay the parent's color. | `SubqueryColor(depth)` in `BuildParen` / `BuildParenQuery` |
+| `table` | A table reference's name path, so table names are individually highlightable. | `Build` (via the `region='table'` field attribute) |
+| `func` / `stmt` | A clickable info region around a function call / statement, present only when the annotator supplies info for it. | `BuildInner` (via the `info_region` node attribute) |
+
+### The annotator and the info panel
+
+Two of those regions (`func`, `stmt`) exist only to carry resolver information,
+and that information comes from the **`BoxAnnotator annotate`** callback passed
+to `SqlToBoxHtml`. It is how the analyzer's resolved-query info reaches the
+formatter without the parser layer depending on analyzer types: the caller (the
+query viewer in `execute_query_tool.cc`, which has already resolved the query)
+supplies a function that returns ready-made HTML for a given `ASTNode`, or `""`
+for nodes it has nothing to say about. When the annotator returns non-empty HTML
+for a node, the builder wraps that node in its info region and tucks the HTML
+into a hidden `<div class="node-info">…</div>` carrier (zero layout width, hidden
+by CSS). The viewer's JavaScript reads those carriers to build the
+click-to-open info panel. In parse-only mode there is no annotator, so no info
+regions or carriers are emitted.
+
+One post-processing pass, `CoalesceBlankLines`, cleans up blank lines that
+contain only tags — an artifact of a comment forcing a break that the
+surrounding layout also breaks — by carrying those tags onto the next line so
+the `<div>` nesting stays balanced.
 
 One post-processing pass, `CoalesceBlankLines`, cleans up blank lines that
 contain only tags — an artifact of a comment forcing a break that the
@@ -244,7 +326,8 @@ the `<div>` nesting stays balanced.
 
 ## The layout catalog
 
-Which layout a node uses is **declared on the AST**, not hard-coded here: node
+Which layout a node uses is **declared on the AST**, not hard-coded in
+`box_formatter.cc`: node
 and field `format` attributes in `gen_parse_tree.py` are resolved through the
 class hierarchy and emitted to a lookup table
 (`parse_tree_format_generated.cc`), which the formatter consults via
