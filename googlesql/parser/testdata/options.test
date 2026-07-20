@@ -1,10 +1,39 @@
 # OPTIONS related tests, for different locations
 #
-# The OPTIONS clause includes a parenthesized list of comma-separated
+# The OPTIONS clause includes a parenthesized list of comma-separated entries.
+# These can be 'FROM <expression>' entries (which must appear first) or
 # '<identifier> = <expression>' entries.
 #
 # We use the MODULE statement for these tests since it is the simplest
 # statement type.
+
+MODULE foo OPTIONS(FROM bar);
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:20]
+MODULE foo OPTIONS(FROM bar);
+                   ^
+==
+
+MODULE foo OPTIONS(FROM bar, a=1);
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:20]
+MODULE foo OPTIONS(FROM bar, a=1);
+                   ^
+==
+
+MODULE foo OPTIONS(a=1, FROM bar);
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:25]
+MODULE foo OPTIONS(a=1, FROM bar);
+                        ^
+==
+
+MODULE foo OPTIONS(FROM foo, a=1, FROM bar);
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:20]
+MODULE foo OPTIONS(FROM foo, a=1, FROM bar);
+                   ^
+==
 
 # An empty options list is allowed.
 MODULE foo OPTIONS();
@@ -559,3 +588,61 @@ DefineTableStatement [0-22] [DEFINE TABLE foo (a=1)]
       IntLiteral(1) [20-21] [1]
 --
 DEFINE TABLE foo(a = 1)
+==
+
+MODULE foo OPTIONS (FROM struct1, a = "a");
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:21]
+MODULE foo OPTIONS (FROM struct1, a = "a");
+                    ^
+==
+
+MODULE foo OPTIONS (FROM struct1, FROM struct2, a = "a");
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:21]
+MODULE foo OPTIONS (FROM struct1, FROM struct2, a = "a");
+                    ^
+==
+
+[language_features=NONE,+BRACED_PROTO_CONSTRUCTORS]
+MODULE foo OPTIONS (FROM {a: "a"}, a = "a");
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:21]
+MODULE foo OPTIONS (FROM {a: "a"}, a = "a");
+                    ^
+==
+
+[language_features=NONE,+BRACED_PROTO_CONSTRUCTORS]
+MODULE foo OPTIONS (FROM struct{a: "a"}, a = "a");
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:21]
+MODULE foo OPTIONS (FROM struct{a: "a"}, a = "a");
+                    ^
+==
+
+MODULE foo OPTIONS (FROM Fn(1), a = "a");
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:21]
+MODULE foo OPTIONS (FROM Fn(1), a = "a");
+                    ^
+==
+
+MODULE foo OPTIONS (FROM @var, a = "a");
+--
+ERROR: Syntax error: OPTIONS (FROM <struct_expression>) is not supported [at 1:21]
+MODULE foo OPTIONS (FROM @var, a = "a");
+                    ^
+==
+
+[language_features=MAXIMUM,+OPTIONS_FROM_STRUCT]
+MODULE foo OPTIONS(FROM bar);
+--
+ModuleStatement [0-28] [MODULE foo OPTIONS(FROM bar)]
+  PathExpression [7-10] [foo]
+    Identifier(foo) [7-10] [foo]
+  OptionsList [18-28] [(FROM bar)]
+    OptionsEntry [19-27] [FROM bar]
+      PathExpression [24-27] [bar]
+        Identifier(bar) [24-27] [bar]
+--
+MODULE foo OPTIONS(FROM bar)

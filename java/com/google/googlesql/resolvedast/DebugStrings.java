@@ -25,6 +25,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.protobuf.Descriptors.FieldDescriptor;
 import com.google.protobuf.Descriptors.OneofDescriptor;
 import com.google.protobuf.ProtocolMessageEnum;
+import com.google.googlesql.AnnotationMap;
 import com.google.googlesql.Column;
 import com.google.googlesql.Connection;
 import com.google.googlesql.Constant;
@@ -56,6 +57,7 @@ import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedConstant;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedDeferredComputedColumn;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedExtendedCastElement;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedFunctionCallBase;
+import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedFunctionRef;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedMakeProtoField;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedOption;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedOutputColumn;
@@ -63,6 +65,7 @@ import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedStaticDescribeScan
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedSystemVariable;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedWindowFrame;
 import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedWindowFrameExpr;
+import com.google.googlesql.resolvedast.ResolvedNodes.ResolvedWithinBoundExpr;
 import com.google.googlesql.resolvedast.ResolvedOptionEnums.AssignmentOp;
 import com.google.googlesql.resolvedast.ResolvedSetOperationScanEnums.SetOperationColumnMatchMode;
 import com.google.googlesql.resolvedast.ResolvedSetOperationScanEnums.SetOperationColumnPropagationMode;
@@ -130,12 +133,11 @@ class DebugStrings {
   }
 
   static boolean isDefaultValue(AnnotationMap annotationMap) {
-    return annotationMap == null;
+    return annotationMap == null || annotationMap.isEmpty();
   }
 
   static boolean isDefaultValue(ResolvedCollation resolvedCollation) {
-    // TODO: implement ResolvedCollation in Java.
-    return resolvedCollation == null || resolvedCollation.debugString().isEmpty();
+    return resolvedCollation == null || resolvedCollation.isEmpty();
   }
 
   static boolean isDefaultValue(TypeModifiers typeModifiers) {
@@ -375,7 +377,9 @@ class DebugStrings {
   }
 
   static String toStringCommaSeparated(ImmutableList<ResolvedCollation> resolvedCollations) {
-    return resolvedCollations.stream().map(ResolvedCollation::debugString).collect(joining(","));
+    return resolvedCollations.stream()
+        .map(ResolvedCollation::debugString)
+        .collect(joining(",", "[", "]"));
   }
 
   static String toStringCommaSeparatedForColumn(ImmutableList<Column> columns) {
@@ -435,6 +439,11 @@ class DebugStrings {
     fields.clear();
     Preconditions.checkArgument(
         node.getArgumentList().isEmpty() || node.getGenericArgumentList().isEmpty());
+    if (!isDefaultValue(node.getTypeAnnotationMap())) {
+      fields.add(
+          new DebugStringField(
+              "type_annotation_map", DebugStrings.toStringImpl(node.getTypeAnnotationMap())));
+    }
     if (!node.getArgumentList().isEmpty()) {
       // Use empty name to avoid printing "arguments=" with extra indentation.
       fields.add(new DebugStringField(/*name=*/ "", node.getArgumentList()));
@@ -446,6 +455,11 @@ class DebugStrings {
     if (!node.getHintList().isEmpty()) {
       fields.add(new DebugStringField("hint_list", node.getHintList()));
     }
+    if (!node.getCollationList().isEmpty()) {
+      fields.add(
+          new DebugStringField(
+              "collation_list", DebugStrings.toStringCommaSeparated(node.getCollationList())));
+    }
   }
 
   /**
@@ -453,9 +467,14 @@ class DebugStrings {
    * child.
    */
   static void collectDebugStringFields(ResolvedCast node, List<DebugStringField> fields) {
-    Preconditions.checkArgument(fields.size() <= 1);
+    Preconditions.checkArgument(fields.size() <= 2);
 
     fields.clear();
+    if (!isDefaultValue(node.getTypeAnnotationMap())) {
+      fields.add(
+          new DebugStringField(
+              "type_annotation_map", DebugStrings.toStringImpl(node.getTypeAnnotationMap())));
+    }
     if (node.getExpr() != null) {
       // Use empty name to avoid printing "arguments=" with extra indentation.
       fields.add(new DebugStringField("", node.getExpr()));
@@ -518,6 +537,18 @@ class DebugStrings {
       // Use empty name to avoid printing "expression=" with extra indentation.
       fields.add(new DebugStringField("", node.getExpression()));
     }
+  }
+
+  static void collectDebugStringFields(
+      ResolvedWithinBoundExpr node, List<DebugStringField> fields) {
+    if (node.getExpr() != null) {
+      // Use empty name to avoid printing "expr=" with extra indentation.
+      fields.add(new DebugStringField("", node.getExpr()));
+    }
+  }
+
+  static void collectDebugStringFields(ResolvedFunctionRef node, List<DebugStringField> fields) {
+    // No fields to add.
   }
 
   static void collectDebugStringFields(ResolvedSystemVariable node, List<DebugStringField> fields) {
@@ -630,10 +661,17 @@ class DebugStrings {
             ? ""
             : GoogleSQLStrings.toIdentifierLiteral(node.getQualifier()) + ".";
     String nameWithPrefix = prefix + GoogleSQLStrings.toIdentifierLiteral(node.getName());
-    if (isDefaultValue(node.getAssignmentOp())) {
-      return node.getValue().getNameForDebugStringWithNameFormat(nameWithPrefix);
+    switch (node.getAssignmentOp()) {
+      case DEFAULT_ASSIGN:
+        return node.getValue().getNameForDebugStringWithNameFormat(nameWithPrefix);
+      case FROM:
+        return "FROM";
+      case ADD_ASSIGN:
+        return nameWithPrefix + "+=";
+      case SUB_ASSIGN:
+        return nameWithPrefix + "-=";
     }
-    return nameWithPrefix + (node.getAssignmentOp() == AssignmentOp.ADD_ASSIGN ? "+=" : "-=");
+    throw new IllegalArgumentException("Unexpected AssignmentOp: " + node.getAssignmentOp());
   }
 
   static String getNameForDebugString(ResolvedWindowFrame node) {
@@ -647,7 +685,22 @@ class DebugStrings {
         + ")";
   }
 
+  static String getNameForDebugString(ResolvedWithinBoundExpr node) {
+    return node.nodeKindString()
+        + "(within_bound_kind="
+        + node.getBoundKind().name().replace('_', ' ')
+        + ")";
+  }
+
   static String getNameForDebugString(ResolvedSystemVariable node) {
     return node.nodeKindString();
+  }
+
+  static String getNameForDebugString(ResolvedFunctionRef node) {
+    return "FunctionRef(function="
+        + (node.getFunction() != null ? node.getFunction().toString() : "<unknown>")
+        + ", signature="
+        + node.getSignature().toString()
+        + ")";
   }
 }

@@ -69,6 +69,10 @@ class AnnotationMap {
   AnnotationMap& operator=(const AnnotationMap&) = delete;
   virtual ~AnnotationMap() = default;
 
+  static bool IsNullOrEmpty(const AnnotationMap* annotation_map) {
+    return annotation_map == nullptr || annotation_map->Empty();
+  }
+
   // Sets annotation value for given AnnotationSpec ID, overwriting existing
   // value if it exists.
   // Returns a self reference for caller to be able to chain SetAnnotation()
@@ -85,7 +89,7 @@ class AnnotationMap {
   // calls.
   template <class T>
   AnnotationMap& SetAnnotation(const SimpleValue& value) {
-    static_assert(std::is_base_of<AnnotationSpec, T>::value,
+    static_assert(std::is_base_of_v<AnnotationSpec, T>,
                   "Must be a subclass of AnnotationSpec");
     return SetAnnotation(T::GetId(), value);
   }
@@ -100,7 +104,7 @@ class AnnotationMap {
   // Clears annotation value for the given AnnotationSpec ID if it exists.
   template <class T>
   void UnsetAnnotation() {
-    static_assert(std::is_base_of<AnnotationSpec, T>::value,
+    static_assert(std::is_base_of_v<AnnotationSpec, T>,
                   "Must be a subclass of AnnotationSpec");
     return UnsetAnnotation(T::GetId());
   }
@@ -109,7 +113,7 @@ class AnnotationMap {
   // all levels.
   template <class T>
   void UnsetAnnotationRecursively() {
-    static_assert(std::is_base_of<AnnotationSpec, T>::value,
+    static_assert(std::is_base_of_v<AnnotationSpec, T>,
                   "Must be a subclass of AnnotationSpec");
     return UnsetAnnotationRecursively(T::GetId());
   }
@@ -204,7 +208,7 @@ class AnnotationMap {
   // for the given AnnotationSpec type.
   template <class T>
   bool Has() const {
-    static_assert(std::is_base_of<AnnotationSpec, T>::value,
+    static_assert(std::is_base_of_v<AnnotationSpec, T>,
                   "Must be a subclass of AnnotationSpec");
     return !EmptyInternal(T::GetId());
   }
@@ -322,9 +326,16 @@ class StructAnnotationMap : public AnnotationMap {
   StructAnnotationMap* AsStructMap() override { return this; }
   const StructAnnotationMap* AsStructMap() const override { return this; }
 
+  // Returns the child (field) annotation map at index `i`.
+  // Returns an error if `i` is out of bounds.
+  absl::StatusOr<const AnnotationMap*> child(int i) const;
+  // Returns the child (field) annotation map at index `i`.
+  // Returns an error if `i` is out of bounds.
+  absl::StatusOr<AnnotationMap*> mutable_child(int i);
+
   int num_fields() const { return static_cast<int>(fields_.size()); }
-  const AnnotationMap* field(int i) const { return fields_[i].get(); }
-  AnnotationMap* mutable_field(int i) { return fields_[i].get(); }
+  const AnnotationMap* field(int i) const;
+  AnnotationMap* mutable_field(int i);
 
   // Clones <from> and overwrites what's in the struct field <i>.
   // If <from> is nullptr, the struct field is set to NULL.
@@ -389,6 +400,7 @@ class ResolvedColumnRef;
 class ResolvedFunctionCallBase;
 class ResolvedGetStructField;
 class ResolvedMakeStruct;
+class ResolvedMakeMap;
 class ResolvedSubqueryExpr;
 class ResolvedSetOperationScan;
 class ResolvedRecursiveScan;
@@ -438,6 +450,11 @@ class AnnotationSpec {
       const ResolvedMakeStruct& make_struct,
       StructAnnotationMap* result_annotation_map) = 0;
 
+  // Propagates annotations from `MakeMap` to `result_annotation_map`.
+  virtual absl::Status CheckAndPropagateForMakeMap(
+      const ResolvedMakeMap& make_map,
+      StructAnnotationMap* result_annotation_map) = 0;
+
   // Propagates annotation from the subquery to result_annotation_map>.
   virtual absl::Status CheckAndPropagateForSubqueryExpr(
       const ResolvedSubqueryExpr& subquery_expr,
@@ -471,6 +488,8 @@ enum class AnnotationKind {
   kSampleAnnotation = 2,
   // Annotation ID for googlesql::TimestampPrecisionAnnotation.
   kTimestampPrecision = 3,
+  // Annotation ID for googlesql::IsVersionedAnnotation.
+  kIsVersioned = 4,
   // Annotation ID up to kMaxBuiltinAnnotationKind are reserved for googlesql
   // built-in annotations.
   kMaxBuiltinAnnotationKind = 10000,

@@ -75,7 +75,6 @@ class MapType : public ContainerType {
                                  /*use_external_float32=*/false);
   }
 
-  std::string CapitalizedName() const override;
 
   bool SupportsOrdering(const LanguageOptions& language_options,
                         std::string* type_description) const override;
@@ -108,7 +107,7 @@ class MapType : public ContainerType {
   }
 
  private:
-  MapType(const TypeFactoryBase* factory, const Type* key_type,
+  MapType(const TypeFactoryBase& factory, const Type* key_type,
           const Type* value_type);
   ~MapType() override;
 
@@ -119,6 +118,9 @@ class MapType : public ContainerType {
       const LanguageOptions& language_options,
       const Type** no_partitioning_type) const override;
 
+  bool SupportsReturningImpl(const LanguageOptions& language_options,
+                             const Type** no_returning_type) const override;
+
   absl::Status SerializeToProtoAndDistinctFileDescriptorsImpl(
       const BuildFileDescriptorSetMapOptions& options, TypeProto* type_proto,
       FileDescriptorSetMap* file_descriptor_set_map) const override;
@@ -126,6 +128,8 @@ class MapType : public ContainerType {
   void CopyValueContent(const ValueContent& from,
                         ValueContent* to) const override;
   void ClearValueContent(const ValueContent& value) const override;
+  uint64_t GetValueContentExternallyAllocatedByteSize(
+      const ValueContent& value) const override;
   absl::HashState HashTypeParameter(absl::HashState state) const override;
   absl::HashState HashValueContent(const ValueContent& value,
                                    absl::HashState state) const override;

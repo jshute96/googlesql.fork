@@ -17,27 +17,31 @@
 #include "googlesql/public/types/type_parameters.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
-#include "googlesql/base/logging.h"
-#include "google/protobuf/util/message_differencer.h"
 #include "googlesql/public/functions/rounding_mode.pb.h"
 #include "googlesql/public/simple_value.pb.h"
 #include "googlesql/public/type_parameters.pb.h"
+#include "googlesql/public/types/annotation.h"
 #include "googlesql/public/types/array_type.h"
+#include "googlesql/public/types/declarative_type.h"
 #include "googlesql/public/types/range_type.h"
 #include "googlesql/public/types/simple_value.h"
 #include "googlesql/public/types/struct_type.h"
 #include "googlesql/public/types/type.h"
+#include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/substitute.h"
+#include "google/protobuf/util/message_differencer.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -66,6 +70,11 @@ std::string TimestampTypeParametersDebugString(
   return absl::Substitute("(precision=$0)", parameters.precision());
 }
 
+std::string VectorTypeParametersDebugString(
+    const VectorTypeParametersProto& parameters) {
+  return absl::Substitute("(length=$0)", parameters.length());
+}
+
 std::string ChildTypeParametersDebugString(
     const std::vector<TypeParameters>& child_list) {
   return absl::StrCat(
@@ -89,6 +98,10 @@ std::string TypeParameters::DebugString() const {
   if (IsTimestampTypeParameters()) {
     return TimestampTypeParametersDebugString(timestamp_type_parameters());
   }
+  if (const auto* vector_params =
+          std::get_if<VectorTypeParametersProto>(&type_parameters_holder_)) {
+    return VectorTypeParametersDebugString(*vector_params);
+  }
 
   // Extended type may has child_list.
   std::string debug_string;
@@ -107,6 +120,44 @@ std::string TypeParameters::DebugString() const {
   return "null";
 }
 
+std::string TypeParameters::ToParenthesizedString() const {
+  if (IsEmpty()) {
+    return "";
+  }
+  if (IsStringTypeParameters()) {
+    if (string_type_parameters().has_is_max_length() &&
+        string_type_parameters().is_max_length()) {
+      return "(MAX)";
+    }
+    return absl::StrCat("(", string_type_parameters().max_length(), ")");
+  }
+  if (IsNumericTypeParameters()) {
+    std::string precision_str;
+    if (numeric_type_parameters().has_is_max_precision() &&
+        numeric_type_parameters().is_max_precision()) {
+      precision_str = "MAX";
+    } else {
+      precision_str = absl::StrCat(numeric_type_parameters().precision());
+    }
+    if (numeric_type_parameters().has_scale()) {
+      return absl::StrCat("(", precision_str, ", ",
+                          numeric_type_parameters().scale(), ")");
+    }
+    return absl::StrCat("(", precision_str, ")");
+  }
+  if (IsTimestampTypeParameters()) {
+    return absl::StrCat("(", timestamp_type_parameters().precision(), ")");
+  }
+  if (IsExtendedTypeParameters()) {
+    return extended_type_parameters().DebugString();
+  }
+  if (const auto* vector_params =
+          std::get_if<VectorTypeParametersProto>(&type_parameters_holder_)) {
+    return absl::StrCat("(", vector_params->length(), ")");
+  }
+  return "";
+}
+
 TypeParameters::TypeParameters(
     const StringTypeParametersProto& string_parameters)
     : type_parameters_holder_(string_parameters) {}
@@ -117,6 +168,9 @@ TypeParameters::TypeParameters(
     const TimestampTypeParametersProto& timestamp_parameters)
     : type_parameters_holder_(timestamp_parameters) {}
 TypeParameters::TypeParameters(
+    const VectorTypeParametersProto& vector_parameters)
+    : type_parameters_holder_(vector_parameters) {}
+TypeParameters::TypeParameters(
     const ExtendedTypeParameters& extended_parameters,
     std::vector<TypeParameters> child_list)
     : type_parameters_holder_(extended_parameters),
@@ -124,6 +178,11 @@ TypeParameters::TypeParameters(
 TypeParameters::TypeParameters(std::vector<TypeParameters> child_list)
     : child_list_(std::move(child_list)) {}
 TypeParameters::TypeParameters() = default;
+
+const TypeParameters& TypeParameters::EmptyTypeParameters() {
+  static const TypeParameters* kEmptyTypeParameters = new TypeParameters();
+  return *kEmptyTypeParameters;
+}
 
 absl::StatusOr<TypeParameters> TypeParameters::MakeStringTypeParameters(
     const StringTypeParametersProto& string_type_parameters) {
@@ -139,6 +198,11 @@ absl::StatusOr<TypeParameters> TypeParameters::MakeTimestampTypeParameters(
     const TimestampTypeParametersProto& timestamp_type_parameters) {
   GOOGLESQL_RETURN_IF_ERROR(ValidateTimestampTypeParameters(timestamp_type_parameters));
   return TypeParameters(timestamp_type_parameters);
+}
+absl::StatusOr<TypeParameters> TypeParameters::MakeVectorTypeParameters(
+    const VectorTypeParametersProto& vector_type_parameters) {
+  GOOGLESQL_RETURN_IF_ERROR(ValidateVectorTypeParameters(vector_type_parameters));
+  return TypeParameters(vector_type_parameters);
 }
 
 TypeParameters TypeParameters::MakeExtendedTypeParameters(
@@ -195,6 +259,15 @@ absl::Status TypeParameters::ValidateNumericTypeParameters(
   return absl::OkStatus();
 }
 
+absl::Status TypeParameters::ValidateVectorTypeParameters(
+    const VectorTypeParametersProto& vector_type_parameters) {
+  if (vector_type_parameters.has_length()) {
+    GOOGLESQL_RET_CHECK_GT(vector_type_parameters.length(), 0)
+        << "VECTOR length must be greater than 0";
+  }
+  return absl::OkStatus();
+}
+
 void TypeParameters::set_child_list(std::vector<TypeParameters> child_list) {
   ABSL_DCHECK(IsEmpty());
   child_list_ = std::move(child_list);
@@ -212,6 +285,11 @@ absl::Status TypeParameters::Serialize(TypeParametersProto* proto) const {
   }
   if (IsTimestampTypeParameters()) {
     *proto->mutable_timestamp_type_parameters() = timestamp_type_parameters();
+    return absl::OkStatus();
+  }
+  if (const auto* vector_params =
+          std::get_if<VectorTypeParametersProto>(&type_parameters_holder_)) {
+    *proto->mutable_vector_type_parameters() = *vector_params;
     return absl::OkStatus();
   }
   if (IsExtendedTypeParameters()) {
@@ -245,6 +323,10 @@ absl::StatusOr<TypeParameters> TypeParameters::Deserialize(
     return TypeParameters::MakeTimestampTypeParameters(
         proto.timestamp_type_parameters());
   }
+  if (proto.has_vector_type_parameters()) {
+    return TypeParameters::MakeVectorTypeParameters(
+        proto.vector_type_parameters());
+  }
   // STRUCT, ARRAY, RANGE, or ExtendedType can have empty child_list if
   // sub-fields don't have any type parameters.
   std::vector<TypeParameters> child_list;
@@ -263,7 +345,40 @@ absl::StatusOr<TypeParameters> TypeParameters::Deserialize(
   return TypeParameters::MakeTypeParametersWithChildList(child_list);
 }
 
-bool TypeParameters::Equals(const TypeParameters& that) const {
+// Returns true if the type parameters is empty, or only contains
+// TimestampTypeParameters with the default precision (if provided - Otherwise,
+// this is just the same as IsEmpty()).
+// Useful when equating vs another empty TypeParameters.
+static bool IsEffectivelyEmpty(
+    const TypeParameters& type_parameters,
+    std::optional<int64_t> default_timestamp_precision) {
+  if (type_parameters.IsEmpty()) {
+    return true;
+  }
+  if (type_parameters.IsTimestampTypeParameters()) {
+    return default_timestamp_precision.has_value() &&
+           type_parameters.timestamp_type_parameters().precision() ==
+               *default_timestamp_precision;
+  }
+
+  for (const auto& child : type_parameters.child_list()) {
+    if (!IsEffectivelyEmpty(child, default_timestamp_precision)) {
+      return false;
+    }
+  }
+  return type_parameters.IsTopLevelEmpty();
+}
+
+bool TypeParameters::Equals(
+    const TypeParameters& that,
+    std::optional<int64_t> default_timestamp_precision) const {
+  if (IsEmpty()) {
+    return IsEffectivelyEmpty(that, default_timestamp_precision);
+  }
+  if (that.IsEmpty()) {
+    return IsEffectivelyEmpty(*this, default_timestamp_precision);
+  }
+
   if (IsStringTypeParameters()) {
     return that.IsStringTypeParameters() &&
            google::protobuf::util::MessageDifferencer::Equals(
@@ -274,21 +389,75 @@ bool TypeParameters::Equals(const TypeParameters& that) const {
            google::protobuf::util::MessageDifferencer::Equals(
                numeric_type_parameters(), that.numeric_type_parameters());
   }
+
+  if (IsTimestampTypeParameters()) {
+    return that.IsTimestampTypeParameters() &&
+           google::protobuf::util::MessageDifferencer::Equals(
+               timestamp_type_parameters(), that.timestamp_type_parameters());
+  }
+
+  if (const auto* vector_params =
+          std::get_if<VectorTypeParametersProto>(&type_parameters_holder_)) {
+    const auto* that_vector_params =
+        std::get_if<VectorTypeParametersProto>(&that.type_parameters_holder_);
+    return that_vector_params != nullptr &&
+           google::protobuf::util::MessageDifferencer::Equals(*vector_params,
+                                                    *that_vector_params);
+  }
+
   if (IsExtendedTypeParameters()) {
     if (!that.IsExtendedTypeParameters() ||
         !extended_type_parameters().Equals(that.extended_type_parameters())) {
       return false;
     }
   }
+
+  // Both are composite and non-empty.
   if (num_children() != that.num_children()) {
     return false;
   }
   for (int i = 0; i < num_children(); ++i) {
-    if (!child(i).Equals(that.child(i))) {
+    if (!child(i).Equals(that.child(i), default_timestamp_precision)) {
       return false;
     }
   }
+
   return true;
+}
+
+absl::StatusOr<bool> TypeParameters::EqualsAnnotations(
+    const AnnotationMap* annotation_map,
+    int64_t default_timestamp_precision) const {
+  GOOGLESQL_ASSIGN_OR_RETURN(TypeParameters that, MakeTypeParameters(annotation_map));
+  return Equals(that, default_timestamp_precision);
+}
+
+absl::StatusOr<TypeParameters> TypeParameters::MakeTypeParameters(
+    const AnnotationMap* annotation_map) {
+  if (annotation_map == nullptr) {
+    return TypeParameters();
+  }
+
+  if (annotation_map->IsStructMap()) {
+    const StructAnnotationMap* struct_map = annotation_map->AsStructMap();
+    std::vector<TypeParameters> children;
+    bool has_non_empty_child = false;
+    for (int i = 0; i < struct_map->num_fields(); ++i) {
+      GOOGLESQL_ASSIGN_OR_RETURN(TypeParameters child,
+                       MakeTypeParameters(struct_map->field(i)));
+      if (!child.IsEmpty()) {
+        has_non_empty_child = true;
+      }
+      children.push_back(std::move(child));
+    }
+
+    return has_non_empty_child
+               ? TypeParameters::MakeTypeParametersWithChildList(
+                     std::move(children))
+               : TypeParameters();
+  }
+
+  return TypeParameters();
 }
 
 bool TypeParameters::MatchType(const Type* type) const {
@@ -304,6 +473,10 @@ bool TypeParameters::MatchType(const Type* type) const {
   }
   if (IsTimestampTypeParameters()) {
     return type->IsTimestamp();
+  }
+  if (IsVectorTypeParameters()) {
+    return type->AsDeclarativeType() != nullptr &&
+           type->AsDeclarativeType()->IsGoogleSQLBuiltin("VECTOR");
   }
   if (IsExtendedTypeParameters()) {
     // TODO: When integrating with extended type, we can call a virtual

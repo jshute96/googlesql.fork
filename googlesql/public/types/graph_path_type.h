@@ -79,8 +79,8 @@ class GraphPathType : public ListBackedType {
     return TypeNameWithModifiers(type_modifiers, mode,
                                  /*use_external_float32=*/false);
   }
-
-  std::string CapitalizedName() const override;
+  absl::Status ValidateResolvedTypeParameters(
+      const TypeParameters& type_parameters, ProductMode mode) const override;
 
   int nesting_depth() const override { return nesting_depth_; }
 
@@ -98,7 +98,7 @@ class GraphPathType : public ListBackedType {
       const FormatValueContentOptions& options) const override;
 
  private:
-  GraphPathType(const TypeFactory* factory, const GraphElementType* node_type,
+  GraphPathType(const TypeFactory& factory, const GraphElementType* node_type,
                 const GraphElementType* edge_type, int nesting_depth);
 
   static bool EqualsImpl(const GraphPathType* type1, const GraphPathType* type2,
@@ -110,6 +110,9 @@ class GraphPathType : public ListBackedType {
   bool SupportsPartitioningImpl(
       const LanguageOptions& language_options,
       const Type** no_partitioning_type) const override;
+
+  bool SupportsReturningImpl(const LanguageOptions& language_options,
+                             const Type** no_returning_type) const override;
 
   absl::Status SerializeToProtoAndDistinctFileDescriptorsImpl(
       const BuildFileDescriptorMapOptions& options, TypeProto* type_proto,
