@@ -25,6 +25,7 @@
 #include "googlesql/public/types/graph_element_type.h"
 #include "googlesql/public/types/type.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "googlesql/base/ret_check.h"
@@ -51,6 +52,21 @@ static absl::StatusOr<const Type*> ReconstructFromComponents(
   if (type->IsSimpleType() || type->IsEnum() || type->IsProto()) {
     GOOGLESQL_RET_CHECK(rewritten_components.empty());
     return type;
+  }
+
+  // Exit early if the component types are unchanged.
+  std::vector<const Type*> component_types = type->ComponentTypes();
+  if (component_types.size() == rewritten_components.size()) {
+    bool all_equal = true;
+    for (int i = 0; i < component_types.size(); ++i) {
+      if (!component_types[i]->Equals(rewritten_components[i].type)) {
+        all_equal = false;
+        break;
+      }
+    }
+    if (all_equal) {
+      return type;
+    }
   }
 
   switch (type->kind()) {

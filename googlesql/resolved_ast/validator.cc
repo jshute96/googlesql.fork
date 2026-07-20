@@ -56,6 +56,7 @@
 #include "googlesql/public/type.pb.h"
 #include "googlesql/public/types/annotation.h"
 #include "googlesql/public/types/collation.h"
+#include "googlesql/public/types/declarative_type.h"
 #include "googlesql/public/types/graph_element_type.h"
 #include "googlesql/public/types/measure_type.h"
 #include "googlesql/public/value.h"
@@ -75,6 +76,7 @@
 #include "googlesql/base/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
@@ -86,7 +88,6 @@
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status.h"
 #include "googlesql/base/status_builder.h"
-#include "googlesql/base/status_macros.h"
 
 // Replacements for GOOGLESQL_RET_CHECK()-related macros within the validator.
 // These macros behave similarly to the originals, but also record the node at
@@ -262,6 +263,14 @@ absl::Status Validator::ValidateResolvedArgumentRef(
   return absl::OkStatus();
 }
 
+absl::Status Validator::ValidateResolvedFunctionRef(
+    const ResolvedFunctionRef* function_ref) {
+  PushErrorContext push(this, function_ref);
+  VALIDATOR_RET_CHECK(function_ref != nullptr);
+  VALIDATOR_RET_CHECK(function_ref->function() != nullptr);
+  return absl::OkStatus();
+}
+
 absl::Status Validator::ValidateResolvedExpressionColumn(
     const ResolvedExpressionColumn* expression_column) {
   if (disallow_expression_columns_) {
@@ -348,8 +357,8 @@ absl::Status Validator::ValidateResolvedCast(
       resolved_cast->type_modifiers().type_parameters();
   const Collation& collation = resolved_cast->type_modifiers().collation();
   if (!type_params.IsEmpty()) {
-    GOOGLESQL_RETURN_IF_ERROR(resolved_cast->type()->ValidateResolvedTypeParameters(
-        type_params, language_options_.product_mode()));
+    GOOGLESQL_RETURN_IF_ERROR(ValidateTypeParametersOfResolvedType(resolved_cast->type(),
+                                                         type_params));
   }
 
   if (language_options_.LanguageFeatureEnabled(FEATURE_COLLATION_SUPPORT)) {
@@ -433,10 +442,29 @@ absl::Status Validator::ValidateGenericArgumentsAgainstConcreteArguments(
           << " lambda body type: " << lambda->body()->type()->DebugString()
           << " concrete body type: "
           << concrete_lambda.body_type().type()->DebugString();
+    } else if (generic_arg->function_ref() != nullptr) {
+      only_expr_is_used = false;
+      const ResolvedFunctionRef* function_ref = generic_arg->function_ref();
+      const FunctionSignature& ref_signature = function_ref->signature();
+      const FunctionArgumentType::ArgumentTypeLambda& concrete_lambda =
+          concrete_argument.lambda();
+      VALIDATOR_RET_CHECK_EQ(ref_signature.arguments().size(),
+                             concrete_lambda.argument_types().size());
+      for (int i = 0; i < ref_signature.arguments().size(); ++i) {
+        VALIDATOR_RET_CHECK(ref_signature.argument(i).type()->Equals(
+            concrete_lambda.argument_types()[i].type()));
+      }
+      VALIDATOR_RET_CHECK(ref_signature.result_type().type()->Equals(
+          concrete_lambda.body_type().type()));
     } else if (generic_arg->sequence() != nullptr) {
       only_expr_is_used = false;
       VALIDATOR_RET_CHECK(concrete_argument.IsSequence())
           << " Found Sequence argument for concrete_argument: "
+          << concrete_argument.DebugString();
+    } else if (generic_arg->model() != nullptr) {
+      only_expr_is_used = false;
+      VALIDATOR_RET_CHECK(concrete_argument.IsModel())
+          << " Found Model argument for concrete_argument: "
           << concrete_argument.DebugString();
     } else {
       only_expr_is_used = false;
@@ -509,9 +537,11 @@ absl::Status Validator::ValidateArgumentAliases(
 }
 
 absl::Status Validator::ValidateTemplatedSqlFunctionCall(
-    const TemplatedSQLFunctionCall& templated_info,
+    const Function* function, const TemplatedSQLFunctionCall& templated_info,
     const FunctionSignature& signature,
     const ArgumentKindSet& allowed_argument_kinds) {
+  PushTemplatedCall push_templated(this, function, &signature,
+                                   templated_info.expr());
   googlesql_base::VarSetter<ArgumentKindSet> allowed_argument_kinds_setter(
       &allowed_argument_kinds_, allowed_argument_kinds);
   // Column ids inside a templated function call only need to be unique within
@@ -552,6 +582,14 @@ absl::Status Validator::ValidateResolvedFunctionCallBase(
   VALIDATOR_RET_CHECK(resolved_function_call->function() != nullptr)
       << "ResolvedFunctionCall does not have a Function:\n"
       << resolved_function_call->DebugString();
+
+  // Validate that function-typed parameters are only used when the feature is
+  // enabled.
+  if (resolved_function_call->function()->IsFunctionTypedParameter()) {
+    VALIDATOR_RET_CHECK(
+        language_options_.LanguageFeatureEnabled(FEATURE_UDF_LAMBDA_ARGUMENTS))
+        << "Function-typed parameters are not supported";
+  }
 
   VALIDATOR_RET_CHECK(resolved_function_call->argument_list_size() == 0 ||
                       resolved_function_call->generic_argument_list_size() == 0)
@@ -613,13 +651,17 @@ absl::Status Validator::ValidateResolvedFunctionCallBase(
             ->function_call_info()
             .get();
     if (info != nullptr && info->Is<TemplatedSQLFunctionCall>()) {
+      const auto* templated_info = info->GetAs<TemplatedSQLFunctionCall>();
       std::set<ResolvedColumn> visible_columns;
       GOOGLESQL_RETURN_IF_ERROR(ValidateTemplatedSqlFunctionCall(
-          *info->GetAs<TemplatedSQLFunctionCall>(),
+          resolved_function_call->function(), *templated_info,
           resolved_function_call->signature(),
           /*allowed_argument_kinds=*/
           {{ResolvedArgumentDefEnums::AGGREGATE,
             ResolvedArgumentDefEnums::NOT_AGGREGATE}}));
+      VALIDATOR_RET_CHECK(
+          AnnotationMap::Equals(templated_info->expr()->type_annotation_map(),
+                                resolved_function_call->type_annotation_map()));
     }
   }
 
@@ -629,10 +671,14 @@ absl::Status Validator::ValidateResolvedFunctionCallBase(
             ->function_call_info()
             .get();
     if (info != nullptr && info->Is<TemplatedSQLFunctionCall>()) {
+      const auto* templated_info = info->GetAs<TemplatedSQLFunctionCall>();
       GOOGLESQL_RETURN_IF_ERROR(ValidateTemplatedSqlFunctionCall(
-          *info->GetAs<TemplatedSQLFunctionCall>(),
+          resolved_function_call->function(), *templated_info,
           resolved_function_call->signature(),
           /*allowed_argument_kinds=*/{ResolvedArgumentDefEnums::SCALAR}));
+      VALIDATOR_RET_CHECK(
+          AnnotationMap::Equals(templated_info->expr()->type_annotation_map(),
+                                resolved_function_call->type_annotation_map()));
     }
     GOOGLESQL_RETURN_IF_ERROR(ValidateHintList(resolved_function_call->hint_list()));
   }
@@ -685,11 +731,19 @@ absl::Status Validator::ValidateStandaloneResolvedExpr(
       // where the validator uses more stack than parsing/analysis (b/65294961).
       return status;
     }
+    // If validation failed in a templated function body, print the function
+    // body AST instead of the main expr being validated.
+    const ResolvedNode* dump_node = (inner_templated_body_node_ != nullptr)
+                                        ? inner_templated_body_node_
+                                        : expr;
     // Note: This string is pattern-matched in
     // `tools/execute_query/execute_query_web_writer.cc`.  Keep that in sync.
-    return InternalErrorBuilder()
+    return ::googlesql_base::InternalErrorBuilder()
            << "Resolved AST validation failed: " << status.message() << "\n"
-           << expr->DebugString(ResolvedNode::DebugStringConfig{
+           << (templated_call_stack_string_.empty()
+                   ? ""
+                   : absl::StrCat("\n", templated_call_stack_string_, "\n"))
+           << dump_node->DebugString(ResolvedNode::DebugStringConfig{
                   {{error_context_, "(validation failed here)"}}, false});
   }
 
@@ -719,7 +773,7 @@ absl::Status Validator::ValidateResolvedExpr(
 
   // This will fail if more child types are added. Add them to the switch below
   // before updating this.
-  static_assert(ResolvedExpr::NUM_DESCENDANT_LEAF_TYPES == 31,
+  static_assert(ResolvedExpr::NUM_DESCENDANT_LEAF_TYPES == 33,
                 "Missing case in switch on ResolvedExpr descendants");
 
   // Do not add new checks inline here because they increase stack space used in
@@ -791,6 +845,10 @@ absl::Status Validator::ValidateResolvedExpr(
       return ValidateResolvedMakeStruct(visible_columns, visible_parameters,
                                         expr->GetAs<ResolvedMakeStruct>());
     }
+    case RESOLVED_MAKE_MAP: {
+      return ValidateResolvedMakeMap(visible_columns, visible_parameters,
+                                     expr->GetAs<ResolvedMakeMap>());
+    }
     case RESOLVED_MAKE_PROTO: {
       for (const auto& resolved_make_proto_field :
            expr->GetAs<ResolvedMakeProto>()->field_list()) {
@@ -860,6 +918,10 @@ absl::Status Validator::ValidateResolvedExpr(
       return ValidateResolvedGraphIsLabeledPredicate(
           visible_columns, visible_parameters,
           expr->GetAs<ResolvedGraphIsLabeledPredicate>());
+    case RESOLVED_GRAPH_INSERT_ELEMENT:
+      return ValidateResolvedGraphInsertElement(
+          visible_columns, visible_parameters,
+          expr->GetAs<ResolvedGraphInsertElement>());
     case RESOLVED_ARRAY_AGGREGATE:
       return ValidateResolvedArrayAggregate(
           visible_columns, visible_parameters,
@@ -921,21 +983,20 @@ absl::Status Validator::ValidateOrderByAndLimitClausesOfAggregateFunctionCall(
                                   << aggregate_function->DebugString();
   }
 
-  std::set<ResolvedColumn> order_by_visible_columns =
-      input_scan_visible_columns;
+  std::optional<std::set<ResolvedColumn>> order_by_visible_columns;
   const bool is_multi_level_aggregate_function =
       !aggregate_function_call->group_by_list().empty();
   if (is_multi_level_aggregate_function) {
-    order_by_visible_columns.clear();
+    order_by_visible_columns.emplace();
     // `group_by_list` and `group_by_aggregate_list` columns are already seen
     // and validated in `ValidateResolvedAggregateFunctionCall`, so add them
     // to `order_by_visible_columns` without validation.
     AddColumnsFromComputedColumnListWithoutValidation<ResolvedComputedColumn>(
-        aggregate_function_call->group_by_list(), order_by_visible_columns);
+        aggregate_function_call->group_by_list(), *order_by_visible_columns);
     AddColumnsFromComputedColumnListWithoutValidation<
         ResolvedComputedColumnBase>(
         aggregate_function_call->group_by_aggregate_list(),
-        order_by_visible_columns);
+        *order_by_visible_columns);
   }
 
   googlesql_base::VarSetter<bool> disallow_aggregate_resolved_arg_refs_setter(
@@ -946,7 +1007,9 @@ absl::Status Validator::ValidateOrderByAndLimitClausesOfAggregateFunctionCall(
   for (const auto& order_by_item :
        aggregate_function_call->order_by_item_list()) {
     GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedOrderByItem(
-        order_by_visible_columns, visible_parameters, order_by_item.get()));
+        order_by_visible_columns.has_value() ? *order_by_visible_columns
+                                             : input_scan_visible_columns,
+        visible_parameters, order_by_item.get()));
   }
 
   if (aggregate_function_call->limit() != nullptr) {
@@ -1331,6 +1394,37 @@ absl::Status Validator::ValidateResolvedMakeStruct(
   return absl::OkStatus();
 }
 
+absl::Status Validator::ValidateResolvedMakeMap(
+    const std::set<ResolvedColumn>& visible_columns,
+    const std::set<ResolvedColumn>& visible_parameters,
+    const ResolvedMakeMap* expr) {
+  PushErrorContext push(this, expr);
+  VALIDATOR_RET_CHECK(expr->type()->IsMap());
+  if (expr->type_annotation_map() != nullptr) {
+    VALIDATOR_RET_CHECK(
+        !CollationAnnotation::ExistsIn(expr->type_annotation_map()))
+        << "MAP type cannot have collation annotations: "
+        << expr->type_annotation_map()->DebugString();
+  }
+  const MapType* map_type = expr->type()->AsMap();
+  for (const auto& entry : expr->entry_list()) {
+    VALIDATOR_RET_CHECK(nullptr != entry);
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(visible_columns, visible_parameters,
+                                         entry->key()));
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(visible_columns, visible_parameters,
+                                         entry->value()));
+    VALIDATOR_RET_CHECK(entry->key()->type()->Equals(map_type->key_type()))
+        << "Key type mismatch; expected: "
+        << map_type->key_type()->DebugString() << " but found "
+        << entry->key()->type()->DebugString();
+    VALIDATOR_RET_CHECK(entry->value()->type()->Equals(map_type->value_type()))
+        << "Value type mismatch; expected: "
+        << map_type->value_type()->DebugString() << " but found "
+        << entry->value()->type()->DebugString();
+  }
+  return absl::OkStatus();
+}
+
 absl::Status Validator::ValidateResolvedGetProtoFieldExpr(
     const std::set<ResolvedColumn>& visible_columns,
     const std::set<ResolvedColumn>& visible_parameters,
@@ -1389,7 +1483,7 @@ absl::Status Validator::ValidateResolvedGetRowFieldExpr(
   PushErrorContext push(this, get_row_field);
   GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(visible_columns, visible_parameters,
                                        get_row_field->expr()));
-  VALIDATOR_RET_CHECK(get_row_field->expr()->type()->IsSingleRow());
+  VALIDATOR_RET_CHECK(get_row_field->expr()->type()->IsRowLike());
   VALIDATOR_RET_CHECK(
       get_row_field->type()->Equals(get_row_field->column()->GetType()));
   // It would be nice to check that the Column came from the right Table
@@ -1406,9 +1500,49 @@ absl::Status Validator::ValidateResolvedFlatten(
                                        flatten->expr()));
   GOOGLESQL_ASSIGN_OR_RETURN(const Type* scalar_type,
                    flatten->expr()->type()->GetElementType());
-  VALIDATOR_RET_CHECK(scalar_type->IsProto() || scalar_type->IsStruct() ||
-                      scalar_type->IsJson() || scalar_type->IsGraphElement() ||
-                      scalar_type->IsSingleRow());
+
+  int num_available_layers_at_expr_type = 0;
+  while (scalar_type->IsArray()) {
+    num_available_layers_at_expr_type++;
+    scalar_type = scalar_type->AsArray()->element_type();
+  }
+
+  if (flatten->get_field_list_size() > 0) {
+    VALIDATOR_RET_CHECK(scalar_type->IsProto() || scalar_type->IsStruct() ||
+                        scalar_type->IsJson() ||
+                        scalar_type->IsGraphElement() ||
+                        scalar_type->IsRowLike())
+        << "Unexpected arg element type: " << scalar_type->DebugString();
+
+    num_available_layers_at_expr_type = 0;
+    const Type* field_type = flatten->get_field_list().back()->type();
+    while (field_type->IsArray()) {
+      num_available_layers_at_expr_type++;
+      field_type = field_type->AsArray()->element_type();
+    }
+  } else {
+    // If we have a ResolvedFlatten without any field access, it means we just
+    // have a simple array which didn't get folded as a NOOP. The only case this
+    // could happen is if we have a nested array.
+    VALIDATOR_RET_CHECK(flatten->expr()->type()->IsArray());
+    VALIDATOR_RET_CHECK(
+        flatten->expr()->type()->AsArray()->element_type()->IsArray());
+  }
+
+  if (flatten->depth() != nullptr) {
+    VALIDATOR_RET_CHECK(flatten->depth() != nullptr);
+    VALIDATOR_RET_CHECK(flatten->depth()->type()->IsInt64());
+    const ResolvedExpr* depth = flatten->depth();
+    VALIDATOR_RET_CHECK(depth->Is<ResolvedLiteral>()) << depth->DebugString();
+
+    const Value& depth_value = depth->GetAs<ResolvedLiteral>()->value();
+    VALIDATOR_RET_CHECK(depth_value.is_valid());
+    if (!depth_value.is_null()) {
+      int64_t depth = depth_value.int64_value();
+      VALIDATOR_RET_CHECK_GE(depth, 0);
+      VALIDATOR_RET_CHECK_LE(depth, num_available_layers_at_expr_type);
+    }
+  }
 
   bool seen_proto = scalar_type->IsProto();
   bool seen_json = scalar_type->IsJson();
@@ -1483,7 +1617,7 @@ absl::Status Validator::ValidateResolvedFlattenedArg(
                       flattened_arg->type()->IsStruct() ||
                       flattened_arg->type()->IsJson() ||
                       flattened_arg->type()->IsGraphElement() ||
-                      flattened_arg->type()->IsSingleRow())
+                      flattened_arg->type()->IsRowLike())
       << flattened_arg->type()->DebugString();
   return absl::OkStatus();
 }
@@ -1584,15 +1718,33 @@ absl::Status Validator::ValidateResolvedSubqueryExpr(
   PushErrorContext push(this, resolved_subquery_expr);
   ResolvedSubqueryExpr::SubqueryType type =
       resolved_subquery_expr->subquery_type();
-  VALIDATOR_RET_CHECK_EQ((type == ResolvedSubqueryExpr::IN) ||
-                             (type == ResolvedSubqueryExpr::LIKE_ANY) ||
-                             (type == ResolvedSubqueryExpr::LIKE_ALL) ||
-                             (type == ResolvedSubqueryExpr::NOT_LIKE_ANY) ||
-                             (type == ResolvedSubqueryExpr::NOT_LIKE_ALL),
-                         resolved_subquery_expr->in_expr() != nullptr)
-      << "Subquery expressions of "
-      << ResolvedSubqueryExprEnums::SubqueryType_Name(type)
-      << " should have <in_expr> populated";
+  switch (type) {
+    case ResolvedSubqueryExpr::IN:
+    case ResolvedSubqueryExpr::LIKE_ANY:
+    case ResolvedSubqueryExpr::LIKE_ALL:
+    case ResolvedSubqueryExpr::NOT_LIKE_ANY:
+    case ResolvedSubqueryExpr::NOT_LIKE_ALL:
+    case ResolvedSubqueryExpr::EQ_ANY:
+    case ResolvedSubqueryExpr::EQ_ALL:
+    case ResolvedSubqueryExpr::NE_ANY:
+    case ResolvedSubqueryExpr::NE_ALL:
+    case ResolvedSubqueryExpr::GT_ANY:
+    case ResolvedSubqueryExpr::GT_ALL:
+    case ResolvedSubqueryExpr::GE_ANY:
+    case ResolvedSubqueryExpr::GE_ALL:
+    case ResolvedSubqueryExpr::LT_ANY:
+    case ResolvedSubqueryExpr::LT_ALL:
+    case ResolvedSubqueryExpr::LE_ANY:
+    case ResolvedSubqueryExpr::LE_ALL:
+      break;
+    default:
+      if (resolved_subquery_expr->in_expr() != nullptr) {
+        VALIDATOR_RET_CHECK_FAIL()
+            << "Subquery expressions of "
+            << ResolvedSubqueryExprEnums::SubqueryType_Name(type)
+            << " should have <in_expr> populated";
+      }
+  }
 
   if (resolved_subquery_expr->in_expr() != nullptr) {
     GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(visible_columns, visible_parameters,
@@ -1600,9 +1752,24 @@ absl::Status Validator::ValidateResolvedSubqueryExpr(
   }
 
   if (!resolved_subquery_expr->in_collation().Empty()) {
-    VALIDATOR_RET_CHECK_EQ(type, ResolvedSubqueryExpr::IN)
-        << "<in_collation> should only be populated for Subquery expressions "
-           "of IN type. Subquery expression type is "
+    VALIDATOR_RET_CHECK(type == ResolvedSubqueryExpr::IN ||
+                        type == ResolvedSubqueryExpr::LIKE_ANY ||
+                        type == ResolvedSubqueryExpr::LIKE_ALL ||
+                        type == ResolvedSubqueryExpr::NOT_LIKE_ANY ||
+                        type == ResolvedSubqueryExpr::NOT_LIKE_ALL ||
+                        type == ResolvedSubqueryExpr::EQ_ANY ||
+                        type == ResolvedSubqueryExpr::EQ_ALL ||
+                        type == ResolvedSubqueryExpr::NE_ANY ||
+                        type == ResolvedSubqueryExpr::NE_ALL ||
+                        type == ResolvedSubqueryExpr::GT_ANY ||
+                        type == ResolvedSubqueryExpr::GT_ALL ||
+                        type == ResolvedSubqueryExpr::GE_ANY ||
+                        type == ResolvedSubqueryExpr::GE_ALL ||
+                        type == ResolvedSubqueryExpr::LT_ANY ||
+                        type == ResolvedSubqueryExpr::LT_ALL ||
+                        type == ResolvedSubqueryExpr::LE_ANY ||
+                        type == ResolvedSubqueryExpr::LE_ALL)
+        << "<in_collation> is not supported for subquery type: "
         << ResolvedSubqueryExprEnums::SubqueryType_Name(type);
     VALIDATOR_RET_CHECK_NE(resolved_subquery_expr->in_expr(), nullptr);
     // We only check that <in_collation> is compatible with the type of
@@ -1642,7 +1809,7 @@ absl::Status Validator::ValidateResolvedSubqueryExpr(
       VALIDATOR_RET_CHECK(referenced_column_ids.contains(param.column_id()))
           << "Expression subquery does not reference correlated column "
           << "parameter: " << param.DebugString()
-      << " subquery: " << resolved_subquery_expr->DebugString();
+          << " subquery: " << resolved_subquery_expr->DebugString();
     }
   }
 
@@ -1650,6 +1817,18 @@ absl::Status Validator::ValidateResolvedSubqueryExpr(
     case ResolvedSubqueryExpr::SCALAR:
     case ResolvedSubqueryExpr::ARRAY:
     case ResolvedSubqueryExpr::IN:
+    case ResolvedSubqueryExpr::EQ_ANY:
+    case ResolvedSubqueryExpr::EQ_ALL:
+    case ResolvedSubqueryExpr::NE_ANY:
+    case ResolvedSubqueryExpr::NE_ALL:
+    case ResolvedSubqueryExpr::LT_ANY:
+    case ResolvedSubqueryExpr::LT_ALL:
+    case ResolvedSubqueryExpr::LE_ANY:
+    case ResolvedSubqueryExpr::LE_ALL:
+    case ResolvedSubqueryExpr::GT_ANY:
+    case ResolvedSubqueryExpr::GT_ALL:
+    case ResolvedSubqueryExpr::GE_ANY:
+    case ResolvedSubqueryExpr::GE_ALL:
       VALIDATOR_RET_CHECK_EQ(
           resolved_subquery_expr->subquery()->column_list_size(), 1)
           << "Expression subquery must produce exactly one column";
@@ -1657,8 +1836,24 @@ absl::Status Validator::ValidateResolvedSubqueryExpr(
         const Type* in_expr_type = resolved_subquery_expr->in_expr()->type();
         const Type* in_subquery_type =
             resolved_subquery_expr->subquery()->column_list(0).type();
-        VALIDATOR_RET_CHECK(in_expr_type->SupportsEquality());
-        VALIDATOR_RET_CHECK(in_subquery_type->SupportsEquality());
+
+        // Check compatibility based on the operator kind
+        if (type == ResolvedSubqueryExpr::LT_ANY ||
+            type == ResolvedSubqueryExpr::LT_ALL ||
+            type == ResolvedSubqueryExpr::LE_ANY ||
+            type == ResolvedSubqueryExpr::LE_ALL ||
+            type == ResolvedSubqueryExpr::GT_ANY ||
+            type == ResolvedSubqueryExpr::GT_ALL ||
+            type == ResolvedSubqueryExpr::GE_ANY ||
+            type == ResolvedSubqueryExpr::GE_ALL) {
+          VALIDATOR_RET_CHECK(
+              in_expr_type->SupportsOrdering(language_options_, nullptr));
+          VALIDATOR_RET_CHECK(
+              in_subquery_type->SupportsOrdering(language_options_, nullptr));
+        } else {
+          VALIDATOR_RET_CHECK(in_expr_type->SupportsEquality());
+          VALIDATOR_RET_CHECK(in_subquery_type->SupportsEquality());
+        }
 
         const bool argument_types_equal =
             in_expr_type->Equals(in_subquery_type);
@@ -1669,6 +1864,7 @@ absl::Status Validator::ValidateResolvedSubqueryExpr(
                             argument_types_int64_and_uint64);
       }
       break;
+
     case ResolvedSubqueryExpr::LIKE_ANY:
     case ResolvedSubqueryExpr::LIKE_ALL:
     case ResolvedSubqueryExpr::NOT_LIKE_ANY:
@@ -2072,8 +2268,8 @@ absl::Status Validator::ValidateResolvedTableScan(
 
     for (const ResolvedColumn& column : scan->column_list()) {
       const Type* type = column.type();
-      VALIDATOR_RET_CHECK(type->IsRow()) << type->DebugString();
-      VALIDATOR_RET_CHECK_EQ(type->AsRow()->table(), table);
+      VALIDATOR_RET_CHECK(type->IsRowOrTable()) << type->DebugString();
+      VALIDATOR_RET_CHECK_EQ(type->AsRowOrTable()->table(), table);
     }
 
   } else if (scan->table_column_list_size() != 0) {
@@ -2252,12 +2448,11 @@ absl::Status Validator::ValidateResolvedArrayScan(
     const Type* element_type = nullptr;
     if (expr_type->IsArray()) {
       element_type = expr_type->AsArray()->element_type();
-    } else if (expr_type->IsRow()) {
-      VALIDATOR_RET_CHECK(expr_type->AsRow()->IsJoin());
-      element_type = expr_type->AsRow()->element_type();
+    } else if (expr_type->IsTable()) {
+      element_type = expr_type->AsTableRefType()->element_type();
       VALIDATOR_RET_CHECK_EQ(scan->array_expr_list_size(), 1);
       VALIDATOR_RET_CHECK(scan->array_offset_column() == nullptr)
-          << "Can't read OFFSET when scanning a RowType";
+          << "Can't read OFFSET when scanning a RowOrTableType";
     } else {
       VALIDATOR_RET_CHECK_FAIL()
           << "ArrayScan of non-ARRAY type: " << expr_type->DebugString();
@@ -2376,14 +2571,26 @@ absl::Status Validator::ValidateResolvedAggregateScanBase(
   } else {
     GOOGLESQL_RET_CHECK_EQ(scan->collation_list_size(), 0);
   }
-  // TODO: consider capturing input_columns_for_group_rows_ here and
-  // not in ValidateResolvedAggregateFunctionCall(). This way we can avoid extra
-  // copies when multiple WITH GROUP ROWS are used in the same aggregate scan;
-  // also we could validate the case if for some way WITH GROUP ROWS is used
-  // outside of aggregate scan.
+
+  // Capture aggregation input columns to validate group rows scan later.
+  // We add to input_columns_for_group_rows_ rather than replacing it so that
+  // outer aggregation columns remain visible for nested GROUP ROWS references.
+  std::set<ResolvedColumn> previous_input_columns_for_group_rows =
+      input_columns_for_group_rows_;
+  input_columns_for_group_rows_.insert(input_scan_visible_columns->begin(),
+                                       input_scan_visible_columns->end());
+  absl::Cleanup cleanup = [this, previous_input_columns_for_group_rows]() {
+    input_columns_for_group_rows_ = previous_input_columns_for_group_rows;
+  };
+
+  // Make aggregate group by columns visible to the aggregate list.
+  std::set<ResolvedColumn> aggregate_visible_columns =
+      *input_scan_visible_columns;
+  AddColumnsFromComputedColumnListWithoutValidation<ResolvedComputedColumn>(
+      scan->group_by_list(), aggregate_visible_columns);
 
   GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedComputedColumnList(
-      *input_scan_visible_columns, visible_parameters, scan->aggregate_list()));
+      aggregate_visible_columns, visible_parameters, scan->aggregate_list()));
 
   std::set<ResolvedColumn> generated_side_effect_columns;
   for (const auto& computed_column : scan->aggregate_list()) {
@@ -2394,13 +2601,50 @@ absl::Status Validator::ValidateResolvedAggregateScanBase(
     }
   }
 
-  // Validates other constructs in aggregates such as ORDER BY and LIMIT.
+  // Validates aggregate list items.
   for (const auto& computed_column : scan->aggregate_list()) {
     GOOGLESQL_RET_CHECK(computed_column->Is<ResolvedComputedColumnImpl>());
-    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedAggregateComputedColumn(
-        computed_column->GetAs<ResolvedComputedColumnImpl>(),
-        *input_scan_visible_columns, visible_parameters,
-        generated_side_effect_columns));
+    if (computed_column->expr()->node_kind() ==
+        RESOLVED_AGGREGATE_FUNCTION_CALL) {
+      GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedAggregateComputedColumn(
+          computed_column->GetAs<ResolvedComputedColumnImpl>(),
+          *input_scan_visible_columns, visible_parameters,
+          generated_side_effect_columns));
+    } else if (computed_column->expr()->node_kind() == RESOLVED_SUBQUERY_EXPR) {
+      const ResolvedSubqueryExpr* subquery_expr =
+          computed_column->expr()->GetAs<ResolvedSubqueryExpr>();
+      switch (subquery_expr->subquery_type()) {
+        case ResolvedSubqueryExpr::SCALAR:
+        case ResolvedSubqueryExpr::ARRAY:
+        case ResolvedSubqueryExpr::EXISTS:
+        case ResolvedSubqueryExpr::IN:
+        case ResolvedSubqueryExpr::LIKE_ANY:
+        case ResolvedSubqueryExpr::LIKE_ALL:
+        case ResolvedSubqueryExpr::NOT_LIKE_ANY:
+        case ResolvedSubqueryExpr::NOT_LIKE_ALL:
+        case ResolvedSubqueryExpr::EQ_ANY:
+        case ResolvedSubqueryExpr::EQ_ALL:
+        case ResolvedSubqueryExpr::NE_ANY:
+        case ResolvedSubqueryExpr::NE_ALL:
+        case ResolvedSubqueryExpr::LT_ANY:
+        case ResolvedSubqueryExpr::LT_ALL:
+        case ResolvedSubqueryExpr::LE_ANY:
+        case ResolvedSubqueryExpr::LE_ALL:
+        case ResolvedSubqueryExpr::GT_ANY:
+        case ResolvedSubqueryExpr::GT_ALL:
+        case ResolvedSubqueryExpr::GE_ANY:
+        case ResolvedSubqueryExpr::GE_ALL:
+          break;
+        default:
+          GOOGLESQL_RET_CHECK_FAIL() << "Unexpected subquery type in aggregate_list: "
+                           << ResolvedSubqueryExprEnums::SubqueryType_Name(
+                                  subquery_expr->subquery_type());
+      }
+    } else {
+      GOOGLESQL_RET_CHECK_FAIL()
+          << "Aggregate list must contain a function call or a subquery "
+             "expression.";
+    }
   }
 
   GOOGLESQL_RETURN_IF_ERROR(ValidateGroupingSetList(scan->grouping_set_list(),
@@ -2895,11 +3139,259 @@ absl::Status Validator::ValidateResolvedUnsetArgumentScan(
   return absl::OkStatus();
 }
 
-absl::Status Validator::CheckUniqueColumnId(const ResolvedColumn& column) {
+absl::Status Validator::ValidateResolvedAlignScan(
+    const ResolvedAlignScan* scan,
+    const std::set<ResolvedColumn>& visible_parameters) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  PushErrorContext push(this, scan);
   VALIDATOR_RET_CHECK(
-      googlesql_base::InsertIfNotPresent(&column_ids_seen_, column.column_id()))
-      << "Duplicate column id " << column.column_id() << " in column "
-      << column.DebugString();
+      language_options_.LanguageFeatureEnabled(FEATURE_ALIGN_OPERATOR))
+      << "ALIGN operator is not supported";
+
+  // Validate input_scan
+  VALIDATOR_RET_CHECK(scan->input_scan() != nullptr);
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedScan(scan->input_scan(), visible_parameters));
+
+  std::set<ResolvedColumn> input_scan_visible_columns;
+  GOOGLESQL_RETURN_IF_ERROR(AddColumnList(scan->input_scan()->column_list(),
+                                &input_scan_visible_columns));
+
+  // Validate timestamp_column
+  VALIDATOR_RET_CHECK(scan->timestamp_column() != nullptr);
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(input_scan_visible_columns,
+                                       visible_parameters,
+                                       scan->timestamp_column()));
+  VALIDATOR_RET_CHECK(scan->timestamp_column()->type()->IsTimestamp());
+
+  // Validate period
+  VALIDATOR_RET_CHECK(scan->period() != nullptr);
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(/*visible_columns=*/{},
+                                       visible_parameters, scan->period()));
+  VALIDATOR_RET_CHECK(scan->period()->type()->IsInterval());
+
+  // Validate origin
+  if (scan->origin() != nullptr) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(/*visible_columns=*/{},
+                                         visible_parameters, scan->origin()));
+    VALIDATOR_RET_CHECK(scan->origin()->type()->IsTimestamp());
+  }
+
+  if (scan->output_within() != nullptr) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedWithinBounds(scan->output_within(),
+                                                 visible_parameters));
+  }
+
+  // Partitioning columns can never be duplicates nor correlated, and must
+  // come from the input scan directly.
+  absl::flat_hash_set<ResolvedColumn> partitioning_columns_seen;
+  // Validate partition_by_list
+  for (const auto& partition_by_col : scan->partition_by_list()) {
+    VALIDATOR_RET_CHECK(partition_by_col != nullptr);
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(input_scan_visible_columns,
+                                         visible_parameters,
+                                         partition_by_col.get()));
+
+    std::string type_description;
+    if (!partition_by_col->type()->SupportsPartitioning(language_options_,
+                                                        &type_description)) {
+      return InternalErrorBuilder()
+             << "Type of PARTITIONING expression " << type_description
+             << " does not support partitioning: "
+             << partition_by_col->DebugString();
+    }
+    VALIDATOR_RET_CHECK(!partition_by_col->is_correlated())
+        << "Partitioning column cannot be correlated: "
+        << partition_by_col->DebugString();
+    VALIDATOR_RET_CHECK(
+        partitioning_columns_seen.insert(partition_by_col->column()).second)
+        << "Duplicate partitioning column " << partition_by_col->DebugString();
+  }
+
+  GOOGLESQL_RETURN_IF_ERROR(CheckUniqueColumnId(scan->aligned_timestamp_column()));
+  VALIDATOR_RET_CHECK(scan->aligned_timestamp_column().type()->IsTimestamp());
+
+  for (int i = 0; i < scan->partition_by_list().size(); ++i) {
+    VALIDATOR_RET_CHECK_EQ(scan->column_list(i).column_id(),
+                           scan->partition_by_list(i)->column().column_id());
+  }
+
+  // This check is LE instead of EQ as the aligned timestamp column can get
+  // pruned if it's not referenced. Partitioning columns are not pruned as
+  // they are referenced in the PARTITION BY list.
+  VALIDATOR_RET_CHECK_LE(scan->column_list_size(),
+                         scan->partition_by_list().size() + 1);
+
+  if (scan->column_list_size() == scan->partition_by_list().size() + 1) {
+    VALIDATOR_RET_CHECK_EQ(scan->column_list().back().column_id(),
+                           scan->aligned_timestamp_column().column_id());
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status Validator::ValidateResolvedWithinBoundExpr(
+    const ResolvedWithinBoundExpr* within_bound_expr,
+    const std::set<ResolvedColumn>& visible_parameters) {
+  VALIDATOR_RET_CHECK(within_bound_expr != nullptr);
+  PushErrorContext push(this, within_bound_expr);
+
+  switch (within_bound_expr->bound_kind()) {
+    case ResolvedWithinBoundExpr::NOT_SET:
+      VALIDATOR_RET_CHECK_FAIL() << "Unhandled bound kind: "
+                                 << within_bound_expr->GetBoundKindString();
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+      VALIDATOR_RET_CHECK(within_bound_expr->expr() == nullptr)
+          << "ALIGN WITHIN bound of kind "
+          << within_bound_expr->GetBoundKindString()
+          << " must not specify a bound expression\n"
+          << within_bound_expr->DebugString();
+      return absl::OkStatus();
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+      VALIDATOR_RET_CHECK(within_bound_expr->expr() != nullptr &&
+                          (within_bound_expr->expr()->type()->IsInt64() ||
+                           within_bound_expr->expr()->type()->IsDouble()))
+          << "ALIGN WITHIN bound of kind "
+          << within_bound_expr->GetBoundKindString()
+          << " must specify a bound expression of type INT64 or DOUBLE\n"
+          << within_bound_expr->DebugString();
+      return ValidateResolvedExpr(
+          /*visible_columns=*/{}, visible_parameters,
+          within_bound_expr->expr());
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+      VALIDATOR_RET_CHECK(within_bound_expr->expr() != nullptr &&
+                          within_bound_expr->expr()->type()->IsInterval())
+          << "ALIGN WITHIN bound of kind "
+          << within_bound_expr->GetBoundKindString()
+          << " must specify a bound expression of type INTERVAL\n"
+          << within_bound_expr->DebugString();
+      return ValidateResolvedExpr(
+          /*visible_columns=*/{}, visible_parameters,
+          within_bound_expr->expr());
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      VALIDATOR_RET_CHECK(within_bound_expr->expr() != nullptr &&
+                          within_bound_expr->expr()->type()->IsTimestamp())
+          << "ALIGN WITHIN bound of kind "
+          << within_bound_expr->GetBoundKindString()
+          << " must specify a bound expression of type TIMESTAMP\n"
+          << within_bound_expr->DebugString();
+      return ValidateResolvedExpr(
+          /*visible_columns=*/{}, visible_parameters,
+          within_bound_expr->expr());
+  }
+}
+
+static bool IsFiniteRelativeResolvedWithinBound(
+    const ResolvedWithinBoundExpr* within_bound_expr) {
+  switch (within_bound_expr->bound_kind()) {
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+      return true;
+    case ResolvedWithinBoundExpr::NOT_SET:
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return false;
+  }
+}
+
+static bool IsFiniteAbsoluteResolvedWithinBound(
+    const ResolvedWithinBoundExpr* within_bound_expr) {
+  switch (within_bound_expr->bound_kind()) {
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return true;
+    case ResolvedWithinBoundExpr::NOT_SET:
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+      return false;
+  }
+}
+
+static bool IsInvalidBoundCombination(
+    const ResolvedWithinBoundExpr* lower_bound,
+    const ResolvedWithinBoundExpr* upper_bound) {
+  return (IsFiniteAbsoluteResolvedWithinBound(lower_bound) &&
+          IsFiniteRelativeResolvedWithinBound(upper_bound)) ||
+         (IsFiniteAbsoluteResolvedWithinBound(upper_bound) &&
+          IsFiniteRelativeResolvedWithinBound(lower_bound));
+}
+
+absl::Status Validator::ValidateResolvedWithinBounds(
+    const ResolvedWithinBounds* within_bounds,
+    const std::set<ResolvedColumn>& visible_parameters) {
+  VALIDATOR_RET_CHECK(within_bounds != nullptr);
+  PushErrorContext push(this, within_bounds);
+
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedWithinBoundExpr(within_bounds->lower_bound(),
+                                                  visible_parameters));
+
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedWithinBoundExpr(within_bounds->upper_bound(),
+                                                  visible_parameters));
+
+  const ResolvedWithinBoundExpr* lower_bound = within_bounds->lower_bound();
+  const ResolvedWithinBoundExpr* upper_bound = within_bounds->upper_bound();
+
+  if (IsInvalidBoundCombination(lower_bound, upper_bound)) {
+    VALIDATOR_RET_CHECK_FAIL()
+        << "A WITHIN clause cannot mix absolute (TIMESTAMP) and relative "
+           "(INTERVAL or PERIOD) bounds\n"
+        << within_bounds->DebugString();
+  }
+
+  if (upper_bound->bound_kind() ==
+      ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING) {
+    VALIDATOR_RET_CHECK_FAIL()
+        << "Invalid WITHIN clause, represents empty WITHIN bound\n"
+        << within_bounds->DebugString();
+  }
+
+  switch (lower_bound->bound_kind()) {
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING: {
+      VALIDATOR_RET_CHECK_FAIL()
+          << "Invalid WITHIN clause, represents empty WITHIN bound\n"
+          << within_bounds->DebugString();
+    }
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING: {
+      switch (upper_bound->bound_kind()) {
+        case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+        case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+        case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+        case ResolvedWithinBoundExpr::TIMESTAMP:
+          return absl::OkStatus();
+        default:
+          VALIDATOR_RET_CHECK_FAIL()
+              << "Invalid WITHIN clause, represents empty WITHIN bound\n"
+              << within_bounds->DebugString();
+      }
+    }
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return absl::OkStatus();
+    case ResolvedWithinBoundExpr::NOT_SET:
+      VALIDATOR_RET_CHECK_FAIL() << "Within bound kind is not set";
+  }
+}
+
+absl::Status Validator::CheckUniqueColumnId(const ResolvedColumn& column) {
+  const bool inserted =
+      googlesql_base::InsertIfNotPresent(&column_ids_seen_, column.column_id());
+  VALIDATOR_RET_CHECK(inserted) << "Duplicate column id " << column.column_id()
+                                << " in column " << column.DebugString();
   return absl::OkStatus();
 }
 
@@ -3411,6 +3903,7 @@ absl::Status Validator::ValidateResolvedTVFScan(
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
   PushErrorContext push(this, resolved_tvf_scan);
 
+  VALIDATOR_RET_CHECK(resolved_tvf_scan->tvf() != nullptr);
   VALIDATOR_RET_CHECK(resolved_tvf_scan->signature() != nullptr);
   VALIDATOR_RET_CHECK(resolved_tvf_scan->function_call_signature() != nullptr);
   VALIDATOR_RET_CHECK_EQ(
@@ -3454,28 +3947,28 @@ absl::Status Validator::ValidateResolvedTVFScan(
       // once ResolvedFunctionCall supports more of these kinds.
       const SignatureArgumentKind kind = concrete_arg->kind();
       switch (kind) {
-        case ARG_TYPE_RELATION:
+        case ARG_KIND_RELATION:
           VALIDATOR_RET_CHECK(resolved_arg->scan() != nullptr);
           break;
-        case ARG_TYPE_MODEL:
+        case ARG_KIND_MODEL:
           VALIDATOR_RET_CHECK(resolved_arg->model() != nullptr);
           break;
-        case ARG_TYPE_CONNECTION:
+        case ARG_KIND_CONNECTION:
           VALIDATOR_RET_CHECK(resolved_arg->connection() != nullptr);
           break;
-        case ARG_TYPE_DESCRIPTOR:
+        case ARG_KIND_DESCRIPTOR:
           VALIDATOR_RET_CHECK(resolved_arg->descriptor_arg() != nullptr);
           break;
-        case ARG_TYPE_LAMBDA:
+        case ARG_KIND_LAMBDA:
           VALIDATOR_RET_CHECK(resolved_arg->inline_lambda() != nullptr);
           break;
-        case ARG_TYPE_SEQUENCE:
+        case ARG_KIND_SEQUENCE:
           VALIDATOR_RET_CHECK(resolved_arg->sequence() != nullptr);
           break;
-        case ARG_TYPE_GRAPH:
+        case ARG_KIND_GRAPH:
           VALIDATOR_RET_CHECK(resolved_arg->graph() != nullptr);
           break;
-        case ARG_TYPE_FIXED:
+        case ARG_KIND_EXPR_FIXED:
           // Descriptor argument types can resolve to be an integer offset so
           // we allow either an expr or a descriptor arg here.
           VALIDATOR_RET_CHECK(resolved_arg->expr() != nullptr ||
@@ -3497,11 +3990,10 @@ absl::Status Validator::ValidateResolvedTVFScan(
       // relation input schema is available. Table valued functions can have
       // templated argument types (e.g. ANY_TABLE) but those will not be
       // checked here.
-      if (!tvf->GetSignature(0)->argument(arg_idx).IsFixedRelation()) {
+      if (concrete_arg == nullptr || !concrete_arg->IsFixedRelation()) {
         continue;
       }
-      const FunctionArgumentTypeOptions& options =
-          tvf->GetSignature(0)->argument(arg_idx).options();
+      const FunctionArgumentTypeOptions& options = concrete_arg->options();
       const TVFRelation& required_input_schema =
           options.relation_input_schema();
 
@@ -3631,10 +4123,76 @@ absl::Status Validator::ValidateResolvedTVFScan(
       VALIDATOR_RET_CHECK_GE(tvf_schema_column_index, 0);
       VALIDATOR_RET_CHECK_LT(tvf_schema_column_index,
                              result_schema.num_columns());
+      const Type* scan_column_type =
+          resolved_tvf_scan->column_list(column_index).type();
+      const Type* schema_column_type =
+          result_schema.column(tvf_schema_column_index).type;
+      if (scan_column_type->IsMeasureType() &&
+          schema_column_type->IsMeasureType()) {
+        // Each MeasureType is unique (and not considered equal to other
+        // MeasureTypes, even if they have the same result type). Here we
+        // only need to validate the two MeasureTypes have the same result type.
+        VALIDATOR_RET_CHECK(
+            scan_column_type->AsMeasure()->result_type()->Equals(
+                schema_column_type->AsMeasure()->result_type()));
+      } else {
+        VALIDATOR_RET_CHECK(scan_column_type->Equals(schema_column_type));
+      }
+    }
+  }
+
+  // In a passthrough TVF, the output schema must contain all columns from the
+  // input relation, with matching names and types, in the same order. The
+  // result schema may contain additional columns not found in the input
+  // relation, but they must be added after the columns from the input
+  // relation. See (broken link) for more details.
+  if (resolved_tvf_scan->tvf()->IsPassthrough()) {
+    int relation_arg_idx = -1;
+    int num_relation_args = 0;
+    const std::vector<TVFInputArgumentType>& input_arguments =
+        resolved_tvf_scan->signature()->input_arguments();
+    for (int i = 0; i < input_arguments.size(); ++i) {
+      if (input_arguments[i].is_relation()) {
+        relation_arg_idx = i;
+        ++num_relation_args;
+      }
+    }
+    VALIDATOR_RET_CHECK_EQ(num_relation_args, 1)
+        << "Passthrough TVF signature must have exactly one relation argument";
+
+    const TVFRelation& input_relation_schema =
+        input_arguments[relation_arg_idx].relation();
+    const TVFRelation& output_relation_schema =
+        resolved_tvf_scan->signature()->result_schema();
+
+    VALIDATOR_RET_CHECK_GE(output_relation_schema.num_columns(),
+                           input_relation_schema.num_columns())
+        << "Passthrough TVF result schema has fewer columns than input "
+           "schema";
+
+    for (int i = 0; i < input_relation_schema.num_columns(); ++i) {
+      const TVFSchemaColumn& input_col = input_relation_schema.column(i);
+      const TVFSchemaColumn& output_col = output_relation_schema.column(i);
       VALIDATOR_RET_CHECK(
-          resolved_tvf_scan->column_list(column_index)
-              .type()
-              ->Equals(result_schema.column(tvf_schema_column_index).type));
+          googlesql_base::CaseEqual(output_col.name, input_col.name))
+          << "Passthrough TVF output column " << i
+          << " name does not match: " << output_col.name << " vs "
+          << input_col.name;
+      if (output_col.type->IsMeasureType() && input_col.type->IsMeasureType()) {
+        // Each MeasureType is unique (and not considered equal to other
+        // MeasureTypes, even if they have the same result type). Here we
+        // only need to validate the two MeasureTypes have the same result type.
+        VALIDATOR_RET_CHECK(output_col.type->AsMeasure()->result_type()->Equals(
+            input_col.type->AsMeasure()->result_type()))
+            << "Passthrough TVF output column " << i
+            << " type does not match: " << output_col.type->DebugString()
+            << " vs " << input_col.type->DebugString();
+      } else {
+        VALIDATOR_RET_CHECK(output_col.type->Equals(input_col.type))
+            << "Passthrough TVF output column " << i
+            << " type does not match: " << output_col.type->DebugString()
+            << " vs " << input_col.type->DebugString();
+      }
     }
   }
 
@@ -3656,6 +4214,9 @@ absl::Status Validator::ValidateResolvedTVFScan(
     googlesql_base::VarSetter<const ResolvedCreateTableFunctionStmt*>
         current_create_table_function_stmt_setter(
             &current_create_table_function_stmt_, nullptr);
+    PushTemplatedCall push_templated(
+        this, resolved_tvf_scan->tvf(), resolved_tvf_scan->signature().get(),
+        templated_tvf_signature->resolved_templated_query());
     GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedQueryStmt(
         templated_tvf_signature->resolved_templated_query()));
   }
@@ -3857,6 +4418,8 @@ void Validator::Reset(bool in_multi_stmt) {
   nested_recursive_scans_.clear();
   column_ids_seen_.clear();
   error_context_ = nullptr;
+  inner_templated_body_node_ = nullptr;
+  templated_call_stack_.clear();
   unconsumed_side_effect_columns_.clear();
   current_input_scan_in_graph_linear_scan_stack_.clear();
 
@@ -3890,6 +4453,10 @@ absl::Status Validator::ValidateResolvedStatementInternal(
   switch (statement->node_kind()) {
     case RESOLVED_QUERY_STMT:
       status = ValidateResolvedQueryStmt(statement->GetAs<ResolvedQueryStmt>());
+      break;
+    case RESOLVED_TERMINAL_QUERY_STMT:
+      status = ValidateResolvedTerminalQueryStmt(
+          statement->GetAs<ResolvedTerminalQueryStmt>());
       break;
     case RESOLVED_GENERALIZED_QUERY_STMT:
       in_generalized_query_stmt_ = true;
@@ -3946,6 +4513,10 @@ absl::Status Validator::ValidateResolvedStatementInternal(
     case RESOLVED_CREATE_VIEW_STMT:
       status = ValidateResolvedCreateViewStmt(
           statement->GetAs<ResolvedCreateViewStmt>());
+      break;
+    case RESOLVED_CREATE_LIVE_TABLE_STMT:
+      status = ValidateResolvedCreateLiveTableStmt(
+          statement->GetAs<ResolvedCreateLiveTableStmt>());
       break;
     case RESOLVED_CREATE_MATERIALIZED_VIEW_STMT:
       status = ValidateResolvedCreateMaterializedViewStmt(
@@ -4244,9 +4815,15 @@ absl::Status Validator::ValidateResolvedStatementInternal(
       // where the validator uses more stack than parsing/analysis (b/65294961).
       return status;
     }
+    const ResolvedNode* dump_node = (inner_templated_body_node_ != nullptr)
+                                        ? inner_templated_body_node_
+                                        : statement;
     return ::googlesql_base::InternalErrorBuilder()
            << "Resolved AST validation failed: " << status.message() << "\n"
-           << statement->DebugString(ResolvedNode::DebugStringConfig{
+           << (templated_call_stack_string_.empty()
+                   ? ""
+                   : absl::StrCat("\n", templated_call_stack_string_, "\n"))
+           << dump_node->DebugString(ResolvedNode::DebugStringConfig{
                   {{error_context_, "(validation failed here)"}}, false});
   }
   return absl::OkStatus();
@@ -4289,8 +4866,9 @@ absl::Status Validator::ValidateResolvedIndexStmt(
     }
   }
 
-  // is_search and is_vector are mutually exclusive.
-  VALIDATOR_RET_CHECK(!stmt->is_search() || !stmt->is_vector());
+  // is_search, is_vector and is_ai are mutually exclusive.
+  VALIDATOR_RET_CHECK((stmt->is_search() + stmt->is_vector() + stmt->is_ai()) <=
+                      1);
 
   GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedComputedColumnList(
       visible_columns,
@@ -4305,6 +4883,12 @@ absl::Status Validator::ValidateResolvedIndexStmt(
     for (const auto& item : stmt->index_item_list()) {
       VALIDATOR_RET_CHECK(!item->option_list().empty());
     }
+  }
+
+  if (stmt->index_auto_columns()) {
+    VALIDATOR_RET_CHECK(stmt->is_ai());
+    // When AUTO COLUMNS is used, the index_item_list is empty.
+    VALIDATOR_RET_CHECK(stmt->index_item_list().empty());
   }
 
   for (const auto& item : stmt->index_item_list()) {
@@ -4451,8 +5035,8 @@ absl::Status Validator::ValidateColumnDefinitions(
           ValidateColumnAnnotations(column_definition->annotations()));
       GOOGLESQL_ASSIGN_OR_RETURN(TypeParameters full_type_parameters,
                        column_definition->GetFullTypeParameters());
-      GOOGLESQL_RETURN_IF_ERROR(column_definition->type()->ValidateResolvedTypeParameters(
-          full_type_parameters, language_options_.product_mode()));
+      GOOGLESQL_RETURN_IF_ERROR(ValidateTypeParametersOfResolvedType(
+          column_definition->type(), full_type_parameters));
     }
     VALIDATOR_RET_CHECK(column_definition->type() != nullptr);
     if (column_definition->generated_column_info() != nullptr) {
@@ -4901,6 +5485,60 @@ absl::Status Validator::ValidateResolvedCreateViewStmt(
   return ValidateResolvedCreateViewBase(stmt);
 }
 
+absl::Status Validator::ValidateResolvedCreateLiveTableStmt(
+    const ResolvedCreateLiveTableStmt* stmt) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  PushErrorContext push(this, stmt);
+  std::set<ResolvedColumn> visible_columns;
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedCreateTableStmtBase(stmt, &visible_columns));
+  GOOGLESQL_RETURN_IF_ERROR(
+      ValidateResolvedScan(stmt->query(), /*visible_parameters=*/{}));
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedOutputColumnList(stmt->query()->column_list(),
+                                                   stmt->output_column_list(),
+                                                   stmt->is_value_table()));
+
+  const int num_columns = stmt->column_definition_list_size();
+  if (num_columns != stmt->output_column_list_size()) {
+    return InternalErrorBuilder()
+           << "Inconsistent length between column definition list ("
+           << stmt->column_definition_list_size()
+           << ") and output column list (" << stmt->output_column_list_size()
+           << ")";
+  }
+  for (int i = 0; i < num_columns; ++i) {
+    const ResolvedOutputColumn* output_column = stmt->output_column_list(i);
+    const ResolvedColumnDefinition* column_def =
+        stmt->column_definition_list(i);
+    const std::string& output_column_name = output_column->name();
+    const std::string& column_def_name = column_def->name();
+    if (output_column_name != column_def_name) {
+      return InternalErrorBuilder()
+             << "Output column name '" << output_column_name
+             << "' is different from column definition name '"
+             << column_def_name << "' for column " << (i + 1);
+    }
+    const Type* output_type = output_column->column().type();
+    const Type* defined_type = column_def->type();
+    if (!output_type->Equals(defined_type)) {
+      return InternalErrorBuilder()
+             << "Output column type " << output_type->DebugString()
+             << " is different from column definition type "
+             << defined_type->DebugString() << " for column " << (i + 1) << " ("
+             << column_def_name << ")";
+    }
+  }
+
+  for (const auto& partition_by_expr : stmt->partition_by_list()) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(
+        visible_columns, /*visible_parameters=*/{}, partition_by_expr.get()));
+  }
+  for (const auto& cluster_by_expr : stmt->cluster_by_list()) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(
+        visible_columns, /*visible_parameters=*/{}, cluster_by_expr.get()));
+  }
+  return absl::OkStatus();
+}
+
 absl::Status Validator::ValidateResolvedCreateMaterializedViewStmt(
     const ResolvedCreateMaterializedViewStmt* stmt) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
@@ -5118,9 +5756,10 @@ absl::Status Validator::CheckFunctionArgumentType(
     absl::string_view statement_type) {
   for (const FunctionArgumentType& arg_type : argument_type_list) {
     switch (arg_type.kind()) {
-      case ARG_TYPE_FIXED:
-      case ARG_TYPE_ARBITRARY:
-      case ARG_TYPE_RELATION:
+      case ARG_KIND_EXPR_FIXED:
+      case ARG_KIND_EXPR_ARBITRARY:
+      case ARG_KIND_RELATION:
+      case ARG_KIND_EXPR_STRING_ANY:
         continue;
       default:
         VALIDATOR_RET_CHECK_FAIL()
@@ -5610,6 +6249,24 @@ absl::Status Validator::ValidateResolvedQueryStmt(
   return absl::OkStatus();
 }
 
+absl::Status Validator::ValidateResolvedTerminalQueryStmt(
+    const ResolvedTerminalQueryStmt* stmt) {
+  VALIDATOR_RET_CHECK_NE(stmt, nullptr);
+  PushErrorContext push(this, stmt);
+  VALIDATOR_RET_CHECK_NE(stmt->query(), nullptr);
+  GOOGLESQL_RETURN_IF_ERROR(
+      ValidateResolvedScan(stmt->query(), /*visible_parameters=*/{}));
+
+  const ResolvedScan* scan = stmt->query();
+  while (scan != nullptr && scan->Is<ResolvedWithScan>()) {
+    scan = scan->GetAs<ResolvedWithScan>()->query();
+  }
+  VALIDATOR_RET_CHECK(scan != nullptr && scan->Is<ResolvedFinishScan>())
+      << "ResolvedTerminalQueryStmt must end with a ResolvedFinishScan";
+
+  return absl::OkStatus();
+}
+
 absl::Status Validator::ValidateResolvedGeneralizedQueryStmt(
     const ResolvedGeneralizedQueryStmt* query) {
   VALIDATOR_RET_CHECK(nullptr != query);
@@ -5856,6 +6513,14 @@ absl::Status Validator::ValidateResolvedScan(
       scan_subtype_status = ValidateResolvedGraphCallScan(
           scan->GetAs<ResolvedGraphCallScan>(), visible_parameters);
       break;
+    case RESOLVED_GRAPH_INSERT_SCAN:
+      scan_subtype_status = ValidateResolvedGraphInsertScan(
+          scan->GetAs<ResolvedGraphInsertScan>(), visible_parameters);
+      break;
+    case RESOLVED_FINISH_SCAN:
+      scan_subtype_status = ValidateResolvedFinishScan(
+          scan->GetAs<ResolvedFinishScan>(), visible_parameters);
+      break;
     case RESOLVED_DESCRIBE_SCAN:
       scan_subtype_status = ValidateResolvedDescribeScan(
           scan->GetAs<ResolvedDescribeScan>(), visible_parameters);
@@ -5907,6 +6572,10 @@ absl::Status Validator::ValidateResolvedScan(
     case RESOLVED_UNSET_ARGUMENT_SCAN:
       return absl::InternalError(
           "UnsetArgumentScan is only allowed as an argument to a TVFScan");
+    case RESOLVED_ALIGN_SCAN:
+      scan_subtype_status = ValidateResolvedAlignScan(
+          scan->GetAs<ResolvedAlignScan>(), visible_parameters);
+      break;
     default:
       return InternalErrorBuilder()
              << "Unhandled node kind: " << scan->node_kind_string()
@@ -6100,11 +6769,6 @@ absl::Status Validator::ValidateGroupRowsScan(
   VALIDATOR_RET_CHECK_NE(nullptr, scan);
   PushErrorContext push(this, scan);
 
-  // A group rows scan can only appear in a group rows subquery associated with
-  // an aggregate function and scan, so the input columns must be set.
-  VALIDATOR_RET_CHECK(input_columns_for_group_rows_.has_value());
-  VALIDATOR_RET_CHECK(!input_columns_for_group_rows_.value().empty());
-
   // Validate that columns defined in GROUP_ROWS() are all column references
   // pointing to some columns that are actually available from the input of
   // aggregation scan where WITH GROUP ROWS was used.
@@ -6114,9 +6778,12 @@ absl::Status Validator::ValidateGroupRowsScan(
     GOOGLESQL_RETURN_IF_ERROR(CheckUniqueColumnId(column->column()));
     resolved_columns.insert(column->column());
     VALIDATOR_RET_CHECK(column->expr()->Is<ResolvedColumnRef>());
+    VALIDATOR_RET_CHECK(
+        !column->expr()->GetAs<ResolvedColumnRef>()->is_correlated());
+    // Validate group rows columns are visible as aggregation input columns.
     const ResolvedColumnRef* ref = column->expr()->GetAs<ResolvedColumnRef>();
     VALIDATOR_RET_CHECK(
-        googlesql_base::ContainsKey(input_columns_for_group_rows_.value(), ref->column()));
+        googlesql_base::ContainsKey(input_columns_for_group_rows_, ref->column()));
   }
 
   // Validate that all columns produced by GROUP_ROWS() scan are in fact defined
@@ -6124,7 +6791,6 @@ absl::Status Validator::ValidateGroupRowsScan(
   for (const ResolvedColumn& column : scan->column_list()) {
     VALIDATOR_RET_CHECK(resolved_columns.contains(column));
   }
-
   return absl::OkStatus();
 }
 
@@ -6142,13 +6808,20 @@ absl::Status Validator::ValidateHintList(
 }
 
 absl::Status Validator::ValidateOptionsList(
-    absl::Span<const std::unique_ptr<const ResolvedOption>> hint_list) {
-  for (const std::unique_ptr<const ResolvedOption>& hint : hint_list) {
-    // The value in a Hint must be a constant so we don't pass any visible
+    absl::Span<const std::unique_ptr<const ResolvedOption>> option_list) {
+  for (const std::unique_ptr<const ResolvedOption>& option : option_list) {
+    // The value in an Option must be a constant so we don't pass any visible
     // column names.
-    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr({}, {}, hint->value()));
-    hint->name();  // Mark field as visited without checking it.
-    VALIDATOR_RET_CHECK(hint->qualifier().empty())
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr({}, {}, option->value()));
+    if (option->assignment_op() == ResolvedOptionEnums::FROM) {
+      VALIDATOR_RET_CHECK(language_options_.LanguageFeatureEnabled(
+          FEATURE_OPTIONS_FROM_STRUCT));
+      VALIDATOR_RET_CHECK(option->name().empty());
+      VALIDATOR_RET_CHECK(option->value()->type()->IsStruct());
+    } else {
+      VALIDATOR_RET_CHECK(!option->name().empty());
+    }
+    VALIDATOR_RET_CHECK(option->qualifier().empty())
         << "Qualifiers should not exist in options (only hints)\n";
   }
 
@@ -7162,6 +7835,10 @@ absl::Status Validator::ValidateResolvedFunctionArgument(
     GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedInlineLambda(
         visible_columns, visible_parameters, resolved_arg->inline_lambda()));
   }
+  if (resolved_arg->function_ref() != nullptr) {
+    ++fields_set;
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedFunctionRef(resolved_arg->function_ref()));
+  }
   if (resolved_arg->graph() != nullptr) {
     ++fields_set;
     resolved_arg->graph();  // Mark field as visited.
@@ -7200,7 +7877,7 @@ absl::Status Validator::ValidateRelationSchemaInResolvedFunctionArgument(
          ++col_idx) {
       VALIDATOR_RET_CHECK(input_relation.column(col_idx).type->Equals(
           required_input_schema.column(col_idx).type))
-          << "col_idx" << col_idx << " input_type: "
+          << "col_idx: " << col_idx << " input_type: "
           << input_relation.column(col_idx).type->DebugString(true)
           << " required_type: "
           << required_input_schema.column(col_idx).type->DebugString(true);
@@ -7214,6 +7891,11 @@ absl::Status Validator::ValidateRelationSchemaInResolvedFunctionArgument(
           << required_input_schema.column(col_idx).name;
       VALIDATOR_RET_CHECK(input_relation.column(col_idx).type->Equals(
           resolved_arg->argument_column_list(col_idx).type()));
+
+      VALIDATOR_RET_CHECK(
+          !input_relation.column(col_idx).type_modifiers.has_value() ||
+          input_relation.column(col_idx).type_modifiers->IsEmpty())
+          << "input relation column must not have type modifiers";
     }
   }
   return absl::OkStatus();
@@ -7378,9 +8060,8 @@ absl::Status Validator::ValidateResolvedAlterAction(
             ValidateColumnAnnotations(column_definition->annotations()));
         GOOGLESQL_ASSIGN_OR_RETURN(TypeParameters full_type_parameters,
                          column_definition->GetFullTypeParameters());
-        GOOGLESQL_RETURN_IF_ERROR(
-            column_definition->type()->ValidateResolvedTypeParameters(
-                full_type_parameters, language_options_.product_mode()));
+        GOOGLESQL_RETURN_IF_ERROR(ValidateTypeParametersOfResolvedType(
+            column_definition->type(), full_type_parameters));
       }
       VALIDATOR_RET_CHECK(column_definition->type() != nullptr);
       VALIDATOR_RET_CHECK(!column_definition->name().empty());
@@ -7489,10 +8170,9 @@ absl::Status Validator::ValidateResolvedAlterAction(
           action->GetAs<ResolvedAlterColumnSetDataTypeAction>();
       VALIDATOR_RET_CHECK(!set_data_type->column().empty());
       VALIDATOR_RET_CHECK(set_data_type->updated_type() != nullptr);
-      GOOGLESQL_RETURN_IF_ERROR(
-          set_data_type->updated_type()->ValidateResolvedTypeParameters(
-              set_data_type->updated_type_parameters(),
-              language_options_.product_mode()));
+      GOOGLESQL_RETURN_IF_ERROR(ValidateTypeParametersOfResolvedType(
+          set_data_type->updated_type(),
+          set_data_type->updated_type_parameters()));
       if (set_data_type->updated_annotations() != nullptr) {
         VALIDATOR_RET_CHECK(set_data_type->updated_annotations());
         // Validate collation annotations if exist.
@@ -7846,9 +8526,6 @@ absl::Status Validator::ValidateResolvedMatchRecognizeScan(
       ResolvedMatchRecognizeScanEnums::AFTER_MATCH_SKIP_MODE_UNSPECIFIED)
       << "After match skip mode must be specified";
 
-  VALIDATOR_RET_CHECK(!match_recognize_state_.has_value())
-      << "Nested MATCH_RECOGNIZE clause";
-
   VALIDATOR_RET_CHECK(scan->match_number_column().IsInitialized());
   VALIDATOR_RET_CHECK(scan->match_row_number_column().IsInitialized());
   VALIDATOR_RET_CHECK(scan->classifier_column().IsInitialized());
@@ -7976,6 +8653,15 @@ absl::Status Validator::ValidateResolvedPivotScan(
     VALIDATOR_RET_CHECK(
         googlesql_base::InsertIfNotPresent(&output_columns_created, column->column()))
         << "Output column appears multiple times in group-by/pivot lists";
+  }
+
+  if (language_options_.LanguageFeatureEnabled(FEATURE_COLLATION_SUPPORT)) {
+    if (!scan->pivot_value_collation().Empty()) {
+      VALIDATOR_RET_CHECK(scan->pivot_value_collation().HasCompatibleStructure(
+          scan->for_expr()->type()));
+    }
+  } else {
+    VALIDATOR_RET_CHECK(scan->pivot_value_collation().Empty());
   }
 
   // Validate pivot columns.
@@ -8284,6 +8970,21 @@ absl::Status Validator::ValidateResolvedPipeIfScan(
   return absl::OkStatus();
 }
 
+absl::Status Validator::ValidateResolvedFinishScan(
+    const ResolvedFinishScan* scan,
+    const std::set<ResolvedColumn>& visible_parameters) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  PushErrorContext push(this, scan);
+
+  VALIDATOR_RET_CHECK_NE(scan->input_scan(), nullptr);
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedScan(scan->input_scan(), visible_parameters));
+
+  VALIDATOR_RET_CHECK(scan->column_list().empty())
+      << "ResolvedFinishScan must not emit columns";
+
+  return absl::OkStatus();
+}
+
 absl::Status Validator::ValidateResolvedPipeForkScan(
     const ResolvedPipeForkScan* scan,
     const std::set<ResolvedColumn>& visible_parameters) {
@@ -8538,7 +9239,28 @@ std::string Validator::RecordContext() {
   if (!context_stack_.empty()) {
     error_context_ = context_stack_.back();
   }
+  if (!templated_call_stack_.empty()) {
+    inner_templated_body_node_ = templated_call_stack_.back().body_node;
+    templated_call_stack_string_ = FormatTemplatedCallStack();
+  }
   return "";
+}
+
+std::string Validator::FormatTemplatedCallStack() const {
+  std::string result = "Templated call stack:\n";
+  for (const auto& call_info : templated_call_stack_) {
+    std::string name;
+    std::string signature_string;
+    if (call_info.function != nullptr) {
+      name = call_info.function->FullName();
+      signature_string = call_info.function_signature->DebugString();
+    } else if (call_info.tvf != nullptr) {
+      name = call_info.tvf->FullName();
+      signature_string = call_info.tvf_signature->DebugString();
+    }
+    absl::StrAppend(&result, "  ", name, "(", signature_string, ")\n");
+  }
+  return result;
 }
 
 absl::Status Validator::ValidateBoolExpr(
@@ -8565,7 +9287,7 @@ absl::Status Validator::ValidateResolvedCreatePropertyGraphStmt(
     const ResolvedCreatePropertyGraphStmt* stmt) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
   PushErrorContext push(this, stmt);
-  ABSL_CHECK(stmt != nullptr);  // Crash OK
+  VALIDATOR_RET_CHECK(stmt != nullptr);
   VALIDATOR_RET_CHECK(!stmt->name_path().empty());
   GOOGLESQL_RETURN_IF_ERROR(ValidateOptionsList(stmt->option_list()));
 
@@ -8573,7 +9295,7 @@ absl::Status Validator::ValidateResolvedCreatePropertyGraphStmt(
   for (const std::unique_ptr<const ResolvedGraphPropertyDeclaration>&
            property_dcl : stmt->property_declaration_list()) {
     VALIDATOR_RET_CHECK(!property_dcl->name().empty());
-    ABSL_CHECK(property_dcl->type() != nullptr);  // Crash OK
+    VALIDATOR_RET_CHECK(property_dcl->type() != nullptr);
     VALIDATOR_RET_CHECK(
         property_dcl_name_map
             .insert({property_dcl->name(),
@@ -8843,16 +9565,20 @@ absl::Status Validator::ValidateGraphReturnOperator(const ResolvedScan* scan) {
   VALIDATOR_RET_CHECK(curr_scan->Is<ResolvedProjectScan>() ||
                       curr_scan->Is<ResolvedAggregateScan>() ||
                       curr_scan->Is<ResolvedOrderByScan>() ||
-                      curr_scan->Is<ResolvedLimitOffsetScan>());
+                      curr_scan->Is<ResolvedLimitOffsetScan>() ||
+                      curr_scan->Is<ResolvedFinishScan>());
   // Check that the resolved RETURN consists of nested ResolvedAggregateScan
   // and ResolvedProjectScan, the innermost scan should contain an
   // input scan that is either a GraphRefScan or SingleRowScan.
   while (curr_scan->Is<ResolvedAggregateScan>() ||
-         curr_scan->Is<ResolvedProjectScan>()) {
+         curr_scan->Is<ResolvedProjectScan>() ||
+         curr_scan->Is<ResolvedFinishScan>()) {
     if (curr_scan->Is<ResolvedAggregateScan>()) {
       curr_scan = curr_scan->GetAs<ResolvedAggregateScan>()->input_scan();
     } else if (curr_scan->Is<ResolvedProjectScan>()) {
       curr_scan = curr_scan->GetAs<ResolvedProjectScan>()->input_scan();
+    } else if (curr_scan->Is<ResolvedFinishScan>()) {
+      curr_scan = curr_scan->GetAs<ResolvedFinishScan>()->input_scan();
     }
   }
   VALIDATOR_RET_CHECK_NE(curr_scan, nullptr);
@@ -8860,7 +9586,8 @@ absl::Status Validator::ValidateGraphReturnOperator(const ResolvedScan* scan) {
                       curr_scan->Is<ResolvedGraphRefScan>() ||
                       curr_scan->Is<ResolvedOrderByScan>() ||
                       curr_scan->Is<ResolvedLimitOffsetScan>() ||
-                      curr_scan->Is<ResolvedAnalyticScan>());
+                      curr_scan->Is<ResolvedAnalyticScan>() ||
+                      curr_scan->Is<ResolvedGraphInsertScan>());
   return absl::OkStatus();
 }
 
@@ -8907,6 +9634,10 @@ absl::Status Validator::ValidateInnerGraphLinearScanStructure(
         case RESOLVED_LIMIT_OFFSET_SCAN:
           input_scan =
               primitive_ops[i]->GetAs<ResolvedLimitOffsetScan>()->input_scan();
+          break;
+        case RESOLVED_FINISH_SCAN:
+          input_scan =
+              primitive_ops[i]->GetAs<ResolvedFinishScan>()->input_scan();
           break;
         default:
           VALIDATOR_RET_CHECK_FAIL();
@@ -8968,6 +9699,10 @@ absl::Status Validator::ValidateInnerGraphLinearScanStructure(
             }
           }
           break;
+        case RESOLVED_GRAPH_INSERT_SCAN:
+          input_scan =
+              primitive_ops[i]->GetAs<ResolvedGraphInsertScan>()->input_scan();
+          break;
         default:
           VALIDATOR_RET_CHECK_FAIL();
           break;
@@ -9017,7 +9752,6 @@ absl::Status Validator::ValidateResolvedGraphTableScan(
   std::set<ResolvedColumn> visible_columns;
   GOOGLESQL_RETURN_IF_ERROR(
       AddColumnList(scan->input_scan()->column_list(), &visible_columns));
-  VALIDATOR_RET_CHECK(!visible_columns.empty());
   GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedComputedColumnList(
       visible_columns, visible_parameters, scan->shape_expr_list()));
   GOOGLESQL_RETURN_IF_ERROR(AddColumnsFromComputedColumnList(scan->shape_expr_list(),
@@ -9032,6 +9766,211 @@ absl::Status Validator::ValidateResolvedGraphTableScan(
       VALIDATOR_RET_CHECK(!TypeIsOrContainsGraphElement(column.type()));
     }
   }
+  return absl::OkStatus();
+}
+
+absl::Status Validator::ValidateResolvedGraphDMLPropertyItem(
+    const std::set<ResolvedColumn>& visible_columns,
+    const std::set<ResolvedColumn>& visible_parameters,
+    const ResolvedGraphDMLPropertyItem* node) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  PushErrorContext push(this, node);
+  VALIDATOR_RET_CHECK(!node->property_name().empty());
+  VALIDATOR_RET_CHECK_NE(node->property_value(), nullptr);
+  if (node->property() != nullptr) {
+    VALIDATOR_RET_CHECK(
+        node->property()->Type()->Equals(node->property_value()->type()))
+        << "Property type mismatch for " << node->property_name()
+        << ": expected " << node->property()->Type()->DebugString()
+        << " but found " << node->property_value()->type()->DebugString();
+    VALIDATOR_RET_CHECK(
+        googlesql_base::CaseEqual(node->property()->Name(), node->property_name()))
+        << "Property name mismatch: catalog object says "
+        << node->property()->Name() << " but field says "
+        << node->property_name();
+  }
+  return ValidateResolvedExpr(visible_columns, visible_parameters,
+                              node->property_value());
+}
+
+absl::Status Validator::ValidateEdgeEndpointProperties(
+    const GraphElementType* endpoint_element_type,
+    const GraphNodeTable* expected_node_table,
+    absl::string_view endpoint_type) {
+  for (const auto& prop : endpoint_element_type->property_types()) {
+    const GraphPropertyDefinition* found_prop = nullptr;
+    VALIDATOR_RET_CHECK_OK(expected_node_table->FindPropertyDefinitionByName(
+        prop.name, found_prop))
+        << "Property " << prop.name << " from " << endpoint_type
+        << "_node not found in expected " << endpoint_type << " table "
+        << expected_node_table->Name();
+
+    VALIDATOR_RET_CHECK(
+        found_prop->GetDeclaration().Type()->Equals(prop.value_type))
+        << "Property type mismatch for " << prop.name << " in expected "
+        << endpoint_type << " table " << expected_node_table->Name();
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Validator::ValidateResolvedGraphInsertElement(
+    const std::set<ResolvedColumn>& visible_columns,
+    const std::set<ResolvedColumn>& visible_parameters,
+    const ResolvedGraphInsertElement* node) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  PushErrorContext push(this, node);
+  VALIDATOR_RET_CHECK(!node->label_list().empty())
+      << "INSERT element must have at least one label";
+  for (const auto& label : node->label_list()) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedGraphLabel(label.get()));
+    if (label->label() != nullptr) {
+      const GraphElementLabel* found_label = nullptr;
+      VALIDATOR_RET_CHECK_OK(node->element_table()->FindLabelByName(
+          label->label()->Name(), found_label))
+          << "Label " << label->label()->Name() << " not found in table "
+          << node->element_table()->Name();
+    }
+  }
+  for (const auto& property : node->property_list()) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedGraphDMLPropertyItem(
+        visible_columns, visible_parameters, property.get()));
+    if (property->property() != nullptr) {
+      const GraphPropertyDefinition* found_property = nullptr;
+      VALIDATOR_RET_CHECK_OK(
+          node->element_table()->FindPropertyDefinitionByName(
+              property->property_name(), found_property))
+          << "Property " << property->property_name() << " not found in table "
+          << node->element_table()->Name();
+    } else {
+      VALIDATOR_RET_CHECK(node->element_table()->HasDynamicProperties())
+          << "Dynamic property " << property->property_name()
+          << " specified on table " << node->element_table()->Name()
+          << " which does not support dynamic properties";
+    }
+  }
+  VALIDATOR_RET_CHECK(node->type()->IsGraphElement());
+  bool is_edge = node->type()->AsGraphElement()->IsEdge();
+  if (is_edge) {
+    VALIDATOR_RET_CHECK(node->element_table()->kind() ==
+                        GraphElementTable::Kind::kEdge)
+        << "Edge element must be inserted into an edge table";
+    VALIDATOR_RET_CHECK_NE(node->source_node(), nullptr);
+    VALIDATOR_RET_CHECK_NE(node->dest_node(), nullptr);
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(visible_columns, visible_parameters,
+                                         node->source_node()));
+    GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedExpr(visible_columns, visible_parameters,
+                                         node->dest_node()));
+    VALIDATOR_RET_CHECK(node->source_node()->column().type()->IsGraphElement());
+    VALIDATOR_RET_CHECK(
+        node->source_node()->column().type()->AsGraphElement()->IsNode())
+        << "Source node must be a node type column";
+    VALIDATOR_RET_CHECK(node->dest_node()->column().type()->IsGraphElement());
+    VALIDATOR_RET_CHECK(
+        node->dest_node()->column().type()->AsGraphElement()->IsNode())
+        << "Destination node must be a node type column";
+
+    // Edge endpoint consistency
+    const GraphEdgeTable* edge_table = node->element_table()->AsEdgeTable();
+    VALIDATOR_RET_CHECK_NE(edge_table, nullptr);
+    const GraphNodeTable* expected_source_node_table =
+        edge_table->GetSourceNodeTable()->GetReferencedNodeTable();
+    const GraphNodeTable* expected_dest_node_table =
+        edge_table->GetDestNodeTable()->GetReferencedNodeTable();
+
+    const GraphElementType* source_element_type =
+        node->source_node()->column().type()->AsGraphElement();
+    const GraphElementType* dest_element_type =
+        node->dest_node()->column().type()->AsGraphElement();
+
+    GOOGLESQL_RETURN_IF_ERROR(ValidateEdgeEndpointProperties(
+        source_element_type, expected_source_node_table, "source"));
+    GOOGLESQL_RETURN_IF_ERROR(ValidateEdgeEndpointProperties(
+        dest_element_type, expected_dest_node_table, "dest"));
+
+  } else {
+    VALIDATOR_RET_CHECK(node->element_table()->kind() ==
+                        GraphElementTable::Kind::kNode)
+        << "Node element must be inserted into a node table";
+    VALIDATOR_RET_CHECK_EQ(node->source_node(), nullptr)
+        << "source_node and dest_node must only be set for edge elements";
+    VALIDATOR_RET_CHECK_EQ(node->dest_node(), nullptr)
+        << "source_node and dest_node must only be set for edge elements";
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Validator::ValidateResolvedGraphInsertScan(
+    const ResolvedGraphInsertScan* scan,
+    const std::set<ResolvedColumn>& visible_parameters) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  PushErrorContext push(this, scan);
+  VALIDATOR_RET_CHECK_NE(scan->input_scan(), nullptr);
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedScan(scan->input_scan(), visible_parameters));
+
+  // Only columns in `input_scan` are visible to `insert_node_list`.
+  std::set<ResolvedColumn> visible_columns;
+  GOOGLESQL_RETURN_IF_ERROR(
+      AddColumnList(scan->input_scan()->column_list(), &visible_columns));
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedComputedColumnList(
+      visible_columns, visible_parameters, scan->insert_node_list()));
+
+  // Validate that inserted nodes are all node type.
+  for (const auto& node : scan->insert_node_list()) {
+    VALIDATOR_RET_CHECK(node->column().type()->IsGraphElement())
+        << "Insert node list must contain graph node type column only";
+    VALIDATOR_RET_CHECK(node->column().type()->AsGraphElement()->IsNode())
+        << "Insert node list must contain graph node type column only";
+  }
+
+  // Columns in both `input_scan` and `insert_node_list` are visible to
+  // `insert_edge_list`.
+  std::set<ResolvedColumn> visible_columns_for_edges = visible_columns;
+  GOOGLESQL_RETURN_IF_ERROR(AddColumnsFromComputedColumnList(scan->insert_node_list(),
+                                                   &visible_columns_for_edges));
+  GOOGLESQL_RETURN_IF_ERROR(ValidateResolvedComputedColumnList(
+      visible_columns_for_edges, visible_parameters, scan->insert_edge_list()));
+
+  // Validate that inserted edges are all edge type.
+  for (const auto& edge : scan->insert_edge_list()) {
+    VALIDATOR_RET_CHECK(edge->column().type()->IsGraphElement())
+        << "Insert edge list must contain graph edge type column only";
+    VALIDATOR_RET_CHECK(edge->column().type()->AsGraphElement()->IsEdge())
+        << "Insert edge list must contain graph edge type column only";
+  }
+
+  // Columns from `input_scan`, `insert_node_list` and `insert_edge_list` are
+  // all visible to `path_element_list`.
+  // TODO: b/483141502 - Allow referencing external scope (e.g., correlated
+  // columns) in the future.
+  std::set<ResolvedColumn> all_available_columns = visible_columns_for_edges;
+  GOOGLESQL_RETURN_IF_ERROR(AddColumnsFromComputedColumnList(scan->insert_edge_list(),
+                                                   &all_available_columns));
+  for (int i = 0; i < scan->path_element_list_size(); ++i) {
+    const ResolvedColumn& cur_col = scan->path_element_list(i);
+    GOOGLESQL_RETURN_IF_ERROR(
+        CheckColumnIsPresentInColumnSet(cur_col, all_available_columns));
+    VALIDATOR_RET_CHECK(cur_col.type()->IsGraphElement())
+        << "Path element must be a graph node or edge, but found type: "
+        << cur_col.type()->DebugString();
+    if (i == 0 || i == scan->path_element_list_size() - 1) {
+      VALIDATOR_RET_CHECK(cur_col.type()->AsGraphElement()->IsNode())
+          << "Path element list must start and end with nodes, but found an "
+             "edge";
+    }
+    if (cur_col.type()->AsGraphElement()->IsEdge()) {
+      const ResolvedColumn& prev_col = scan->path_element_list(i - 1);
+      const ResolvedColumn& next_col = scan->path_element_list(i + 1);
+      VALIDATOR_RET_CHECK(prev_col.type()->AsGraphElement()->IsNode() &&
+                          next_col.type()->AsGraphElement()->IsNode())
+          << "Edge must be positioned between two nodes in the path element "
+             "list, but found consecutive edges: "
+          << prev_col.DebugString() << ", " << cur_col.DebugString() << ", "
+          << next_col.DebugString();
+    }
+  }
+
+  // Validate output columns of the current scan.
+  GOOGLESQL_RETURN_IF_ERROR(CheckColumnList(scan, all_available_columns));
   return absl::OkStatus();
 }
 
@@ -9736,6 +10675,26 @@ absl::Status Validator::ValidateResolvedCreateSequenceStmt(
   VALIDATOR_RET_CHECK(!stmt->name_path().empty());
   GOOGLESQL_RETURN_IF_ERROR(ValidateOptionsList(stmt->option_list()));
   return absl::OkStatus();
+}
+
+absl::Status Validator::ValidateTypeParametersOfResolvedType(
+    const Type* type, const TypeParameters& type_parameters) {
+  if (type_parameters.IsEmpty()) {
+    return absl::OkStatus();
+  }
+  // TODO: Design a sustainable way to delegate type parameter
+  // validation for declarative types.
+  // TODO: Use a TypeVisitor to delegate type parameter validation.
+  if (type->AsDeclarativeType() != nullptr &&
+      type->AsDeclarativeType()->IsGoogleSQLBuiltin("VECTOR")) {
+    const VectorTypeParametersProto* vector_params =
+        type_parameters.vector_type_parameters();
+    VALIDATOR_RET_CHECK(vector_params != nullptr);
+    VALIDATOR_RET_CHECK_GT(vector_params->length(), 0);
+    return absl::OkStatus();
+  }
+  return type->ValidateResolvedTypeParameters(type_parameters,
+                                              language_options_.product_mode());
 }
 
 }  // namespace googlesql

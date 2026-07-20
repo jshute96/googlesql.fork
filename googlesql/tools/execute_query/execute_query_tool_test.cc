@@ -274,7 +274,7 @@ TEST(SetFoldLiteralCastFromFlags, FoldLiteralCast) {
 
 TEST(SetParseLocationRecordTypeFromFlags, ParseLocationRecordType) {
   absl::FlagSaver fs;
-  auto CheckFlag = [](const std::string& flag_value,
+  auto CheckFlag = [](absl::string_view flag_value,
                       ParseLocationRecordType expected_value) {
     absl::SetFlag(&FLAGS_parse_location_record_type, flag_value);
     ExecuteQueryConfig config;
@@ -749,6 +749,31 @@ TEST(ExecuteQuery, ExecuteQueryStateful) {
 ├────┼────┤
 │ 20 │ 60 │
 └────┴────┘
+
+)");
+}
+
+TEST(ExecuteQuery, TVFCallPrunedColumns) {
+  absl::FlagSaver fs;
+  ExecuteQueryConfig config;
+  config.mutable_analyzer_options().set_prune_unused_columns(true);
+  GOOGLESQL_ASSERT_OK(InitializeExecuteQueryConfig(config));
+  config.clear_tool_modes();
+  config.add_tool_mode(ToolMode::kExecute);
+
+  std::ostringstream output;
+  GOOGLESQL_EXPECT_OK(ExecuteQuery(
+      "CREATE TEMP TABLE FUNCTION tvf() AS (SELECT 1 AS a, 2 AS b);", config,
+      output));
+  EXPECT_EQ(output.str(), "TVF registered.\n");
+
+  output.str("");
+  GOOGLESQL_EXPECT_OK(ExecuteQuery("SELECT a FROM tvf();", config, output));
+  EXPECT_EQ(output.str(), R"(┌───┐
+│ a │
+├───┤
+│ 1 │
+└───┘
 
 )");
 }

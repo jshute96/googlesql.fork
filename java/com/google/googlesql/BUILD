@@ -28,6 +28,8 @@ package(
 
 TYPES_SRCS = [
     "ArrayType.java",
+    "DeclarativeType.java",
+    "DeclarativeTypeDescriptor.java",
     "BuiltinDescriptorPool.java",
     "CivilTimeEncoder.java",
     "EnumType.java",
@@ -74,6 +76,7 @@ BUILTIN_PROTO_DEPS = [
     "//googlesql/public:type_proto_java_proto",
     "//googlesql/public:value_java_proto",
     "//googlesql/proto:function_java_proto",
+    "//googlesql/proto:kmeans_options_java_proto",
 ]
 
 java_plugin(

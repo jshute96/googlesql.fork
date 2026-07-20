@@ -21,11 +21,11 @@
 #include <string>
 #include <utility>
 
-#include "googlesql/base/logging.h"
-#include "google/protobuf/util/field_comparator.h"
+#include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/util/message_differencer.h"
 #include "googlesql/common/errors.h"
 #include "googlesql/common/float_margin.h"
+#include "googlesql/common/proto_format_utils.h"
 #include "googlesql/public/functions/convert_proto.h"
 #include "googlesql/public/language_options.h"
 #include "googlesql/public/options.pb.h"
@@ -42,29 +42,34 @@
 #include "googlesql/public/value_content.h"
 #include "absl/algorithm/container.h"
 #include "absl/base/attributes.h"
+#include "absl/base/nullability.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/container/inlined_vector.h"
 #include "absl/hash/hash.h"
+#include "googlesql/base/check.h"
+#include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/strings/cord.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "google/protobuf/descriptor.h"
 #include "google/protobuf/dynamic_message.h"
 #include "google/protobuf/message.h"
-#include "googlesql/base/status_macros.h"
+#include "google/protobuf/repeated_ptr_field.h"
+#include "google/protobuf/util/field_comparator.h"
 
 namespace googlesql {
 
-ProtoType::ProtoType(const TypeFactory* factory,
-                     const google::protobuf::Descriptor* descriptor,
-                     const internal::CatalogName* catalog_name)
+ProtoType::ProtoType(const TypeFactory& factory,
+                     const google::protobuf::Descriptor* /*absl_nonnull*/ descriptor,
+                     const internal::CatalogName* /*absl_nullable*/ catalog_name)
     : Type(factory, TYPE_PROTO),
       descriptor_(descriptor),
       catalog_name_(catalog_name) {
-  ABSL_CHECK(descriptor_ != nullptr);
+  ABSL_DCHECK(descriptor_ != nullptr);
 }
 
 ProtoType::~ProtoType() = default;
@@ -127,9 +132,7 @@ bool ProtoType::HasFloatingPointFields() const {
   return googlesql::HasFloatingPointFields(descriptor(), visited);
 }
 
-const google::protobuf::Descriptor* ProtoType::descriptor() const {
-  return descriptor_;
-}
+const google::protobuf::Descriptor* ProtoType::descriptor() const { return descriptor_; }
 
 const google::protobuf::FieldDescriptor* ProtoType::map_key() const {
   return descriptor()->map_key();
@@ -193,9 +196,9 @@ absl::Status ProtoType::GetFieldTypeByName(absl::string_view name,
   const google::protobuf::FieldDescriptor* field_descr =
       descriptor_->FindFieldByName(name);
   if (field_descr == nullptr) {
-    return MakeSqlError()
-           << "Field name " << name << " not found in descriptor "
-           << descriptor_->full_name();
+    return MakeSqlError() << "Field name " << name
+                          << " not found in descriptor "
+                          << descriptor_->full_name();
   }
   if (number != nullptr) {
     *number = field_descr->number();
@@ -486,8 +489,7 @@ const google::protobuf::FieldDescriptor* ProtoType::FindFieldByNameIgnoreCase(
   return nullptr;
 }
 
-bool ProtoType::HasFormatAnnotation(
-    const google::protobuf::FieldDescriptor* field) {
+bool ProtoType::HasFormatAnnotation(const google::protobuf::FieldDescriptor* field) {
   return GetFormatAnnotationImpl(field) != FieldFormat::DEFAULT_FORMAT;
 }
 
@@ -569,8 +571,7 @@ FieldFormat::Format ProtoType::GetFormatAnnotation(
   return format;
 }
 
-bool ProtoType::GetUseDefaultsExtension(
-    const google::protobuf::FieldDescriptor* field) {
+bool ProtoType::GetUseDefaultsExtension(const google::protobuf::FieldDescriptor* field) {
   if (field->options().HasExtension(googlesql::use_defaults)) {
     // If the field has a use_defaults extension, use that.
     return field->options().GetExtension(googlesql::use_defaults);
@@ -629,7 +630,7 @@ absl::Cord GetCordValue(const ValueContent& value) {
 
 }  // namespace
 
-Type::HasFieldResult ProtoType::HasFieldImpl(const std::string& name,
+Type::HasFieldResult ProtoType::HasFieldImpl(absl::string_view name,
                                              int* field_id,
                                              bool include_pseudo_fields) const {
   Type::HasFieldResult result = HAS_NO_FIELD;
@@ -731,8 +732,8 @@ bool ProtoType::ValueContentEquals(
 
   std::unique_ptr<google::protobuf::Message> x_msg = absl::WrapUnique(prototype->New());
   std::unique_ptr<google::protobuf::Message> y_msg = absl::WrapUnique(prototype->New());
-  if (!x_msg->ParsePartialFromCord(x_value) ||
-      !y_msg->ParsePartialFromCord(y_value)) {
+  if (!x_msg->ParsePartialFromString(x_value) ||
+      !y_msg->ParsePartialFromString(y_value)) {
     if (options.reason != nullptr) {
       absl::StrAppend(
           options.reason,
@@ -780,20 +781,17 @@ std::string ProtoType::FormatValueContent(
   google::protobuf::DynamicMessageFactory message_factory;
   std::unique_ptr<google::protobuf::Message> message(
       message_factory.GetPrototype(descriptor())->New());
-  const bool success = message->ParsePartialFromCord(GetCordValue(value));
+  const bool success = message->ParsePartialFromString(GetCordValue(value));
 
   if (options.mode == FormatValueContentOptions::Mode::kDebug) {
     if (!success) {
       return "{<unparseable>}";
     }
 
-    return absl::StrCat(
-        "{",
-        options.verbose
-            ?
-        message->DebugString()
-        : message->ShortDebugString(),
-        "}");
+    return absl::StrCat("{",
+                        options.verbose ? ToStableDebugString(*message)
+                                        : ToStableShortDebugString(*message),
+                        "}");
   }
 
   absl::Status status;
@@ -817,7 +815,7 @@ absl::Status ProtoType::DeserializeValueContent(const ValueProto& value_proto,
   if (!value_proto.has_proto_value()) {
     return TypeMismatchError(value_proto);
   }
-  value->set(new internal::ProtoRep(this, value_proto.proto_value()));
+  value->set(new internal::ProtoRep(value_proto.proto_value()));
   return absl::OkStatus();
 }
 
