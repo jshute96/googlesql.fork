@@ -88,12 +88,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS Person)
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS Account)
+      (a_2 IS Person)
+      -[a_3 IS (% | ! %)]->
+      (a_4 IS Account)
     COLUMNS(
       SAME(a_2, a_4, a_2, a_4) AS a_5,
       SAME(a_2, a_2, a_2) AS a_6,
@@ -107,12 +104,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a
-      IS Person)
-      -[e
-      IS (% | ! %)]->
-      (b
-      IS Account)
+      (a IS Person)
+      -[e IS (% | ! %)]->
+      (b IS Account)
     COLUMNS(
       SAME(a, b, a, b) AS same_node_a_b,
       SAME(a, a, a) AS same_node_a,
@@ -317,12 +311,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS Person)
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS Account)
+      (a_2 IS Person)
+      -[a_3 IS (% | ! %)]->
+      (a_4 IS Account)
     COLUMNS(
       a_2 IS SOURCE OF a_3 AS a_5,
       a_2 IS SOURCE OF a_3 AS a_6,
@@ -341,12 +332,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a
-      IS Person)
-      -[b
-      IS (% | ! %)]->
-      (c
-      IS Account)
+      (a IS Person)
+      -[b IS (% | ! %)]->
+      (c IS Account)
     COLUMNS(
       a IS SOURCE OF b AS val0,
       a IS SOURCE OF b AS val1,
@@ -660,8 +648,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (Person | Account)
+      (a_2 IS (Person | Account)
       WHERE
         PROPERTY_EXISTS(a_2, birthday))
     COLUMNS(
@@ -675,8 +662,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (Person | Account)
+      (n IS (Person | Account)
       WHERE
         PROPERTY_EXISTS(n, birthday))
     COLUMNS(
@@ -740,8 +726,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS Account
+      (a_2 IS Account
       WHERE
         PROPERTY_EXISTS(a_2, id))
     COLUMNS(
@@ -755,8 +740,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS Account
+      (n IS Account
       WHERE
         PROPERTY_EXISTS(n, id))
     COLUMNS(
@@ -836,8 +820,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS (% | ! %))
+          (a_2 IS (% | ! %))
         COLUMNS(
           ARRAY[a_2] AS a_3
         )
@@ -850,8 +833,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       ARRAY[n] AS array_of_n
     )
@@ -1010,8 +992,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS (% | ! %))
+          (a_2 IS (% | ! %))
         COLUMNS(
           (a_2) IS NULL AS a_3
         )
@@ -1024,8 +1005,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       (n) IS NULL AS n_is_null
     )
@@ -1107,8 +1087,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS (% | ! %))
+          (a_2 IS (% | ! %))
         COLUMNS(
           `IF`(true, a_2, a_2) AS a_3
         )
@@ -1121,8 +1100,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       `IF`(true, n, n) AS if_expr
     )
@@ -1223,8 +1201,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS (% | ! %))
+          (a_2 IS (% | ! %))
         COLUMNS(
           ARRAY_LENGTH((
               SELECT
@@ -1245,8 +1222,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       ARRAY_LENGTH((
           SELECT
@@ -1412,16 +1388,11 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
-      -[a_5
-      IS (% | ! %)]->
-      (a_6
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]->
+      (a_4 IS (% | ! %))
+      -[a_5 IS (% | ! %)]->
+      (a_6 IS (% | ! %))
     COLUMNS(
       ALL_DIFFERENT(a_2, a_4, a_6) AS a_7
     )
@@ -1433,16 +1404,11 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
-      -[a_2
-      IS (% | ! %)]->
-      (m
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (k
-      IS (% | ! %))
+      (n IS (% | ! %))
+      -[a_2 IS (% | ! %)]->
+      (m IS (% | ! %))
+      -[a_3 IS (% | ! %)]->
+      (k IS (% | ! %))
     COLUMNS(
       ALL_DIFFERENT(n, m, k) AS all_different
     )
@@ -1586,20 +1552,13 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
-      -[a_5
-      IS (% | ! %)]->
-      (a_6
-      IS (% | ! %))
-      -[a_7
-      IS (% | ! %)]->
-      (a_8
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]->
+      (a_4 IS (% | ! %))
+      -[a_5 IS (% | ! %)]->
+      (a_6 IS (% | ! %))
+      -[a_7 IS (% | ! %)]->
+      (a_8 IS (% | ! %))
     COLUMNS(
       ALL_DIFFERENT(a_3, a_5, a_7) AS a_9
     )
@@ -1611,20 +1570,13 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[e1
-      IS (% | ! %)]->
-      (a_3
-      IS (% | ! %))
-      -[e2
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
-      -[e3
-      IS (% | ! %)]->
-      (a_5
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[e1 IS (% | ! %)]->
+      (a_3 IS (% | ! %))
+      -[e2 IS (% | ! %)]->
+      (a_4 IS (% | ! %))
+      -[e3 IS (% | ! %)]->
+      (a_5 IS (% | ! %))
     COLUMNS(
       ALL_DIFFERENT(e1, e2, e3) AS all_different
     )
@@ -1847,12 +1799,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]->
+      (a_4 IS (% | ! %))
     COLUMNS(
       TO_JSON(a_2, stringify_wide_numbers  => true) AS a_5,
       TO_JSON(a_3, stringify_wide_numbers  => true) AS a_6,
@@ -1866,12 +1815,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
-      -[e
-      IS (% | ! %)]->
-      (m
-      IS (% | ! %))
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
+      (m IS (% | ! %))
     COLUMNS(
       TO_JSON(n, stringify_wide_numbers  => true) AS js_n,
       TO_JSON(e, stringify_wide_numbers  => true) AS js_e,
@@ -1939,8 +1885,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       LABELS(a_2) AS a_3
     )
@@ -1952,8 +1897,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       LABELS(n) AS node_labels
     )
@@ -2040,12 +1984,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]-
-      (a_4
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]-
+      (a_4 IS (% | ! %))
     COLUMNS(
       LABELS(a_3) AS a_5
     )
@@ -2057,12 +1998,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[e
-      IS (% | ! %)]-
-      (a_3
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[e IS (% | ! %)]-
+      (a_3 IS (% | ! %))
     COLUMNS(
       LABELS(e) AS edge_labels
     )
@@ -2132,8 +2070,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% & ! %))
+      (a_2 IS (% & ! %))
     COLUMNS(
       LABELS(a_2) AS a_3,
       PROPERTY_EXISTS(a_2, id) AS a_4
@@ -2146,8 +2083,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% & ! %))
+      (n IS (% & ! %))
     COLUMNS(
       LABELS(n) AS empty_labels,
       PROPERTY_EXISTS(n, id) AS has_id
@@ -2212,8 +2148,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       PROPERTY_NAMES(a_2) AS a_3
     )
@@ -2225,8 +2160,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       PROPERTY_NAMES(n) AS node_properties
     )
@@ -2313,12 +2247,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]-
-      (a_4
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]-
+      (a_4 IS (% | ! %))
     COLUMNS(
       PROPERTY_NAMES(a_3) AS a_5
     )
@@ -2330,12 +2261,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[e
-      IS (% | ! %)]-
-      (a_3
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[e IS (% | ! %)]-
+      (a_3 IS (% | ! %))
     COLUMNS(
       PROPERTY_NAMES(e) AS edge_properties
     )
@@ -2521,12 +2449,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]->
-      (a_4
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]->
+      (a_4 IS (% | ! %))
     COLUMNS(
       LABELS(a_2) AS a_5,
       a_2 IS LABELED(% |(Account & Person)) AS a_6,
@@ -2542,12 +2467,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a
-      IS (% | ! %))
-      -[e
-      IS (% | ! %)]->
-      (b
-      IS (% | ! %))
+      (a IS (% | ! %))
+      -[e IS (% | ! %)]->
+      (b IS (% | ! %))
     COLUMNS(
       LABELS(a) AS labels,
       a IS LABELED(% |(Account & Person)) AS true_pred,
@@ -2664,12 +2586,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]-
-      (a_4
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]-
+      (a_4 IS (% | ! %))
     COLUMNS(
       ELEMENT_ID(a_2) AS a_5,
       ELEMENT_ID(a_3) AS a_6,
@@ -2684,12 +2603,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n1
-      IS (% | ! %))
-      -[e
-      IS (% | ! %)]-
-      (n2
-      IS (% | ! %))
+      (n1 IS (% | ! %))
+      -[e IS (% | ! %)]-
+      (n2 IS (% | ! %))
     COLUMNS(
       ELEMENT_ID(n1) AS nid,
       ELEMENT_ID(e) AS eid,
@@ -2854,12 +2770,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
-      -[a_3
-      IS (% | ! %)]-
-      (a_4
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
+      -[a_3 IS (% | ! %)]-
+      (a_4 IS (% | ! %))
     COLUMNS(
       ELEMENT_DEFINITION_NAME(a_2) AS a_5,
       ELEMENT_DEFINITION_NAME(a_3) AS a_6
@@ -2872,12 +2785,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
-      -[e
-      IS (% | ! %)]-
-      (a_2
-      IS (% | ! %))
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]-
+      (a_2 IS (% | ! %))
     COLUMNS(
       ELEMENT_DEFINITION_NAME(n) AS node_name,
       ELEMENT_DEFINITION_NAME(e) AS edge_name
@@ -3034,8 +2944,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS Person)
+          (a_2 IS Person)
         RETURN
           ANY_VALUE(a_2) AS a_3,
           COUNT(a_2) AS a_4,
@@ -3049,8 +2958,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a
-      IS Person)
+      (a IS Person)
     RETURN
       ANY_VALUE(a) AS any_value,
       COUNT(a) AS count,
@@ -3198,8 +3106,7 @@ FROM
                   GRAPH_TABLE(
                     aml
                     MATCH
-                      (a_2
-                      IS Person)
+                      (a_2 IS Person)
                     COLUMNS(
                       a_2 AS a_3
                     )
@@ -3215,8 +3122,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a
-      IS Person)
+      (a IS Person)
     COLUMNS(
       a AS a_2
     )
@@ -3331,8 +3237,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS Person)
+          (a_2 IS Person)
         COLUMNS(
           a_2 AS a_3
         )
@@ -3347,8 +3252,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a
-          IS Person)
+          (a IS Person)
         COLUMNS(
           a AS a_2
         )
@@ -3458,12 +3362,9 @@ FROM
         aml
         MATCH
           ANY (
-            (a_2
-            IS Person)
-            -[a_3
-            IS (% | ! %)]->
-            (a_4
-            IS (Account | Person))
+            (a_2 IS Person)
+            -[a_3 IS (% | ! %)]->
+            (a_4 IS (Account | Person))
           ) { 3, 3 }
         COLUMNS(
           ARRAY_CONCAT(a_2, a_4) AS a_5
@@ -3478,12 +3379,9 @@ FROM
     aml
     MATCH
       ANY (
-        (x
-        IS Person)
-        -[y
-        IS (% | ! %)]->
-        (z
-        IS (Account | Person))
+        (x IS Person)
+        -[y IS (% | ! %)]->
+        (z IS (Account | Person))
       ) { 3, 3 }
     COLUMNS(
       ARRAY_CONCAT(x, z) AS arr
@@ -3597,12 +3495,9 @@ FROM
     aml
     MATCH
       ANY (
-        (a_2
-        IS Person)
-        -[a_3
-        IS (% | ! %)]->
-        (a_4
-        IS (Account | Person))
+        (a_2 IS Person)
+        -[a_3 IS (% | ! %)]->
+        (a_4 IS (Account | Person))
       ) { 3, 3 }
     COLUMNS(
       ARRAY_TRANSFORM(ARRAY_CONCAT(a_2, a_4), (a_6) -> a_6.name) AS a_5
@@ -3616,12 +3511,9 @@ FROM
     aml
     MATCH
       ANY (
-        (x
-        IS Person)
-        -[y
-        IS (% | ! %)]->
-        (z
-        IS (Account | Person))
+        (x IS Person)
+        -[y IS (% | ! %)]->
+        (z IS (Account | Person))
       ) { 3, 3 }
     COLUMNS(
       ARRAY_TRANSFORM(ARRAY_CONCAT(x, z), (x_2) -> x_2.name) AS arr
@@ -3723,8 +3615,7 @@ SELECT
       GRAPH_TABLE(
         aml
         MATCH
-          (a_4
-          IS Person)
+          (a_4 IS Person)
         RETURN
           tvfscan_1.x AS a_5
       ) AS aml_3
@@ -3742,8 +3633,7 @@ FROM
          GRAPH_TABLE(
            aml
            MATCH
-             (n
-             IS Person)
+             (n IS Person)
            RETURN
              tvfscan_1.x AS x
          ) AS aml_3
@@ -3908,12 +3798,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (a_3
-      IS (% | ! %))
-      -[a_4
-      IS (% | ! %)]->
-      (a_5
-      IS (% | ! %))
+      a_2 = (a_3 IS (% | ! %))
+      -[a_4 IS (% | ! %)]->
+      (a_5 IS (% | ! %))
     COLUMNS(
       TO_JSON(a_2, stringify_wide_numbers  => true) AS a_6
     )
@@ -3925,12 +3812,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      p = (n
-      IS (% | ! %))
-      -[e
-      IS (% | ! %)]->
-      (m
-      IS (% | ! %))
+      p = (n IS (% | ! %))
+      -[e IS (% | ! %)]->
+      (m IS (% | ! %))
     COLUMNS(
       TO_JSON(p, stringify_wide_numbers  => true) AS js_p
     )
@@ -3992,3 +3876,293 @@ select * from graph_table(
 ERROR: Less than is not defined for arguments of type PATH<node: GRAPH_NODE(aml)<age UINT32, balance UINT64, birthday DATE, data BYTES, id INT64, name STRING, syndicateData ARRAY<INT64>, syndicateId INT64, syndicateName STRING>, edge: GRAPH_EDGE(aml)<accountId INT64, amount UINT64, personId INT64, targetAccountId INT64>> [at 4:12]
   columns (p <= p as v)
            ^
+
+==
+
+# b/493590574: Using graph node property in ORDER BY clause of STRING_AGG()
+[language_features=MAXIMUM,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+SQL_GRAPH_RETURN_EXTENSIONS]
+[no_show_sqlbuilder_output]
+GRAPH aml
+MATCH (p1 IS Person)-[e1 IS Transfer]->{1,5}(p2 IS Person)
+FOR e IN e1
+RETURN string_agg(DISTINCT p1.name ORDER BY p1.name DESC) AS person_names, e.amount
+--
+QueryStmt
++-output_column_list=
+| +-$graph_table.person_names#13 AS person_names [STRING]
+| +-$graph_table.amount#14 AS amount [UINT64]
++-query=
+  +-GraphTableScan
+    +-column_list=$graph_table.[person_names#13, amount#14]
+    +-property_graph=aml
+    +-input_scan=
+      +-GraphLinearScan
+        +-column_list=$graph_table.[person_names#13, amount#14]
+        +-scan_list=
+          +-GraphLinearScan
+            +-column_list=$graph_table.[person_names#13, amount#14]
+            +-scan_list=
+              +-GraphScan
+              | +-column_list=[$element_table.p1#1, $path_scan.$head#8, $element_table.e1#6, $path_scan.$tail#9, $element_table.p2#10]
+              | +-input_scan_list=
+              | | +-GraphPathScan
+              | |   +-column_list=[$element_table.p1#1, $path_scan.$head#8, $element_table.e1#6, $path_scan.$tail#9, $element_table.p2#10]
+              | |   +-input_scan_list=
+              | |   | +-GraphNodeScan
+              | |   | | +-column_list=[$element_table.p1#1]
+              | |   | | +-label_expr=
+              | |   | | | +-GraphLabel
+              | |   | | |   +-parse_location=23-29
+              | |   | | |   +-label=aml.Person
+              | |   | | |   +-label_name=
+              | |   | | |     +-Literal(type=STRING, value="Person", has_explicit_type=TRUE)
+              | |   | | +-target_element_table_list=[aml.Person]
+              | |   | +-GraphPathScan
+              | |   | | +-column_list=[$path_scan.$head#8, $element_table.e1#6, $path_scan.$tail#9]
+              | |   | | +-input_scan_list=
+              | |   | | | +-GraphNodeScan
+              | |   | | | | +-column_list=[$element_table.$element1#2]
+              | |   | | | | +-label_expr=
+              | |   | | | | | +-GraphLabelNaryExpr
+              | |   | | | | |   +-op=OR
+              | |   | | | | |   +-operand_list=
+              | |   | | | | |     +-GraphWildCardLabel
+              | |   | | | | |     +-GraphLabelNaryExpr
+              | |   | | | | |       +-op=NOT
+              | |   | | | | |       +-operand_list=
+              | |   | | | | |         +-GraphWildCardLabel
+              | |   | | | | +-target_element_table_list=[aml.Account,aml.Person,aml.Syndicate]
+              | |   | | | +-GraphEdgeScan
+              | |   | | | | +-column_list=[$element_table.e1#3]
+              | |   | | | | +-label_expr=
+              | |   | | | | | +-GraphLabel
+              | |   | | | | |   +-parse_location=38-46
+              | |   | | | | |   +-label=aml.Transfer
+              | |   | | | | |   +-label_name=
+              | |   | | | | |     +-Literal(type=STRING, value="Transfer", has_explicit_type=TRUE)
+              | |   | | | | +-target_element_table_list=[aml.Transfer]
+              | |   | | | | +-orientation=RIGHT
+              | |   | | | +-GraphNodeScan
+              | |   | | |   +-column_list=[$element_table.$element2#4]
+              | |   | | |   +-label_expr=
+              | |   | | |   | +-GraphLabelNaryExpr
+              | |   | | |   |   +-op=OR
+              | |   | | |   |   +-operand_list=
+              | |   | | |   |     +-GraphWildCardLabel
+              | |   | | |   |     +-GraphLabelNaryExpr
+              | |   | | |   |       +-op=NOT
+              | |   | | |   |       +-operand_list=
+              | |   | | |   |         +-GraphWildCardLabel
+              | |   | | |   +-target_element_table_list=[aml.Account,aml.Person,aml.Syndicate]
+              | |   | | +-head=$path_scan.$head#8
+              | |   | | +-tail=$path_scan.$tail#9
+              | |   | | +-quantifier=
+              | |   | | | +-GraphPathPatternQuantifier
+              | |   | | |   +-lower_bound=
+              | |   | | |   | +-Literal(type=INT64, value=1)
+              | |   | | |   +-upper_bound=
+              | |   | | |     +-Literal(type=INT64, value=5)
+              | |   | | +-group_variable_list=
+              | |   | |   +-GraphMakeArrayVariable(element=$element_table.$element1#2, array=$element_table.$element1#5)
+              | |   | |   +-GraphMakeArrayVariable(element=$element_table.e1#3, array=$element_table.e1#6)
+              | |   | |   +-GraphMakeArrayVariable(element=$element_table.$element2#4, array=$element_table.$element2#7)
+              | |   | +-GraphNodeScan
+              | |   |   +-column_list=[$element_table.p2#10]
+              | |   |   +-label_expr=
+              | |   |   | +-GraphLabel
+              | |   |   |   +-parse_location=61-67
+              | |   |   |   +-label=aml.Person
+              | |   |   |   +-label_name=
+              | |   |   |     +-Literal(type=STRING, value="Person", has_explicit_type=TRUE)
+              | |   |   +-target_element_table_list=[aml.Person]
+              | |   +-head=$element_table.p1#1
+              | |   +-tail=$element_table.p2#10
+              | +-input_scan=
+              |   +-SingleRowScan
+              +-ArrayScan
+              | +-column_list=[$element_table.p1#1, $element_table.e1#6, $element_table.p2#10, $graph_table.e#11]
+              | +-input_scan=
+              | | +-GraphRefScan(column_list=$element_table.[p1#1, e1#6, p2#10])
+              | +-array_expr_list=
+              | | +-ColumnRef(type=ARRAY<GRAPH_EDGE(aml)<accountId INT64, amount UINT64, targetAccountId INT64>>, column=$element_table.e1#6)
+              | +-element_column_list=[$graph_table.e#11]
+              +-ProjectScan
+                +-column_list=$graph_table.[person_names#13, amount#14]
+                +-input_scan=
+                  +-AggregateScan
+                    +-column_list=$graph_table.[amount#14, person_names#13]
+                    +-input_scan=
+                    | +-ProjectScan
+                    |   +-column_list=[$element_table.p1#1, $element_table.e1#6, $element_table.p2#10, $graph_table.e#11, $orderby.$orderbycol1#12]
+                    |   +-expr_list=
+                    |   | +-$orderbycol1#12 :=
+                    |   |   +-GraphGetElementProperty
+                    |   |     +-type=STRING
+                    |   |     +-expr=
+                    |   |     | +-ColumnRef(type=GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, id INT64, name STRING>, column=$element_table.p1#1)
+                    |   |     +-property=name(STRING)
+                    |   |     +-property_name=
+                    |   |       +-Literal(type=STRING, value="name", has_explicit_type=TRUE)
+                    |   +-input_scan=
+                    |     +-GraphRefScan(column_list=[$element_table.p1#1, $element_table.e1#6, $element_table.p2#10, $graph_table.e#11])
+                    +-group_by_list=
+                    | +-amount#14 :=
+                    |   +-GraphGetElementProperty
+                    |     +-type=UINT64
+                    |     +-expr=
+                    |     | +-ColumnRef(type=GRAPH_EDGE(aml)<accountId INT64, amount UINT64, targetAccountId INT64>, column=$graph_table.e#11)
+                    |     +-property=amount(UINT64)
+                    |     +-property_name=
+                    |       +-Literal(type=STRING, value="amount", has_explicit_type=TRUE)
+                    +-aggregate_list=
+                      +-person_names#13 :=
+                        +-AggregateFunctionCall(GoogleSQL:string_agg(STRING) -> STRING)
+                          +-ColumnRef(type=STRING, column=$orderby.$orderbycol1#12)
+                          +-distinct=TRUE
+                          +-order_by_item_list=
+                            +-OrderByItem
+                              +-column_ref=
+                              | +-ColumnRef(type=STRING, column=$orderby.$orderbycol1#12)
+                              +-is_descending=TRUE
+==
+
+[language_features=NONE,+SQL_GRAPH,+SAFE_FUNCTION_CALL,{{|+SQL_GRAPH_SAFE_SAME_ALL_DIFFERENT}}]
+select * from graph_table(
+  aml
+  match (a IS Person) -[e]-> (b IS Account)
+  columns(SAFE.SAME(a, a, a) AS same_node_a,
+          SAFE.ALL_DIFFERENT(a, b) as all_different_node_a_b)
+)
+--
+ALTERNATION GROUP: <empty>
+--
+ERROR: Function SAME does not support SAFE error mode [at 4:11]
+  columns(SAFE.SAME(a, a, a) AS same_node_a,
+          ^
+--
+ALTERNATION GROUP: +SQL_GRAPH_SAFE_SAME_ALL_DIFFERENT
+--
+QueryStmt
++-output_column_list=
+| +-$graph_table.same_node_a#4 AS same_node_a [BOOL]
+| +-$graph_table.all_different_node_a_b#5 AS all_different_node_a_b [BOOL]
++-query=
+  +-ProjectScan
+    +-column_list=$graph_table.[same_node_a#4, all_different_node_a_b#5]
+    +-input_scan=
+      +-GraphTableScan
+        +-column_list=$graph_table.[same_node_a#4, all_different_node_a_b#5]
+        +-property_graph=aml
+        +-input_scan=
+        | +-GraphScan
+        |   +-column_list=$element_table.[a#1, e#2, b#3]
+        |   +-input_scan_list=
+        |     +-GraphPathScan
+        |       +-column_list=$element_table.[a#1, e#2, b#3]
+        |       +-input_scan_list=
+        |       | +-GraphNodeScan
+        |       | | +-column_list=[$element_table.a#1]
+        |       | | +-label_expr=
+        |       | | | +-GraphLabel(parse_location=47-53, label=aml.Person)
+        |       | | +-target_element_table_list=[aml.Person]
+        |       | +-GraphEdgeScan
+        |       | | +-column_list=[$element_table.e#2]
+        |       | | +-label_expr=
+        |       | | | +-GraphLabelNaryExpr
+        |       | | |   +-op=OR
+        |       | | |   +-operand_list=
+        |       | | |     +-GraphWildCardLabel
+        |       | | |     +-GraphLabelNaryExpr
+        |       | | |       +-op=NOT
+        |       | | |       +-operand_list=
+        |       | | |         +-GraphWildCardLabel
+        |       | | +-target_element_table_list=[aml.PersonOwnAccount,aml.Transfer]
+        |       | | +-orientation=RIGHT
+        |       | +-GraphNodeScan
+        |       |   +-column_list=[$element_table.b#3]
+        |       |   +-label_expr=
+        |       |   | +-GraphLabel(parse_location=68-75, label=aml.Account)
+        |       |   +-target_element_table_list=[aml.Account]
+        |       +-head=$element_table.a#1
+        |       +-tail=$element_table.b#3
+        +-shape_expr_list=
+          +-same_node_a#4 :=
+          | +-FunctionCall({SAFE_ERROR_MODE} GoogleSQL:same(repeated(3) GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, id INT64, name STRING>) -> BOOL)
+          |   +-ColumnRef(type=GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, id INT64, name STRING>, column=$element_table.a#1)
+          |   +-ColumnRef(type=GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, id INT64, name STRING>, column=$element_table.a#1)
+          |   +-ColumnRef(type=GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, id INT64, name STRING>, column=$element_table.a#1)
+          +-all_different_node_a_b#5 :=
+            +-FunctionCall({SAFE_ERROR_MODE} GoogleSQL:all_different(repeated(2) GRAPH_NODE(aml)<age UINT32, balance UINT64, birthday DATE, data BYTES, id INT64, name STRING>) -> BOOL)
+              +-Cast(GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, id INT64, name STRING> -> GRAPH_NODE(aml)<age UINT32, balance UINT64, birthday DATE, data BYTES, id INT64, name STRING>)
+              | +-ColumnRef(type=GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, id INT64, name STRING>, column=$element_table.a#1)
+              +-Cast(GRAPH_NODE(aml)<balance UINT64, id INT64> -> GRAPH_NODE(aml)<age UINT32, balance UINT64, birthday DATE, data BYTES, id INT64, name STRING>)
+                +-ColumnRef(type=GRAPH_NODE(aml)<balance UINT64, id INT64>, column=$element_table.b#3)
+
+[SQLBUILDER_TARGET_SYNTAX_MODE standard]
+[SQLBUILDER_OUTPUT]
+SELECT
+  aml_1.a_5 AS same_node_a,
+  aml_1.a_6 AS all_different_node_a_b
+FROM
+  GRAPH_TABLE(
+    aml
+    MATCH
+      (a_2 IS Person)
+      -[a_3 IS (% | ! %)]->
+      (a_4 IS Account)
+    COLUMNS(
+      SAFE.SAME(a_2, a_2, a_2) AS a_5,
+      SAFE.ALL_DIFFERENT(a_2, a_4) AS a_6
+    )
+  ) AS aml_1;
+
+[SQLBUILDER_TARGET_SYNTAX_MODE pipe]
+[SQLBUILDER_OUTPUT]
+FROM
+  GRAPH_TABLE(
+    aml
+    MATCH
+      (a IS Person)
+      -[e IS (% | ! %)]->
+      (b IS Account)
+    COLUMNS(
+      SAFE.SAME(a, a, a) AS same_node_a,
+      SAFE.ALL_DIFFERENT(a, b) AS all_different_node_a_b
+    )
+  ) AS aml_1
+|> SELECT
+     aml_1.same_node_a,
+     aml_1.all_different_node_a_b
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.same_node_a,
+     graphtablescan_2.all_different_node_a_b;
+
+==
+
+# GQL property specification: where (put first) and property specification
+# cannot co-exist.
+[language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+BRACED_PROTO_CONSTRUCTORS]
+select * from graph_table(aml
+  MATCH (a IS Person WHERE a.id=20 {id: 10})
+  RETURN a.name
+)
+--
+ERROR: Syntax error: Unexpected braced constructor [at 2:36]
+  MATCH (a IS Person WHERE a.id=20 {id: 10})
+                                   ^
+==
+
+==
+
+# UPDATE constructor with GraphElement input (analysis error)
+[language_features=NONE,+SQL_GRAPH,+BRACED_PROTO_CONSTRUCTORS,+UPDATE_CONSTRUCTOR]
+select * from graph_table(
+  aml
+  match (a IS Person)
+  columns(UPDATE(a) { id: 1 } as u)
+);
+--
+ERROR: UPDATE constructor expects an input type of proto type, but found type GRAPH_NODE(aml)<age UINT32, birthday DATE, data BYTES, ...> [at 4:11]
+  columns(UPDATE(a) { id: 1 } as u)
+          ^

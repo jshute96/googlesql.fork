@@ -107,12 +107,9 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[a_3
-        IS PersonOwnAccount]-> @{ key = "e_n" }
-        (a_4
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[a_3 IS PersonOwnAccount]-> @{ key = "e_n" }
+        (a_4 IS (% | ! %))
         WHERE
           (a_2.id) = (a_4.id)
       )
@@ -130,12 +127,9 @@ FROM
     aml
     MATCH
       (
-        (a
-        IS (% | ! %))
-        -[b
-        IS PersonOwnAccount]-> @{ key = "e_n" }
-        (c
-        IS (% | ! %))
+        (a IS (% | ! %))
+        -[b IS PersonOwnAccount]-> @{ key = "e_n" }
+        (c IS (% | ! %))
         WHERE
           (a.id) = (c.id)
       )
@@ -311,26 +305,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
       (
-        (a_3
-        IS (% | ! %))
-        -[a_4
-        IS Transfer]->
-        (a_5
-        IS (% | ! %))
-        -[a_6
-        IS Transfer]->
-        (a_7
-        IS (% | ! %))
+        (a_3 IS (% | ! %))
+        -[a_4 IS Transfer]->
+        (a_5 IS (% | ! %))
+        -[a_6 IS Transfer]->
+        (a_7 IS (% | ! %))
         WHERE
           (a_4.targetAccountId) = (a_6.targetAccountId)
       )
-      -[a_8
-      IS Transfer]->
-      (a_9
-      IS (% | ! %))
+      -[a_8 IS Transfer]->
+      (a_9 IS (% | ! %))
     COLUMNS(
       a_2.id AS a_10,
       a_4.accountId AS a_11,
@@ -344,26 +330,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a
-      IS (% | ! %))
+      (a IS (% | ! %))
       (
-        (a_2
-        IS (% | ! %))
-        -[e
-        IS Transfer]->
-        (a_3
-        IS (% | ! %))
-        -[f
-        IS Transfer]->
-        (a_4
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[e IS Transfer]->
+        (a_3 IS (% | ! %))
+        -[f IS Transfer]->
+        (a_4 IS (% | ! %))
         WHERE
           (e.targetAccountId) = (f.targetAccountId)
       )
-      -[g
-      IS Transfer]->
-      (a_5
-      IS (% | ! %))
+      -[g IS Transfer]->
+      (a_5 IS (% | ! %))
     COLUMNS(
       a.id AS id,
       e.accountId AS accountId,
@@ -583,26 +561,18 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
         (
-          (a_3
-          IS (% | ! %))
-          -[a_4
-          IS ((% | ! %) &(% | ! %))]->
-          (a_5
-          IS (% | ! %))
-          -[a_6
-          IS (% | ! %)]->
-          (a_7
-          IS (% | ! %))
+          (a_3 IS (% | ! %))
+          -[a_4 IS ((% | ! %) &(% | ! %))]->
+          (a_5 IS (% | ! %))
+          -[a_6 IS (% | ! %)]->
+          (a_7 IS (% | ! %))
           WHERE
             (a_4.targetAccountId) = (a_6.targetAccountId)
         )
-        -[a_8
-        IS ((% | ! %) &(% | ! %))]->
-        (a_9
-        IS (% | ! %))
+        -[a_8 IS ((% | ! %) &(% | ! %))]->
+        (a_9 IS (% | ! %))
         WHERE
           a_4 = a_8
       )
@@ -620,26 +590,18 @@ FROM
     aml
     MATCH
       (
-        (a
-        IS (% | ! %))
+        (a IS (% | ! %))
         (
-          (a_2
-          IS (% | ! %))
-          -[e
-          IS ((% | ! %) &(% | ! %))]->
-          (a_3
-          IS (% | ! %))
-          -[f
-          IS (% | ! %)]->
-          (a_4
-          IS (% | ! %))
+          (a_2 IS (% | ! %))
+          -[e IS ((% | ! %) &(% | ! %))]->
+          (a_3 IS (% | ! %))
+          -[f IS (% | ! %)]->
+          (a_4 IS (% | ! %))
           WHERE
             (e.targetAccountId) = (f.targetAccountId)
         )
-        -[e_2
-        IS ((% | ! %) &(% | ! %))]->
-        (a_5
-        IS (% | ! %))
+        -[e_2 IS ((% | ! %) &(% | ! %))]->
+        (a_5 IS (% | ! %))
         WHERE
           e = e_2
       )
@@ -796,20 +758,14 @@ FROM
     MATCH
       (
         (
-          (a_2
-          IS (% | ! %))
-          -[a_3
-          IS (Transfer & Transfer)]->
-          (a_4
-          IS (% | ! %))
+          (a_2 IS (% | ! %))
+          -[a_3 IS (Transfer & Transfer)]->
+          (a_4 IS (% | ! %))
         )
         (
-          (a_5
-          IS (% | ! %))
-          -[@{ key = "e_hint" } a_6
-          IS (Transfer & Transfer)]->
-          (a_7
-          IS (% | ! %))
+          (a_5 IS (% | ! %))
+          -[@{ key = "e_hint" } a_6 IS (Transfer & Transfer)]->
+          (a_7 IS (% | ! %))
         )
         WHERE
           a_3 = a_6
@@ -828,20 +784,14 @@ FROM
     MATCH
       (
         (
-          (a_2
-          IS (% | ! %))
-          -[e
-          IS (Transfer & Transfer)]->
-          (a
-          IS (% | ! %))
+          (a_2 IS (% | ! %))
+          -[e IS (Transfer & Transfer)]->
+          (a IS (% | ! %))
         )
         (
-          (a_3
-          IS (% | ! %))
-          -[@{ key = "e_hint" } e_2
-          IS (Transfer & Transfer)]->
-          (a_4
-          IS (% | ! %))
+          (a_3 IS (% | ! %))
+          -[@{ key = "e_hint" } e_2 IS (Transfer & Transfer)]->
+          (a_4 IS (% | ! %))
         )
         WHERE
           e = e_2
@@ -945,13 +895,10 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
       )
-      -[a_3
-      IS (% | ! %)]-> @{ key = "e_n" }
-      (a_4
-      IS (% | ! %))
+      -[a_3 IS (% | ! %)]-> @{ key = "e_n" }
+      (a_4 IS (% | ! %))
     COLUMNS(
       1 AS a_5
     )
@@ -964,13 +911,10 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
       )
-      -[a_3
-      IS (% | ! %)]-> @{ key = "e_n" }
-      (a_4
-      IS (% | ! %))
+      -[a_3 IS (% | ! %)]-> @{ key = "e_n" }
+      (a_4 IS (% | ! %))
     COLUMNS(
       1 AS res
     )
@@ -1125,26 +1069,19 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[a_3
-        IS PersonOwnAccount]->
-        (a_4
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[a_3 IS PersonOwnAccount]->
+        (a_4 IS (% | ! %))
       )
       (
         (
-          (a_5
-          IS (% | ! %))
+          (a_5 IS (% | ! %))
         )
-        -[a_6
-        IS (% | ! %)]->
-        (a_7
-        IS (% | ! %))
+        -[a_6 IS (% | ! %)]->
+        (a_7 IS (% | ! %))
       )
       (
-        (a_8
-        IS (% | ! %))
+        (a_8 IS (% | ! %))
       )
     COLUMNS(
       a_5.id AS a_9
@@ -1158,26 +1095,19 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[e
-        IS PersonOwnAccount]->
-        (a_3
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[e IS PersonOwnAccount]->
+        (a_3 IS (% | ! %))
       )
       (
         (
-          (a
-          IS (% | ! %))
+          (a IS (% | ! %))
         )
-        -[a_4
-        IS (% | ! %)]->
-        (a_5
-        IS (% | ! %))
+        -[a_4 IS (% | ! %)]->
+        (a_5 IS (% | ! %))
       )
       (
-        (a_6
-        IS (% | ! %))
+        (a_6 IS (% | ! %))
       )
     COLUMNS(
       a.id AS Id
@@ -1306,17 +1236,12 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[a_3
-        IS Transfer]->
+        (a_2 IS (% | ! %))
+        -[a_3 IS Transfer]->
         (
-          (a_4
-          IS (% | ! %))
-          -[a_5
-          IS (% | ! %)]->
-          (a_6
-          IS (% | ! %))
+          (a_4 IS (% | ! %))
+          -[a_5 IS (% | ! %)]->
+          (a_6 IS (% | ! %))
         )
         WHERE
           (a_4.id) = (a_3.accountId)
@@ -1333,17 +1258,12 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[e
-        IS Transfer]->
+        (a_2 IS (% | ! %))
+        -[e IS Transfer]->
         (
-          (a
-          IS (% | ! %))
-          -[a_3
-          IS (% | ! %)]->
-          (b
-          IS (% | ! %))
+          (a IS (% | ! %))
+          -[a_3 IS (% | ! %)]->
+          (b IS (% | ! %))
         )
         WHERE
           (a.id) = (e.accountId)
@@ -1475,17 +1395,12 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[a_3
-        IS Transfer]->
+        (a_2 IS (% | ! %))
+        -[a_3 IS Transfer]->
         (
-          (a_4
-          IS (% | ! %))
-          -[a_5
-          IS (% | ! %)]->
-          (a_6
-          IS (% | ! %))
+          (a_4 IS (% | ! %))
+          -[a_5 IS (% | ! %)]->
+          (a_6 IS (% | ! %))
         )
         WHERE
           (a_3.accountId) = (a_4.id)
@@ -1502,17 +1417,12 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[e
-        IS Transfer]->
+        (a_2 IS (% | ! %))
+        -[e IS Transfer]->
         (
-          (a
-          IS (% | ! %))
-          -[a_3
-          IS (% | ! %)]->
-          (b
-          IS (% | ! %))
+          (a IS (% | ! %))
+          -[a_3 IS (% | ! %)]->
+          (b IS (% | ! %))
         )
         WHERE
           (e.accountId) = (a.id)
@@ -1713,18 +1623,13 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
       (
-        (a_3
-        IS (% | ! %))
-        -[a_4
-        IS (% | ! %)]->
-        (a_5
-        IS (% | ! %))
+        (a_3 IS (% | ! %))
+        -[a_4 IS (% | ! %)]->
+        (a_5 IS (% | ! %))
       )
-      (a_6
-      IS (% | ! %))
+      (a_6 IS (% | ! %))
       WHERE
         (a_2.id) < (a_6.id)
     COLUMNS(
@@ -1746,18 +1651,13 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a
-      IS (% | ! %))
+      (a IS (% | ! %))
       (
-        (a_2
-        IS (% | ! %))
-        -[a_3
-        IS (% | ! %)]->
-        (a_4
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[a_3 IS (% | ! %)]->
+        (a_4 IS (% | ! %))
       )
-      (b
-      IS (% | ! %))
+      (b IS (% | ! %))
       WHERE
         (a.id) < (b.id)
     COLUMNS(
@@ -2201,59 +2101,42 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[a_3
-        IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-        (a_4
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[a_3 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+        (a_4 IS (% | ! %))
         WHERE
           true
       ),
       (
         (
-          (a_5
-          IS (% | ! %))
-          -[a_6
-          IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-          (a_7
-          IS (% | ! %))
+          (a_5 IS (% | ! %))
+          -[a_6 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+          (a_7 IS (% | ! %))
         )
         WHERE
           true
       ),
       (
         (
-          (a_8
-          IS (% | ! %))
-          -[a_9
-          IS (% | ! %)]-> @{ key = "e_subpath" }
+          (a_8 IS (% | ! %))
+          -[a_9 IS (% | ! %)]-> @{ key = "e_subpath" }
           (
-            (a_10
-            IS (% | ! %))
-            -[a_11
-            IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-            (a_12
-            IS (% | ! %))
+            (a_10 IS (% | ! %))
+            -[a_11 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+            (a_12 IS (% | ! %))
             WHERE
               true
           )
-          -[a_13
-          IS (% | ! %)]->
-          (a_14
-          IS (% | ! %))
+          -[a_13 IS (% | ! %)]->
+          (a_14 IS (% | ! %))
         )
         WHERE
           false
       ),
-      (a_15
-      IS (% | ! %))
-      -[a_16
-      IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-      (a_17
-      IS (% | ! %)),
-      (a_18
-      IS (% | ! %))
+      (a_15 IS (% | ! %))
+      -[a_16 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+      (a_17 IS (% | ! %)),
+      (a_18 IS (% | ! %))
       WHERE
         (a_3 = a_6) AND (a_3 = a_11) AND (a_3 = a_16)
     COLUMNS(
@@ -2269,59 +2152,42 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[b
-        IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-        (a_3
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[b IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+        (a_3 IS (% | ! %))
         WHERE
           true
       ),
       (
         (
-          (a_4
-          IS (% | ! %))
-          -[b_2
-          IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-          (a_5
-          IS (% | ! %))
+          (a_4 IS (% | ! %))
+          -[b_2 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+          (a_5 IS (% | ! %))
         )
         WHERE
           true
       ),
       (
         (
-          (a_6
-          IS (% | ! %))
-          -[a_7
-          IS (% | ! %)]-> @{ key = "e_subpath" }
+          (a_6 IS (% | ! %))
+          -[a_7 IS (% | ! %)]-> @{ key = "e_subpath" }
           (
-            (a_8
-            IS (% | ! %))
-            -[b_3
-            IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-            (a_9
-            IS (% | ! %))
+            (a_8 IS (% | ! %))
+            -[b_3 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+            (a_9 IS (% | ! %))
             WHERE
               true
           )
-          -[a_10
-          IS (% | ! %)]->
-          (a_11
-          IS (% | ! %))
+          -[a_10 IS (% | ! %)]->
+          (a_11 IS (% | ! %))
         )
         WHERE
           false
       ),
-      (a_12
-      IS (% | ! %))
-      -[b_4
-      IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-      (a_13
-      IS (% | ! %)),
-      (a_14
-      IS (% | ! %))
+      (a_12 IS (% | ! %))
+      -[b_4 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+      (a_13 IS (% | ! %)),
+      (a_14 IS (% | ! %))
       WHERE
         (b = b_2) AND (b = b_3) AND (b = b_4)
     COLUMNS(
@@ -2678,49 +2544,36 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[a_3
-        IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-        (a_4
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[a_3 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+        (a_4 IS (% | ! %))
         WHERE
           true
       ),
       (
         (
-          (a_5
-          IS (% | ! %))
-          -[a_6
-          IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-          (a_7
-          IS (% | ! %))
+          (a_5 IS (% | ! %))
+          -[a_6 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+          (a_7 IS (% | ! %))
         )
         WHERE
           true
       ),
       (
         (
-          (a_8
-          IS (% | ! %))
-          -[a_9
-          IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-          (a_10
-          IS (% | ! %))
+          (a_8 IS (% | ! %))
+          -[a_9 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+          (a_10 IS (% | ! %))
           WHERE
             true
         )
         WHERE
           false
       ),
-      (a_11
-      IS (% | ! %))
-      -[a_12
-      IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-      (a_13
-      IS (% | ! %)),
-      (a_14
-      IS (% | ! %))
+      (a_11 IS (% | ! %))
+      -[a_12 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+      (a_13 IS (% | ! %)),
+      (a_14 IS (% | ! %))
       WHERE
         (a_3 = a_6) AND (a_3 = a_9) AND (a_3 = a_12)
     COLUMNS(
@@ -2736,49 +2589,36 @@ FROM
     aml
     MATCH
       (
-        (a_2
-        IS (% | ! %))
-        -[b
-        IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-        (a_3
-        IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[b IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+        (a_3 IS (% | ! %))
         WHERE
           true
       ),
       (
         (
-          (a_4
-          IS (% | ! %))
-          -[b_2
-          IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-          (a_5
-          IS (% | ! %))
+          (a_4 IS (% | ! %))
+          -[b_2 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+          (a_5 IS (% | ! %))
         )
         WHERE
           true
       ),
       (
         (
-          (a_6
-          IS (% | ! %))
-          -[b_3
-          IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-          (a_7
-          IS (% | ! %))
+          (a_6 IS (% | ! %))
+          -[b_3 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+          (a_7 IS (% | ! %))
           WHERE
             true
         )
         WHERE
           false
       ),
-      (a_8
-      IS (% | ! %))
-      -[b_4
-      IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
-      (a_9
-      IS (% | ! %)),
-      (a_10
-      IS (% | ! %))
+      (a_8 IS (% | ! %))
+      -[b_4 IS (PersonOwnAccount &(% | ! %) &(% | ! %) &(% | ! %))]->
+      (a_9 IS (% | ! %)),
+      (a_10 IS (% | ! %))
       WHERE
         (b = b_2) AND (b = b_3) AND (b = b_4)
     COLUMNS(

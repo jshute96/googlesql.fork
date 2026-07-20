@@ -48,6 +48,7 @@
 #include "absl/hash/hash.h"
 #include "absl/meta/type_traits.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
@@ -56,11 +57,10 @@
 #include "absl/synchronization/mutex.h"
 #include "googlesql/base/compact_reference_counted.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
-StructType::StructType(const TypeFactoryBase* factory,
+StructType::StructType(const TypeFactoryBase& factory,
                        std::vector<StructField> fields, int nesting_depth)
     : ListBackedType(factory, TYPE_STRUCT),
       fields_(std::move(fields)),
@@ -101,7 +101,9 @@ void StructType::DebugStringImpl(bool details, TypeOrStringVector* stack,
 bool StructType::SupportsGroupingImpl(const LanguageOptions& language_options,
                                       const Type** no_grouping_type) const {
   if (!language_options.LanguageFeatureEnabled(FEATURE_GROUP_BY_STRUCT)) {
-    if (no_grouping_type != nullptr) *no_grouping_type = this;
+    if (no_grouping_type != nullptr) {
+      *no_grouping_type = this;
+    }
     return false;
   }
 
@@ -110,7 +112,9 @@ bool StructType::SupportsGroupingImpl(const LanguageOptions& language_options,
       return false;
     }
   }
-  if (no_grouping_type != nullptr) *no_grouping_type = nullptr;
+  if (no_grouping_type != nullptr) {
+    *no_grouping_type = nullptr;
+  }
   return true;
 }
 
@@ -118,7 +122,9 @@ bool StructType::SupportsPartitioningImpl(
     const LanguageOptions& language_options,
     const Type** no_partitioning_type) const {
   if (!language_options.LanguageFeatureEnabled(FEATURE_GROUP_BY_STRUCT)) {
-    if (no_partitioning_type != nullptr) *no_partitioning_type = this;
+    if (no_partitioning_type != nullptr) {
+      *no_partitioning_type = this;
+    }
     return false;
   }
 
@@ -129,7 +135,24 @@ bool StructType::SupportsPartitioningImpl(
     }
   }
 
-  if (no_partitioning_type != nullptr) *no_partitioning_type = nullptr;
+  if (no_partitioning_type != nullptr) {
+    *no_partitioning_type = nullptr;
+  }
+  return true;
+}
+
+bool StructType::SupportsReturningImpl(const LanguageOptions& language_options,
+                                       const Type** no_returning_type) const {
+  for (const StructField& field : this->AsStruct()->fields()) {
+    if (!field.type->SupportsReturningImpl(language_options,
+                                           no_returning_type)) {
+      return false;
+    }
+  }
+
+  if (no_returning_type != nullptr) {
+    *no_returning_type = nullptr;
+  }
   return true;
 }
 
@@ -296,7 +319,7 @@ const StructType::StructField* StructType::FindField(absl::string_view name,
   {
     // Use a shared lock for the common case of access after lazy
     // initialization, to avoid contention
-    absl::ReaderMutexLock rlock(&mutex_);
+    absl::ReaderMutexLock rlock(mutex_);
     if (!ABSL_PREDICT_FALSE(field_name_to_index_map_.empty())) {
       const auto iter = field_name_to_index_map_.find(casefolded_name);
       if (ABSL_PREDICT_FALSE(iter == field_name_to_index_map_.end())) {
@@ -308,7 +331,7 @@ const StructType::StructField* StructType::FindField(absl::string_view name,
   if (field_index == -2) {
     // Use an exclusive lock to guard lazy initialization of the cache
     // (field_name_to_index_map_)
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     if (field_name_to_index_map_.empty()) {
       for (int i = 0; i < num_fields(); ++i) {
         // Convert to casefolded (lowercase) normalized name before adding it to
@@ -343,7 +366,7 @@ const StructType::StructField* StructType::FindField(absl::string_view name,
 }
 
 Type::HasFieldResult StructType::HasFieldImpl(
-    const std::string& name, int* field_id, bool include_pseudo_fields) const {
+    absl::string_view name, int* field_id, bool include_pseudo_fields) const {
   bool is_ambiguous;
   const StructField* field = FindField(name, &is_ambiguous, field_id);
   if (is_ambiguous) {

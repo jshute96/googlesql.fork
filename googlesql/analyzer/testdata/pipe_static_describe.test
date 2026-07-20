@@ -165,6 +165,12 @@ QueryStmt
         | +-TableScan(column_list=[TestExtraValueTable.value#1], table=TestExtraValueTable, column_index_list=[0], alias="vt")
         +-right_scan=
           +-TableScan(column_list=KeyValue.[Key#4, Value#5], table=KeyValue, column_index_list=[0, 1], alias="kv")
+
+ERROR while analyzing SQLBuilder output: INVALID_ARGUMENT: Syntax error: Expected keyword JOIN but got "|>" [at 1:382]
+...KeyValue.Value AS a_4 FROM KeyValue) AS keyvalue_5 |> STATIC_DESCRIBE)) AS...
+                                                      ^ [type.googleapis.com/googlesql.ErrorMessageModeForPayload='\x08\x02']
+[SQLBUILDER SQL]
+SELECT staticdescribescan_6.a_1 AS vt, staticdescribescan_6.a_3 AS Key, staticdescribescan_6.a_4 AS Value FROM (SELECT testextravaluetable_2.a_1 AS a_1, keyvalue_5.a_3 AS a_3, keyvalue_5.a_4 AS a_4 FROM ((SELECT TestExtraValueTable AS a_1 FROM TestExtraValueTable) AS testextravaluetable_2 CROSS JOIN (SELECT KeyValue.Key AS a_3, KeyValue.Value AS a_4 FROM KeyValue) AS keyvalue_5 |> STATIC_DESCRIBE)) AS staticdescribescan_6;
 ==
 
 # Describe a FULL JOIN USING, which has a special column setup.
@@ -214,6 +220,12 @@ QueryStmt
             |   +-ColumnRef(type=INT64, column=KeyValue.Key#1)
             |   +-ColumnRef(type=INT64, column=KeyValue.Key#3)
             +-has_using=TRUE
+
+ERROR while analyzing SQLBuilder output: INVALID_ARGUMENT: Syntax error: Expected keyword JOIN but got "|>" [at 1:613]
+...KeyValue) AS keyvalue_6) AS keyvalue_6 USING (a_1) |> SELECT keyvalue_3.a_...
+                                                      ^ [type.googleapis.com/googlesql.ErrorMessageModeForPayload='\x08\x02']
+[SQLBUILDER SQL]
+SELECT staticdescribescan_9.a_8 AS key, staticdescribescan_9.a_2 AS Value, staticdescribescan_9.a_5 AS Value FROM (SELECT staticdescribescan_9.a_1 AS a_1, staticdescribescan_9.a_2 AS a_2, staticdescribescan_9.a_7 AS a_7, staticdescribescan_9.a_5 AS a_5, staticdescribescan_9.a_8 AS a_8 FROM (SELECT a_1 AS a_1, a_2 AS a_2, a_7 AS a_7, a_5 AS a_5, a_8 AS a_8 FROM ((SELECT KeyValue.Key AS a_1, KeyValue.Value AS a_2 FROM KeyValue) AS keyvalue_3 FULL JOIN (SELECT keyvalue_6.a_4 AS a_1, keyvalue_6.a_5 FROM (SELECT KeyValue.Key AS a_4, KeyValue.Value AS a_5 FROM KeyValue) AS keyvalue_6) AS keyvalue_6 USING (a_1) |> SELECT keyvalue_3.a_1, keyvalue_3.a_2, keyvalue_6.a_1 AS a_7, keyvalue_6.a_5, COALESCE(keyvalue_3.a_1, keyvalue_6.a_1) AS a_8 |> STATIC_DESCRIBE)) AS staticdescribescan_9) AS staticdescribescan_9;
 ==
 
 # Running after a standard query.
@@ -423,8 +435,8 @@ QueryStmt
       +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
 ==
 
-# TODO SQLBuilder currently loses the STATIC_DESCRIBE, since it can't
-# generate pipe operators yet.
+# SQLBuilder emits |> STATIC_DESCRIBE as a pipe operator (wrapped in a subquery
+# in Standard syntax mode).
 [show_sqlbuilder_output]
 from KeyValue
 |> static_describe
@@ -454,28 +466,32 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  keyvalue_3.a_1 AS Key,
-  keyvalue_3.a_2 AS Value
+  staticdescribescan_3.a_1 AS Key,
+  staticdescribescan_3.a_2 AS Value
 FROM
   (
     SELECT
-      KeyValue.Key AS a_1,
-      KeyValue.Value AS a_2
+      a_1 AS a_1,
+      a_2 AS a_2
     FROM
-      KeyValue
-  ) AS keyvalue_3;
+      (
+        FROM
+          KeyValue
+        |> SELECT
+             KeyValue.Key AS a_1,
+             KeyValue.Value AS a_2
+        |> STATIC_DESCRIBE
+      )
+  ) AS staticdescribescan_3;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
+|> STATIC_DESCRIBE
 |> SELECT
      KeyValue.Key,
-     KeyValue.Value
-|> AS keyvalue_1
-|> SELECT
-     keyvalue_1.Key,
-     keyvalue_1.Value;
+     KeyValue.Value;
 ==
 
 # Range variable has name `c`, while column name is `a`. STATIC_DESCRIBE should

@@ -65,8 +65,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       a_2.name AS a_3,
       1 AS a_4,
@@ -80,8 +79,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       n.name AS name,
       1 AS number,
@@ -148,8 +146,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       true AS a_3
     )
@@ -161,8 +158,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       true AS literal_true
     )
@@ -345,8 +341,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       a_2.age AS a_3,
       a_2.balance AS a_4,
@@ -366,8 +361,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       n.age AS age,
       n.balance AS balance,
@@ -565,8 +559,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       (
         SELECT
@@ -587,8 +580,7 @@ FROM
               GRAPH_TABLE(
                 aml
                 MATCH
-                  (a_5
-                  IS (% | ! %))
+                  (a_5 IS (% | ! %))
                 COLUMNS(
                   a_2.age AS a_6,
                   a_2.balance AS a_7,
@@ -612,16 +604,14 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       (
         FROM
           GRAPH_TABLE(
             aml
             MATCH
-              (m
-              IS (% | ! %))
+              (m IS (% | ! %))
             COLUMNS(
               n.age AS age,
               n.balance AS balance,
@@ -738,8 +728,7 @@ WHERE
           GRAPH_TABLE(
             aml
             MATCH
-              (a_3
-              IS (% | ! %))
+              (a_3 IS (% | ! %))
             COLUMNS(
               1 + (KeyValue.Key) AS a_4
             )
@@ -757,8 +746,7 @@ FROM
          GRAPH_TABLE(
            aml
            MATCH
-             (a_2
-             IS (% | ! %))
+             (a_2 IS (% | ! %))
            COLUMNS(
              1 + (KeyValue.Key) AS new_key
            )
@@ -849,8 +837,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       (
         SELECT
@@ -869,8 +856,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       (
         FROM
@@ -983,8 +969,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       (
         SELECT
@@ -993,8 +978,7 @@ FROM
           GRAPH_TABLE(
             aml
             MATCH
-              (a_5
-              IS (% | ! %))
+              (a_5 IS (% | ! %))
             COLUMNS(
               "static_name" AS a_6
             )
@@ -1009,16 +993,14 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       (
         FROM
           GRAPH_TABLE(
             aml
             MATCH
-              (m
-              IS (% | ! %))
+              (m IS (% | ! %))
             COLUMNS(
               "static_name" AS name
             )
@@ -1150,8 +1132,7 @@ FROM
           GRAPH_TABLE(
             aml
             MATCH
-              (a_2
-              IS (% | ! %))
+              (a_2 IS (% | ! %))
             COLUMNS(
               1 AS a_3
             )
@@ -1175,8 +1156,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_10
-          IS (% | ! %))
+          (a_10 IS (% | ! %))
         COLUMNS(
           "string" AS a_11
         )
@@ -1190,8 +1170,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       1 AS num
     )
@@ -1220,8 +1199,7 @@ FROM
        GRAPH_TABLE(
          aml
          MATCH
-           (a_6
-           IS (% | ! %))
+           (a_6 IS (% | ! %))
          COLUMNS(
            "string" AS str
          )
@@ -1356,8 +1334,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS Person)
+          (a_2 IS Person)
         COLUMNS(
           1 AS a_3
         )
@@ -1371,8 +1348,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_6
-          IS Person)
+          (a_6 IS Person)
         COLUMNS(
           2 AS a_7
         )
@@ -1385,8 +1361,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS Person)
+      (n IS Person)
     COLUMNS(
       1 AS one
     )
@@ -1400,8 +1375,7 @@ FROM
        GRAPH_TABLE(
          aml
          MATCH
-           (n_2
-           IS Person)
+           (n_2 IS Person)
          COLUMNS(
            2 AS two
          )
@@ -1472,8 +1446,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS HasId)
+      (a_2 IS HasId)
     COLUMNS(
       a_2.birthday AS a_3,
       a_2.balance AS a_4
@@ -1486,8 +1459,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS HasId)
+      (n IS HasId)
     COLUMNS(
       n.birthday AS birthday,
       n.balance AS balance
@@ -1571,8 +1543,7 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2
-          IS Person)
+          (a_2 IS Person)
         COLUMNS(
           a_2.birthday AS a_3,
           a_2.name AS a_4
@@ -1586,8 +1557,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS Person)
+      (n IS Person)
     COLUMNS(
       n.birthday AS birthday,
       n.name AS name
@@ -1683,12 +1653,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS Person)
-      -[a_3
-      IS (% | ! %)]-
-      (a_4
-      IS (% | ! %))
+      (a_2 IS Person)
+      -[a_3 IS (% | ! %)]-
+      (a_4 IS (% | ! %))
     COLUMNS(
       TYPEOF(a_2) AS a_5,
       TYPEOF(a_3) AS a_6,
@@ -1702,12 +1669,9 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS Person)
-      -[e
-      IS (% | ! %)]-
-      (x
-      IS (% | ! %))
+      (n IS Person)
+      -[e IS (% | ! %)]-
+      (x IS (% | ! %))
     COLUMNS(
       TYPEOF(n) AS n_2,
       TYPEOF(e) AS e_2,
@@ -1723,3 +1687,29 @@ FROM
      graphtablescan_2.n_2 AS n,
      graphtablescan_2.e_2 AS e,
      graphtablescan_2.x_2 AS x;
+==
+
+[language_features=NONE,+ANALYTIC_FUNCTIONS,+SQL_GRAPH]
+select gt.*
+from
+graph_table(aml
+  match (n IS Person)
+  columns(n.name, COUNT(*) OVER (PARTITION BY n.id) as cnt)
+) gt
+--
+ERROR: Analytic functions are not supported in GRAPH_TABLE COLUMNS clause [at 5:11]
+  columns(n.name, COUNT(*) OVER (PARTITION BY n.id) as cnt)
+          ^
+==
+
+[language_features=NONE,+SQL_GRAPH]
+select gt.*
+from
+graph_table(aml
+  match (n IS Person)
+  columns(COUNT(n.id) as cnt)
+) gt
+--
+ERROR: Aggregate function COUNT not allowed in graph table shape [at 5:11]
+  columns(COUNT(n.id) as cnt)
+          ^

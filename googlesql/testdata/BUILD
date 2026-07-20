@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@com_google_protobuf//bazel:java_proto_library.bzl", "java_proto_library")
 load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
@@ -23,7 +24,14 @@ package(
     default_visibility = ["//googlesql/base:googlesql_implementation"],
 )
 
-exports_files(["external_extension.proto"])
+exports_files([
+    "external_extension.proto",
+    "bad_file_dependency.proto",
+    "bad_parse_schema.proto",
+    "bad_parse_schema_simple.proto",
+    "bad_reference.proto",
+    "conflicting_name_schema.proto",
+])
 
 filegroup(
     name = "test_files",
@@ -157,6 +165,25 @@ java_proto_library(
     deps = [":ambiguous_has_proto"],
 )
 
+proto_library(
+    name = "test_hop_tumble_proto",
+    srcs = ["test_hop_tumble.proto"],
+    deps = [
+        "//googlesql/public/proto:type_annotation_proto",
+        "@com_google_protobuf//:timestamp_proto",
+    ],
+)
+
+cc_proto_library(
+    name = "test_hop_tumble_cc_proto",
+    deps = [":test_hop_tumble_proto"],
+)
+
+java_proto_library(
+    name = "test_hop_tumble_java_proto",
+    deps = [":test_hop_tumble_proto"],
+)
+
 cc_library(
     name = "sample_annotation",
     srcs = ["sample_annotation.cc"],
@@ -213,10 +240,10 @@ cc_library(
     deps = [
         ":ambiguous_has_cc_proto",
         ":sample_annotation",
+        ":test_hop_tumble_cc_proto",
         ":test_packageless_cc_proto",
         ":test_proto3_cc_proto",
         ":test_schema_cc_proto",
-        "//googlesql/base",
         "//googlesql/base:check",
         "//googlesql/base:clock",
         "//googlesql/base:map_util",
@@ -266,6 +293,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:node_hash_map",
         "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -294,6 +322,7 @@ cc_test(
         "//googlesql/public:sql_view",
         "//googlesql/public/types",
         "//googlesql/resolved_ast:resolved_ast_enums_cc_proto",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
     ],
 )

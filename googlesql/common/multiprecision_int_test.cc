@@ -113,7 +113,7 @@ constexpr uint128 min128<uint128>() {
 }
 
 // Cannot use multiprecision_int_impl::SafeAbs because
-// std::make_unsigned_t<int128> doesn't compile in googlesql oss.
+// std::make_unsigned_t<int128> doesn't compile in googlesql.
 inline uint128 SafeAbs(int128 x) {
   return x < 0 ? -static_cast<uint128>(x) : x;
 }
@@ -2123,10 +2123,9 @@ TYPED_TEST(FixedIntGeneratedDataTest, ToString) {
     std::string actual = v.ToString();
     EXPECT_EQ(expect, actual);
     auto number = v.number();
-    actual =
-        VarIntBase<std::is_signed_v<typename T::Word>,
-                   typename std::make_unsigned<typename T::Word>::type>(number)
-            .ToString();
+    actual = VarIntBase<std::is_signed_v<typename T::Word>,
+                        std::make_unsigned_t<typename T::Word>>(number)
+                 .ToString();
     EXPECT_EQ(expect, actual);
   }
 }

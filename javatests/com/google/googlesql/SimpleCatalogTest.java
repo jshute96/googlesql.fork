@@ -22,6 +22,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
+import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -29,6 +30,7 @@ import com.google.common.testing.SerializableTester;
 import com.google.common.truth.extensions.proto.ProtoTruth;
 import com.google.protobuf.DescriptorProtos.DescriptorProto;
 import com.google.protobuf.DescriptorProtos.FileDescriptorProto;
+import com.google.protobuf.DescriptorProtos.FileDescriptorSet;
 import com.google.protobuf.TextFormat;
 import com.google.protobuf.TextFormat.ParseException;
 import com.google.googlesql.FunctionProtos.FunctionOptionsProto;
@@ -39,6 +41,7 @@ import com.google.googlesql.GoogleSQLFunctions.FunctionEnums.Mode;
 import com.google.googlesql.GoogleSQLFunctions.SignatureArgumentKind;
 import com.google.googlesql.GoogleSQLOptions.LanguageFeature;
 import com.google.googlesql.GoogleSQLOptionsProto.GoogleSQLBuiltinFunctionOptionsProto;
+import com.google.googlesql.GoogleSQLType.DeclarativeTypeProto;
 import com.google.googlesql.GoogleSQLType.TypeKind;
 import com.google.googlesql.SimpleCatalog.AutoUnregister;
 import com.google.googlesql.SimpleCatalogProtos.SimpleCatalogProto;
@@ -57,7 +60,7 @@ import org.junit.runners.JUnit4;
 public class SimpleCatalogTest {
 
   public static final FunctionArgumentType TABLE_TYPE =
-      new FunctionArgumentType(SignatureArgumentKind.ARG_TYPE_RELATION);
+      new FunctionArgumentType(SignatureArgumentKind.ARG_KIND_RELATION);
 
   @Test
   public void testGets() {
@@ -190,7 +193,9 @@ public class SimpleCatalogTest {
     TableValuedFunction tvf =
         new ForwardInputSchemaToOutputSchemaTVF(
             ImmutableList.of("test_tvf_name"),
-            new FunctionSignature(TABLE_TYPE, ImmutableList.of(TABLE_TYPE), /* contextId= */ -1));
+            ImmutableList.of(
+                new FunctionSignature(
+                    TABLE_TYPE, ImmutableList.of(TABLE_TYPE), /* contextId= */ -1)));
     List<FunctionArgumentType> arguments = new ArrayList<>();
     FunctionArgumentType typeInt64 =
         new FunctionArgumentType(TypeFactory.createSimpleType(TypeKind.TYPE_INT64));
@@ -213,7 +218,7 @@ public class SimpleCatalogTest {
     // Tests for adding tables
     catalog.addSimpleTable(table);
     assertThat(catalog.getTableList().contains(table)).isTrue();
-    assertThat(catalog.getTableNameList().contains(table.getName().toLowerCase())).isTrue();
+    assertThat(catalog.getTableNameList()).contains(Ascii.toLowerCase(table.getName()));
     try {
       catalog.addSimpleTable(table);
       fail();
@@ -234,12 +239,12 @@ public class SimpleCatalogTest {
     } catch (IllegalArgumentException expected) {
     }
     try {
-      catalog.addType(type.typeName().toUpperCase(), type);
+      catalog.addType(Ascii.toUpperCase(type.typeName()), type);
       fail();
     } catch (IllegalArgumentException expected) {
     }
     try {
-      catalog.addType(type.typeName().toLowerCase(), type);
+      catalog.addType(Ascii.toLowerCase(type.typeName()), type);
       fail();
     } catch (IllegalArgumentException expected) {
     }
@@ -304,12 +309,13 @@ public class SimpleCatalogTest {
       catalog.addTableValuedFunction(
           new TableValuedFunction.ForwardInputSchemaToOutputSchemaTVF(
               ImmutableList.of("test_tvf_name"),
-              new FunctionSignature(
-                  new FunctionArgumentType(
-                      TypeFactory.createSimpleType(TypeKind.TYPE_INT64),
-                      ArgumentCardinality.REQUIRED),
-                  ImmutableList.of(),
-                  /* contextId= */ -1)));
+              ImmutableList.of(
+                  new FunctionSignature(
+                      new FunctionArgumentType(
+                          TypeFactory.createSimpleType(TypeKind.TYPE_INT64),
+                          ArgumentCardinality.REQUIRED),
+                      ImmutableList.of(),
+                      /* contextId= */ -1))));
       fail();
     } catch (IllegalArgumentException expected) {
     }
@@ -365,7 +371,9 @@ public class SimpleCatalogTest {
     TableValuedFunction tvf =
         new ForwardInputSchemaToOutputSchemaTVF(
             ImmutableList.of("test_tvf_name"),
-            new FunctionSignature(TABLE_TYPE, ImmutableList.of(TABLE_TYPE), /* contextId= */ -1));
+            ImmutableList.of(
+                new FunctionSignature(
+                    TABLE_TYPE, ImmutableList.of(TABLE_TYPE), /* contextId= */ -1)));
     TableValuedFunction tvfWithGroupName =
         new TableValuedFunction(
             ImmutableList.of("tvf_name"),
@@ -716,7 +724,7 @@ public class SimpleCatalogTest {
             + "  mode: SCALAR\n"
             + "  signature {\n"
             + "    return_type {\n"
-            + "      kind: ARG_TYPE_FIXED\n"
+            + "      kind: ARG_KIND_EXPR_FIXED\n"
             + "      type {\n"
             + "        type_kind: TYPE_INT64\n"
             + "      }\n"
@@ -734,7 +742,7 @@ public class SimpleCatalogTest {
             + "  name_path: \"test_procedure_name\"\n"
             + "  signature {\n"
             + "    return_type {\n"
-            + "      kind: ARG_TYPE_FIXED\n"
+            + "      kind: ARG_KIND_EXPR_FIXED\n"
             + "      type {\n"
             + "        type_kind: TYPE_INT64\n"
             + "      }\n"
@@ -742,7 +750,7 @@ public class SimpleCatalogTest {
             + "      num_occurrences: -1\n"
             + "    }\n"
             + "    argument {\n"
-            + "      kind: ARG_TYPE_FIXED\n"
+            + "      kind: ARG_KIND_EXPR_FIXED\n"
             + "      type {\n"
             + "        type_kind: TYPE_INT64\n"
             + "      }\n"
@@ -758,14 +766,14 @@ public class SimpleCatalogTest {
             + "  name_path: \"test_tvf_name\"\n"
             + "  signature {\n"
             + "    argument {\n"
-            + "      kind: ARG_TYPE_RELATION\n"
+            + "      kind: ARG_KIND_RELATION\n"
             + "      options {\n"
             + "        cardinality: REQUIRED\n"
             + "      }\n"
             + "      num_occurrences: -1\n"
             + "    }\n"
             + "    return_type {\n"
-            + "      kind: ARG_TYPE_RELATION\n"
+            + "      kind: ARG_KIND_RELATION\n"
             + "      options {\n"
             + "        cardinality: REQUIRED\n"
             + "      }\n"
@@ -781,14 +789,14 @@ public class SimpleCatalogTest {
             + "  }"
             + "  signatures {\n"
             + "    argument {\n"
-            + "      kind: ARG_TYPE_RELATION\n"
+            + "      kind: ARG_KIND_RELATION\n"
             + "      options {\n"
             + "        cardinality: REQUIRED\n"
             + "      }\n"
             + "      num_occurrences: -1\n"
             + "    }\n"
             + "    return_type {\n"
-            + "      kind: ARG_TYPE_RELATION\n"
+            + "      kind: ARG_KIND_RELATION\n"
             + "      options {\n"
             + "        cardinality: REQUIRED\n"
             + "      }\n"
@@ -822,6 +830,56 @@ public class SimpleCatalogTest {
     expected.getTableBuilder(0).setSerializationId(table.getId());
     expected.getModelBuilder(0).setId(model.getId());
     assertThat(catalogProto).isEqualTo(expected.build());
+  }
+
+  @Test
+  public void testSerialize_skipsAlias() {
+    SimpleCatalog catalog = new SimpleCatalog("catalog1");
+    Function functionWithAlias =
+        new Function(
+            "substr",
+            Function.GOOGLESQL_FUNCTION_GROUP_NAME,
+            Mode.SCALAR,
+            ImmutableList.of(
+                new FunctionSignature(
+                    new FunctionArgumentType(
+                        TypeFactory.createSimpleType(TypeKind.TYPE_INT64),
+                        ArgumentCardinality.REQUIRED),
+                    ImmutableList.of(),
+                    -1)),
+            FunctionOptionsProto.newBuilder().setAliasName("substring").build());
+
+    Function functionWithoutAlias =
+        new Function(
+            "no_alias_func",
+            Function.GOOGLESQL_FUNCTION_GROUP_NAME,
+            Mode.SCALAR,
+            ImmutableList.of(
+                new FunctionSignature(
+                    new FunctionArgumentType(
+                        TypeFactory.createSimpleType(TypeKind.TYPE_INT64),
+                        ArgumentCardinality.REQUIRED),
+                    ImmutableList.of(),
+                    -1)));
+
+    catalog.addFunction(functionWithAlias);
+    catalog.addFunction(functionWithoutAlias);
+
+    assertThat(catalog.getFunctionNameList())
+        .containsExactly("googlesql:no_alias_func", "googlesql:substr");
+
+    assertThat(catalog.getFunction("substring", new Catalog.FindOptions()))
+        .isEqualTo(functionWithAlias);
+
+    FileDescriptorSetsBuilder fileDescriptorSetsBuilder = new FileDescriptorSetsBuilder();
+    SimpleCatalogProto serializedCatalogProto = catalog.serialize(fileDescriptorSetsBuilder);
+
+    assertThat(serializedCatalogProto.getCustomFunctionCount()).isEqualTo(2);
+    List<String> serializedNames = new ArrayList<>();
+    for (int i = 0; i < serializedCatalogProto.getCustomFunctionCount(); i++) {
+      serializedNames.add(serializedCatalogProto.getCustomFunction(i).getNamePath(0));
+    }
+    assertThat(serializedNames).containsExactly("substr", "no_alias_func");
   }
 
   @Test
@@ -967,6 +1025,64 @@ public class SimpleCatalogTest {
       fail();
     } catch (IllegalStateException expected) {
     }
+  }
+
+  @Test
+  public void testDeclarativeTypesSerialization() throws Exception {
+    TypeFactory factory = TypeFactory.uniqueNames();
+
+    DeclarativeType declType =
+        factory.createDeclarativeType(
+            DeclarativeTypeDescriptor.builder()
+                .setTypeId(new DeclarativeTypeDescriptor.TypeId("N1", "DeclType", 0))
+                .setDisplayName("DeclType")
+                .setBackingType(TypeFactory.createSimpleType(TypeKind.TYPE_INT64))
+                .setCoercionFromBackingType(
+                    DeclarativeTypeProto.AllowCoercionMode.ALLOW_COERCION_MODE_ALLOW_ALL_COERCION)
+                .setCoercionToBackingType(
+                    DeclarativeTypeProto.AllowCoercionMode.ALLOW_COERCION_MODE_EXPLICIT_ONLY)
+                .setReturningStrategy(DeclarativeTypeProto.ReturningStrategy.RETURNING_DISALLOWED)
+                .setEqualityStrategy(DeclarativeTypeProto.EqualityStrategy.EQUALITY_DELEGATED)
+                .build());
+
+    SimpleCatalog catalog1 = new SimpleCatalog("catalog1", factory);
+
+    FunctionSignature sig1 =
+        new FunctionSignature(
+            new FunctionArgumentType(TypeFactory.createSimpleType(TypeKind.TYPE_INT64)),
+            ImmutableList.of(
+                new FunctionArgumentType(declType), new FunctionArgumentType(declType)),
+            -1);
+    catalog1.addFunction(
+        new Function(
+            ImmutableList.of("f1"),
+            "group",
+            GoogleSQLFunctions.FunctionEnums.Mode.SCALAR,
+            ImmutableList.of(sig1)));
+
+    // Serialize catalog.
+    FileDescriptorSetsBuilder builder = new FileDescriptorSetsBuilder();
+    SimpleCatalogProto proto1 = catalog1.serialize(builder);
+
+    // Deserialize catalog.
+    ImmutableList.Builder<DescriptorPool> poolsBuilder = ImmutableList.builder();
+    for (FileDescriptorSet fds : builder.build()) {
+      GoogleSQLDescriptorPool pool = new GoogleSQLDescriptorPool();
+      pool.importFileDescriptorSet(fds);
+      poolsBuilder.add(pool);
+    }
+
+    SimpleCatalog deserializedCatalog1 = SimpleCatalog.deserialize(proto1, poolsBuilder.build());
+
+    Function f1 = deserializedCatalog1.getFunctionByFullName("group:f1");
+    assertThat(f1).isNotNull();
+
+    Type typeArg0 = f1.getSignatureList().get(0).getFunctionArgumentList().get(0).getType();
+    Type typeArg1 = f1.getSignatureList().get(0).getFunctionArgumentList().get(1).getType();
+
+    assertThat(typeArg0).isSameInstanceAs(typeArg1);
+    assertThat(typeArg0.isDeclarativeType()).isTrue();
+    assertThat(typeArg0.asDeclarativeType().typeName()).isEqualTo("DeclType");
   }
 
   @Test
