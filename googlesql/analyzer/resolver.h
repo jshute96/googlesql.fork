@@ -1789,13 +1789,30 @@ class Resolver {
       const ASTInsertStatement* ast_statement, IdString target_alias,
       const std::shared_ptr<const NameList>& target_name_list,
       std::unique_ptr<const ResolvedTableScan> table_scan,
-      const ResolvedColumnList& insert_columns,
+      // For INSERT ... BY NAME this is empty on entry and is populated from the
+      // source query's output column names during resolution.  Otherwise it is
+      // the list of columns to insert into.
+      ResolvedColumnList insert_columns,
+      // True for INSERT ... BY NAME.  Requires a non-nested INSERT with a
+      // query() source and no explicit column list.
+      bool insert_by_name,
       const NameScope* nested_scope,  // NULL for non-nested INSERTs.
       const NameList* pipe_input_name_list,
       std::unique_ptr<const ResolvedScan> pipe_input_scan,
       ResolvedColumnToCatalogColumnHashMap&
           resolved_columns_to_catalog_columns_for_target_scan,
       std::unique_ptr<ResolvedInsertStmt>* output);
+
+  // Builds the INSERT ... BY NAME target column list by matching the output
+  // column names of the source query (<query_name_list>) against the columns of
+  // the target table (<table_scan>).  The matched columns are appended to
+  // <insert_columns> in the order they appear in <query_name_list>, so they
+  // correspond positionally to the query's output columns.  <ast_location> is
+  // used for error reporting.
+  absl::Status MatchInsertColumnsByName(const ASTNode* ast_location,
+                                        const ResolvedTableScan& table_scan,
+                                        const NameList& query_name_list,
+                                        ResolvedColumnList* insert_columns);
 
   absl::Status ResolveUpdateStatement(
       const ASTUpdateStatement* ast_statement,
@@ -5430,9 +5447,17 @@ class Resolver {
   // For non-pipe INSERT, `query` is present.
   // For pipe INSERT, `query` is NULL, and `pipe_input_name_list` and
   // `pipe_input_scan` provide the pipe input table.
+  // Resolves the source query of an INSERT and coerces its output columns to
+  // the types of <insert_columns>.  For INSERT ... BY NAME (<insert_by_name> is
+  // true), <insert_columns> is empty on entry and is populated here from the
+  // query's output column names, matched against <target_table_scan>; otherwise
+  // <insert_columns> is the (already resolved) list of target columns and
+  // <target_table_scan> may be null.
   absl::Status ResolveInsertQuery(
       const ASTNode* ast_location, const ASTQuery* query,
-      const NameScope* nested_scope, const ResolvedColumnList& insert_columns,
+      const NameScope* nested_scope, bool insert_by_name,
+      const ResolvedTableScan* target_table_scan,
+      ResolvedColumnList* insert_columns,
       const NameList* pipe_input_name_list,
       std::unique_ptr<const ResolvedScan> pipe_input_scan,
       std::unique_ptr<const ResolvedScan>* output,

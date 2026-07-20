@@ -3764,6 +3764,10 @@ void Unparser::visitASTInsertStatement(const ASTInsertStatement* node,
     node->column_list()->Accept(this, data);
   }
 
+  if (node->insert_by_name()) {
+    print("BY NAME");
+  }
+
   println();
 
   if (node->rows() != nullptr) {

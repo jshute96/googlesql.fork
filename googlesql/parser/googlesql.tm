@@ -12611,7 +12611,8 @@ insert_statement {ASTInsertStatement*}:
     "INTO"? maybe_dashed_generalized_path_expression[target]
     identifierPreceedsParenthsizedQuery
     hint? version_aware_clause?
-    column_list[cols]? insert_source_and_opt_on_conflict
+    column_list[cols]? ("BY"[by_name] "NAME")?
+    insert_source_and_opt_on_conflict
     assert_rows_modified[assert]? returning_clause[returning]?
     {
       auto [source, on_conflict] = $insert_source_and_opt_on_conflict;
@@ -12620,6 +12621,7 @@ insert_statement {ASTInsertStatement*}:
                                         $cols, source, on_conflict, $assert,
                                         $returning);
       $$->set_insert_mode($mode.value_or(ASTInsertStatement::DEFAULT_MODE));
+      $$->set_insert_by_name(@by_name.has_value());
       $$->set_operator_keyword_location(@kwd);
     }
     # LINT.ThenChange(:insert_statement_in_pipe)
@@ -12640,12 +12642,13 @@ insert_statement_in_pipe_prefix {ASTInsertStatement*}:
     "INSERT" insert_mode[mode]?
     "INTO"? maybe_dashed_generalized_path_expression[target]
     hint? version_aware_clause?
-    column_list? on_conflict_clause[on_conflict]?
+    column_list? ("BY"[by_name] "NAME")? on_conflict_clause[on_conflict]?
     {
       $$ = MakeNode<ASTInsertStatement>(@$, $target, $hint,
                                         $version_aware_clause, $column_list,
                                         $on_conflict);
       $$->set_insert_mode($mode.value_or(ASTInsertStatement::DEFAULT_MODE));
+      $$->set_insert_by_name(@by_name.has_value());
       $$->set_operator_keyword_location(@1);
     }
 ;

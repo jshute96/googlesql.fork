@@ -331,13 +331,29 @@ absl::Status Resolver::ResolveInsertValuesRow(
   return absl::OkStatus();
 }
 
+// Builds a case-insensitive map from column name to ResolvedColumn for the
+// columns of <table_scan>, used to resolve INSERT target columns by name. Names
+// that map to more than one column are added to <ambiguous_column_names> and
+// left in the map pointing at an arbitrary one of the duplicates.
+static void BuildInsertTargetColumnMap(
+    const ResolvedTableScan& table_scan,
+    IdStringHashMapCase<ResolvedColumn>* column_map,
+    IdStringHashSetCase* ambiguous_column_names) {
+  for (const ResolvedColumn& column : table_scan.column_list()) {
+    if (!googlesql_base::InsertIfNotPresent(column_map, column.name_id(), column)) {
+      googlesql_base::InsertIfNotPresent(ambiguous_column_names, column.name_id());
+    }
+  }
+}
+
 // <insert_columns> is the list of columns inserted into the target table.
 // <output_column_list> returns the list of columns produced by <output> that
 // map positionally into <insert_columns>.
 absl::Status Resolver::ResolveInsertQuery(
     const ASTNode* ast_location, const ASTQuery* query,
-    const NameScope* nested_scope, const ResolvedColumnList& insert_columns,
-    const NameList* pipe_input_name_list,
+    const NameScope* nested_scope, bool insert_by_name,
+    const ResolvedTableScan* target_table_scan,
+    ResolvedColumnList* insert_columns, const NameList* pipe_input_name_list,
     std::unique_ptr<const ResolvedScan> pipe_input_scan,
     std::unique_ptr<const ResolvedScan>* output,
     ResolvedColumnList* output_column_list,
@@ -345,7 +361,6 @@ absl::Status Resolver::ResolveInsertQuery(
   // We have either an input ASTQuery or a pipe input table.
   GOOGLESQL_RET_CHECK_NE(query != nullptr, pipe_input_name_list != nullptr);
   GOOGLESQL_RET_CHECK_EQ(pipe_input_name_list != nullptr, pipe_input_scan != nullptr);
-  const int num_insert_columns = insert_columns.size();
 
   std::unique_ptr<CorrelatedColumnsSet> correlated_columns_set;
   std::unique_ptr<NameScope> name_scope_owner;
@@ -382,6 +397,18 @@ absl::Status Resolver::ResolveInsertQuery(
     FetchCorrelatedSubqueryParameters(*correlated_columns_set, parameter_list);
   }
 
+  // For INSERT ... BY NAME, the target columns to insert into are determined by
+  // matching the query's output column names against the target table columns.
+  // This must happen after the query is resolved (so we know its column names)
+  // and produces an <insert_columns> list that corresponds positionally to the
+  // query output, just like an explicit column list would.
+  if (insert_by_name) {
+    GOOGLESQL_RET_CHECK(target_table_scan != nullptr);
+    GOOGLESQL_RETURN_IF_ERROR(MatchInsertColumnsByName(
+        ast_location, *target_table_scan, *query_name_list, insert_columns));
+  }
+  const int num_insert_columns = insert_columns->size();
+
   *output_column_list = query_name_list->GetResolvedColumns();
   if (output_column_list->size() != num_insert_columns) {
     return MakeSqlErrorAt(ast_location)
@@ -396,7 +423,7 @@ absl::Status Resolver::ResolveInsertQuery(
   UntypedLiteralMap untyped_literal_map(resolved_query.get());
   for (int i = 0; i < num_insert_columns; ++i) {
     const Type* current_type = (*output_column_list)[i].type();
-    const Type* insert_type = insert_columns[i].type();
+    const Type* insert_type = (*insert_columns)[i].type();
     if (!current_type->Equals(insert_type)) {
       needs_cast = true;
       InputArgumentType input_argument_type(current_type,
@@ -405,24 +432,77 @@ absl::Status Resolver::ResolveInsertQuery(
       if (!coercer_.AssignableTo(input_argument_type, insert_type,
                                  /* is_explicit = */ false, &unused) &&
           untyped_literal_map.Find((*output_column_list)[i]) == nullptr) {
+        // TODO: This points at the source query rather than the specific
+        // output column; see MatchInsertColumnsByName for how this could be
+        // improved for a simple SELECT source.
         return MakeSqlErrorAt(ast_location)
                << "Query column " << (i + 1) << " has type "
                << current_type->ShortTypeName(product_mode())
                << " which cannot be inserted into column "
-               << insert_columns[i].name() << ", which has type "
-               << insert_columns[i].type()->ShortTypeName(product_mode());
+               << (*insert_columns)[i].name() << ", which has type "
+               << (*insert_columns)[i].type()->ShortTypeName(product_mode());
       }
     }
   }
 
   if (needs_cast) {
-    GOOGLESQL_RETURN_IF_ERROR(CreateWrapperScanWithCasts(ast_location, insert_columns,
+    GOOGLESQL_RETURN_IF_ERROR(CreateWrapperScanWithCasts(ast_location, *insert_columns,
                                                kInsertCastId, &resolved_query,
                                                output_column_list));
   }
-  GOOGLESQL_RET_CHECK_EQ(output_column_list->size(), insert_columns.size());
+  GOOGLESQL_RET_CHECK_EQ(output_column_list->size(), insert_columns->size());
 
   *output = std::move(resolved_query);
+  return absl::OkStatus();
+}
+
+absl::Status Resolver::MatchInsertColumnsByName(
+    const ASTNode* ast_location, const ResolvedTableScan& table_scan,
+    const NameList& query_name_list, ResolvedColumnList* insert_columns) {
+  GOOGLESQL_RET_CHECK(insert_columns->empty());
+  IdStringHashMapCase<ResolvedColumn> table_scan_columns;
+  IdStringHashSetCase ambiguous_column_names;
+  BuildInsertTargetColumnMap(table_scan, &table_scan_columns,
+                             &ambiguous_column_names);
+
+  // TODO: These errors point at the source query as a whole rather than at the
+  // specific output column that is bad. The same coarse location applies to the
+  // positional column-type errors in ResolveInsertQuery for a regular INSERT.
+  // When the source is a simple ASTSelect we could thread its
+  // ASTSelectColumnList through and point at the offending ASTSelectColumn,
+  // falling back to the query location for set operations and pipe input.
+  IdStringHashSetCase visited_column_names;
+  for (const NamedColumn& named_column : query_name_list.columns()) {
+    const IdString column_name_id = named_column.name();
+    if (named_column.is_value_table_column() ||
+        IsInternalAlias(column_name_id)) {
+      return MakeSqlErrorAt(ast_location)
+             << "INSERT BY NAME requires the input query to produce columns "
+                "with explicit names that match columns of the target table";
+    }
+    if (!googlesql_base::InsertIfNotPresent(&visited_column_names, column_name_id)) {
+      return MakeSqlErrorAt(ast_location)
+             << "INSERT BY NAME has input columns with duplicate name: "
+             << column_name_id;
+    }
+    const ResolvedColumn* column =
+        googlesql_base::FindOrNull(table_scan_columns, column_name_id);
+    if (column == nullptr) {
+      return MakeSqlErrorAt(ast_location)
+             << "Column " << column_name_id
+             << " in the input query of INSERT BY NAME is not present in table "
+             << table_scan.table()->FullName();
+    }
+    if (ambiguous_column_names.contains(column_name_id)) {
+      return MakeSqlErrorAt(ast_location)
+             << "Column " << column_name_id
+             << " is ambiguous and cannot be referenced";
+    }
+    GOOGLESQL_RETURN_IF_ERROR(
+        VerifyTableScanColumnIsWritable(ast_location, *column, "INSERT"));
+    insert_columns->push_back(*column);
+  }
+  GOOGLESQL_RET_CHECK(!insert_columns->empty());
   return absl::OkStatus();
 }
 
@@ -638,19 +718,41 @@ absl::Status Resolver::ResolveInsertStatement(
       out_resolved_columns_to_catalog_columns_for_target_scan.begin(),
       out_resolved_columns_to_catalog_columns_for_target_scan.end());
 
-  IdStringHashMapCase<ResolvedColumn> table_scan_columns;
-  IdStringHashSetCase ambiguous_column_names;
-  for (const ResolvedColumn& column : resolved_table_scan->column_list()) {
-    if (!googlesql_base::InsertIfNotPresent(&table_scan_columns, column.name_id(),
-                                 column)) {
-      googlesql_base::InsertIfNotPresent(&ambiguous_column_names, column.name_id());
-    }
-  }
-
   ResolvedColumnList insert_columns;
   IdStringHashSetCase visited_column_names;
 
   const bool has_column_list = ast_statement->column_list() != nullptr;
+  const bool insert_by_name = ast_statement->insert_by_name();
+
+  // The target column name map is only needed when resolving an explicit column
+  // list or the implicit (OMIT) expansion. For BY NAME the matching is done
+  // later against the source query, in MatchInsertColumnsByName.
+  IdStringHashMapCase<ResolvedColumn> table_scan_columns;
+  IdStringHashSetCase ambiguous_column_names;
+  if (!insert_by_name) {
+    BuildInsertTargetColumnMap(*resolved_table_scan, &table_scan_columns,
+                               &ambiguous_column_names);
+  }
+
+  if (insert_by_name) {
+    if (!language().LanguageFeatureEnabled(FEATURE_INSERT_BY_NAME)) {
+      return MakeSqlErrorAt(ast_statement) << "INSERT BY NAME is not supported";
+    }
+    if (has_column_list) {
+      return MakeSqlErrorAt(ast_statement->column_list())
+             << "INSERT cannot specify both an explicit column list and "
+                "BY NAME";
+    }
+    if (ast_statement->rows() != nullptr) {
+      return MakeSqlErrorAt(ast_statement)
+             << "INSERT BY NAME requires a query and cannot be used with VALUES";
+    }
+    if (resolved_table_scan->table()->IsValueTable()) {
+      return MakeSqlErrorAt(ast_statement)
+             << "INSERT BY NAME is not supported for value tables";
+    }
+  }
+
   if (has_column_list) {
     for (const ASTIdentifier* column_name :
          ast_statement->column_list()->identifiers()) {
@@ -677,17 +779,11 @@ absl::Status Resolver::ResolveInsertStatement(
                << resolved_table_scan->table()->FullName();
       }
     }
-
-    // We will be writing to column with default values, either with user input
-    // or with their default expressions, so record the access here.
-    for (auto const& [resolved_column, catalog_column] :
-         resolved_columns_from_table_scans_) {
-      if (catalog_column->IsWritableColumn() &&
-          catalog_column->HasDefaultExpression()) {
-        RecordColumnAccess(resolved_column, ResolvedStatement::WRITE);
-      }
-    }
-
+  } else if (insert_by_name) {
+    // The target columns are matched by name against the source query's output
+    // columns, which are not yet resolved at this point.  `insert_columns` is
+    // therefore populated later, inside ResolveInsertStatementImpl, after the
+    // query has been resolved.
   } else {
     if (resolved_table_scan->table()->IsValueTable()) {
       const Table* table = resolved_table_scan->table();
@@ -720,13 +816,29 @@ absl::Status Resolver::ResolveInsertStatement(
     }
   }
 
+  // For a partial insert (an explicit column list or BY NAME), columns omitted
+  // from the insert are written with their default expressions, so record the
+  // access here.
+  if (has_column_list || insert_by_name) {
+    for (auto const& [resolved_column, catalog_column] :
+         resolved_columns_from_table_scans_) {
+      if (catalog_column->IsWritableColumn() &&
+          catalog_column->HasDefaultExpression()) {
+        RecordColumnAccess(resolved_column, ResolvedStatement::WRITE);
+      }
+    }
+  }
+
   // Avoid pruning the insert columns on the ResolvedTableScan that we are
-  // inserting into.
-  RecordColumnAccess(insert_columns, ResolvedStatement::WRITE);
+  // inserting into.  For BY NAME the columns are not known yet; this is done in
+  // ResolveInsertStatementImpl once they have been matched.
+  if (!insert_by_name) {
+    RecordColumnAccess(insert_columns, ResolvedStatement::WRITE);
+  }
 
   return ResolveInsertStatementImpl(
       ast_statement, target_alias, name_list, std::move(resolved_table_scan),
-      insert_columns,
+      std::move(insert_columns), insert_by_name,
       /*nested_scope=*/nullptr, pipe_input_name_list,
       std::move(pipe_input_scan),
       out_resolved_columns_to_catalog_columns_for_target_scan, output);
@@ -736,8 +848,8 @@ absl::Status Resolver::ResolveInsertStatementImpl(
     const ASTInsertStatement* ast_statement, IdString target_alias,
     const std::shared_ptr<const NameList>& target_name_list,
     std::unique_ptr<const ResolvedTableScan> resolved_table_scan,
-    const ResolvedColumnList& insert_columns, const NameScope* nested_scope,
-    const NameList* pipe_input_name_list,
+    ResolvedColumnList insert_columns, bool insert_by_name,
+    const NameScope* nested_scope, const NameList* pipe_input_name_list,
     std::unique_ptr<const ResolvedScan> pipe_input_scan,
     ResolvedColumnToCatalogColumnHashMap&
         resolved_columns_to_catalog_columns_for_target_scan,
@@ -759,6 +871,9 @@ absl::Status Resolver::ResolveInsertStatementImpl(
   }
 
   const bool is_nested = nested_scope != nullptr;
+  if (is_nested && insert_by_name) {
+    return MakeSqlErrorAt(ast_statement) << "Nested INSERTs cannot use BY NAME";
+  }
   if (is_nested && insert_mode != ResolvedInsertStmt::OR_ERROR) {
     std::string insert_mode_str;
     switch (insert_mode) {
@@ -785,6 +900,7 @@ absl::Status Resolver::ResolveInsertStatementImpl(
   if (ast_statement->rows() != nullptr) {
     GOOGLESQL_RET_CHECK(ast_statement->query() == nullptr);
     GOOGLESQL_RET_CHECK(pipe_input_name_list == nullptr);
+    GOOGLESQL_RET_CHECK(!insert_by_name);
     row_list.reserve(ast_statement->rows()->rows().size());
     const NameScope* value_scope =
         is_nested ? nested_scope : empty_name_scope_.get();
@@ -803,9 +919,16 @@ absl::Status Resolver::ResolveInsertStatementImpl(
         ast_statement->query() != nullptr
             ? static_cast<const ASTNode*>(ast_statement->query())
             : ast_statement,
-        ast_statement->query(), nested_scope, insert_columns,
-        pipe_input_name_list, std::move(pipe_input_scan), &resolved_query,
-        &query_output_column_list, &query_parameter_list));
+        ast_statement->query(), nested_scope, insert_by_name,
+        resolved_table_scan.get(), &insert_columns, pipe_input_name_list,
+        std::move(pipe_input_scan), &resolved_query, &query_output_column_list,
+        &query_parameter_list));
+    if (insert_by_name) {
+      // The columns to insert into were just matched from the query's output
+      // column names.  Record write access so they are not pruned from the
+      // target table scan.
+      RecordColumnAccess(insert_columns, ResolvedStatement::WRITE);
+    }
   }
 
   std::unique_ptr<const ResolvedAssertRowsModified>
@@ -2360,7 +2483,9 @@ absl::Status Resolver::MergeWithUpdateItem(
           resolved_update_item.element_column()->column());
       GOOGLESQL_RETURN_IF_ERROR(ResolveInsertStatementImpl(
           ast_input_update_item->insert_statement(), target_alias,
-          /*target_name_list=*/nullptr, /*table_scan=*/nullptr, insert_columns,
+          /*target_name_list=*/nullptr, /*table_scan=*/nullptr,
+          std::move(insert_columns),
+          ast_input_update_item->insert_statement()->insert_by_name(),
           nested_dml_scope,
           /*pipe_input_name_list=*/nullptr,
           /*pipe_input_scan=*/nullptr, resolved_columns_from_table_scans_,
