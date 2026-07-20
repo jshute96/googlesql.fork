@@ -22,6 +22,7 @@ component doc when working on that area.
 | [components/scripting.md](components/scripting.md) | Procedural SQL scripts (control flow, variables). |
 | [components/compliance-and-testing.md](components/compliance-and-testing.md) | Conformance framework + shared test catalog/data. |
 | [components/tooling-and-bindings.md](components/tooling-and-bindings.md) | `execute_query`, formatter, `local_service`, Java bindings, examples. |
+| [box_formatter.md](box_formatter.md) | The experimental HTML "box" formatter that powers the analyze-mode query viewer. |
 | `../CLAUDE.md` | Top-level orientation & quick pointers (repo root). |
 
 ## Component hierarchy

@@ -966,15 +966,40 @@ cc_test(
     ],
 )
 
+genrule(
+    name = "gen_parse_tree_format_cc",
+    srcs = [
+        "parse_tree_format_generated.cc.template",
+    ],
+    outs = ["parse_tree_format_generated.cc"],
+    cmd = "$(location :gen_parse_tree) $(OUTS) $(SRCS)",
+    tools = [":gen_parse_tree"],
+)
+
+cc_library(
+    name = "parse_tree_format",
+    srcs = ["parse_tree_format_generated.cc"],
+    hdrs = ["parse_tree_format.h"],
+    deps = [
+        ":parser",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
 cc_library(
     name = "box_formatter",
     srcs = ["box_formatter.cc"],
     hdrs = ["box_formatter.h"],
     deps = [
+        ":parse_tree_format",
         ":parser",
         "//googlesql/base:ret_check",
         "//googlesql/public:language_options",
+        "//googlesql/public:parse_helpers",
         "//googlesql/public:parse_location",
+        "//googlesql/public:parse_resume_location",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
     ],

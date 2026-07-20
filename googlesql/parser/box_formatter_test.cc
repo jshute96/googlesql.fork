@@ -185,6 +185,73 @@ TEST(BoxFormatterTest, HtmlIsEscaped) {
   EXPECT_THAT(BoxHtml("SELECT '<a>' AS x"), HasSubstr("&lt;a&gt;"));
 }
 
+TEST(BoxFormatterTest, HashInStringIsNotAComment) {
+  // A '#' inside a string literal must not be treated as a comment. With the
+  // token-based gap handling the literal is one VALUE token, copied verbatim.
+  EXPECT_THAT(Box("SELECT '#ff0000' AS c"), Eq("SELECT '#ff0000' AS c"));
+  EXPECT_THAT(BoxHtml("SELECT '#ff0000' AS c"), Not(HasSubstr("sql-comment")));
+}
+
+TEST(BoxFormatterTest, DashDashInStringIsNotAComment) {
+  EXPECT_THAT(Box("SELECT 'a--b' AS c"), Eq("SELECT 'a--b' AS c"));
+  EXPECT_THAT(BoxHtml("SELECT 'a--b' AS c"), Not(HasSubstr("sql-comment")));
+}
+
+TEST(BoxFormatterTest, WhitespaceInsideStringIsPreserved) {
+  // Whitespace inside a string literal is part of its value and must survive;
+  // only whitespace *between* tokens is normalized.
+  EXPECT_THAT(Box("SELECT 'John  Smith' AS n"), Eq("SELECT 'John  Smith' AS n"));
+}
+
+TEST(BoxFormatterTest, WhitespaceInsideQuotedIdentifierIsPreserved) {
+  EXPECT_THAT(Box("SELECT 1 AS `a  b`"), Eq("SELECT 1 AS `a  b`"));
+}
+
+TEST(BoxFormatterTest, RealCommentStillDetectedAfterString) {
+  // A genuine comment following a string is still found (and forces a break).
+  std::string out = Box("SELECT '#ff0000' -- note\n|> WHERE x");
+  EXPECT_THAT(out, HasSubstr("'#ff0000'"));
+  EXPECT_THAT(out, HasSubstr("-- note"));
+}
+
+TEST(BoxFormatterTest, LowercaseCaseKeywordsHandled) {
+  // Keyword matching in the CASE layout is case-insensitive: lowercase
+  // case/when/then/else/end must not duplicate the synthesized CASE/END.
+  std::string out =
+      Box("SELECT case when aaaa > 1 then 1 else 2 end FROM t", 20);
+  EXPECT_THAT(out,
+              HasSubstr("CASE\n    when aaaa > 1 then 1\n    else 2\n  END"));
+  EXPECT_THAT(out, Not(HasSubstr("CASEcase")));
+  EXPECT_THAT(out, Not(HasSubstr("end")));
+}
+
+TEST(BoxFormatterTest, CommentInPipeMarkerGapPreserved) {
+  // A comment between "|>" and the operator keyword is kept (previously the
+  // token-based code normalization silently dropped it).
+  std::string out = Box("FROM t |> /* c */ WHERE x > 1");
+  EXPECT_THAT(out, HasSubstr("/* c */"));
+}
+
+TEST(BoxFormatterTest, CommentInSetOperationGapPreserved) {
+  std::string out = Box("SELECT 1 UNION ALL -- note\nSELECT 2");
+  EXPECT_THAT(out, HasSubstr("UNION ALL"));
+  EXPECT_THAT(out, HasSubstr("-- note"));
+}
+
+TEST(BoxFormatterTest, CommentInCaseArmGapPreserved) {
+  std::string out =
+      Box("SELECT CASE WHEN a > 1 THEN 1 -- why\nELSE 2 END FROM t");
+  EXPECT_THAT(out, HasSubstr("-- why"));
+}
+
+TEST(BoxFormatterTest, CommentInListGapPreserved) {
+  // The list layout synthesizes its commas; a comment in a separator gap must
+  // still be emitted, attached after the comma, and forces the list to break.
+  std::string out = Box("SELECT aaa, -- one\nbbb FROM t");
+  EXPECT_THAT(out, HasSubstr("aaa, -- one\n"));
+  EXPECT_THAT(out, HasSubstr("bbb"));
+}
+
 TEST(BoxFormatterTest, SetOperationStacks) {
   EXPECT_THAT(Box("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3"),
               Eq("SELECT 1\nUNION ALL\nSELECT 2\nUNION ALL\nSELECT 3"));

@@ -1,0 +1,113 @@
+//
+// Copyright 2019 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+// parse_tree_format_generated.cc is generated from
+// parse_tree_format_generated.cc.template by gen_parse_tree.py, from the
+// NodeFormat / FieldFormat attributes declared on AST nodes and fields.
+// It is deliberately a separate generated file so that editing formatting
+// attributes does not change parse_tree_generated.h and only this table
+// (plus the formatters that use it) recompiles.
+
+#include "googlesql/parser/parse_tree_format.h"
+
+#include "googlesql/parser/ast_node_kind.h"
+#include "googlesql/parser/parse_tree.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/string_view.h"
+
+namespace googlesql {
+
+namespace {
+
+# for spec in format_specs
+# if spec.break_before_keywords
+constexpr absl::string_view k{{spec.name}}BreakBeforeKeywords[] = {
+# for kw in spec.break_before_keywords
+    "{{kw}}",
+# endfor
+};
+# endif
+# endfor
+
+absl::flat_hash_map<ASTNodeKind, ASTNodeFormat>* BuildFormatMap() {
+  auto* map = new absl::flat_hash_map<ASTNodeKind, ASTNodeFormat>();
+# for spec in format_specs
+  {
+    ASTNodeFormat& format = (*map)[{{spec.node_kind}}];
+# if spec.layout
+    format.layout = ASTFormatLayout::{{spec.layout}};
+# endif
+# if spec.skip
+    format.skip = true;
+# endif
+# if spec.header_keyword
+    format.header_keyword = "{{spec.header_keyword}}";
+# endif
+# if spec.break_before_keywords
+    format.break_before_keywords = k{{spec.name}}BreakBeforeKeywords;
+# endif
+# if spec.footer_keyword
+    format.footer_keyword = "{{spec.footer_keyword}}";
+# endif
+# if spec.info_region
+    format.info_region = "{{spec.info_region}}";
+# endif
+# if spec.head_field
+    format.head_child = [](const ASTNode& node) -> const ASTNode* {
+      return node.GetAsOrDie<{{spec.head_field.class_name}}>()
+          ->{{spec.head_field.getter}}();
+    };
+# endif
+# if spec.paren_body_field
+    format.paren_body_child = [](const ASTNode& node) -> const ASTNode* {
+      return node.GetAsOrDie<{{spec.paren_body_field.class_name}}>()
+          ->{{spec.paren_body_field.getter}}();
+    };
+# endif
+# if spec.region_field
+    format.region_child = [](const ASTNode& node) -> const ASTNode* {
+      return node.GetAsOrDie<{{spec.region_field.class_name}}>()
+          ->{{spec.region_field.getter}}();
+    };
+    format.region_class = "{{spec.region_class}}";
+# endif
+# if spec.skip_fields
+    format.is_skipped_child = [](const ASTNode& node, const ASTNode& child) {
+      return false
+# for skip_field in spec.skip_fields
+          || &child == static_cast<const ASTNode*>(
+                           node.GetAsOrDie<{{skip_field.class_name}}>()
+                               ->{{skip_field.getter}}())
+# endfor
+          ;  // NOLINT
+    };
+# endif
+  }
+# endfor
+  return map;
+}
+
+}  // namespace
+
+const ASTNodeFormat& GetASTNodeFormat(ASTNodeKind kind) {
+  static const absl::flat_hash_map<ASTNodeKind, ASTNodeFormat>* const
+      format_map = BuildFormatMap();
+  static const ASTNodeFormat* const default_format = new ASTNodeFormat();
+  auto it = format_map->find(kind);
+  return it == format_map->end() ? *default_format : it->second;
+}
+
+}  // namespace googlesql
