@@ -49,6 +49,24 @@ Adding/altering a language feature usually means adding `.test` cases here and
 re-generating expected outputs; if the reference impl can't yet do something, it
 goes in a `known_errors` list.
 
+### Regenerating golden `.test` files
+
+All these golden files (compliance `testdata/*.test` **and** the analyzer's
+`googlesql/analyzer/testdata/*.test`) run through `file_based_test_driver`. There is
+**no turnkey "update goldens" command** in the open-source export (`extract_test_output.py`
+is not shipped). When the expected output legitimately changes:
+
+- The driver writes the *regenerated* golden **into the test log** (flag
+  `--file_based_test_driver_generate_test_output`, default `true`), between
+  `****TEST_OUTPUT_BEGIN****` / `****TEST_OUTPUT_END****` markers (first block tagged
+  `NEW_TEST_RUN <path>`; long lines split with a `***MERGE_TOO_LONG_LINE***` sentinel).
+  The log is at `bazel-testlogs/<pkg>/<target>/test.log`; the `test.outputs/` dir is **empty**.
+- **Don't use `patch`** — hunks are numbered per test-case so `@@` line numbers don't match
+  the real file. Reassemble content-wise instead.
+- For analyzer goldens (target `//googlesql/analyzer:analyzer_<name>_test`), the
+  **`regen-analyzer-goldens` skill** automates this (find target → run → triage real bugs
+  vs. benign churn → extract → verify), including a validated `extract_golden.py`.
+
 ---
 
 ## `googlesql/testing/` & `googlesql/testdata/` — shared test infrastructure

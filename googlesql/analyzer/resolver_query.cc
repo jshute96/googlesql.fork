@@ -314,6 +314,18 @@ std::string PipeOperatorName(const ASTNode* pipe_node) {
           {AST_PIPE_WINDOW, "pipe WINDOW"},
           {AST_PIPE_RENAME, "pipe RENAME"},
           {AST_PIPE_SET_OPERATION, "pipe set operation (such as UNION)"},
+          {AST_PIPE_FORK, "pipe FORK"},
+          {AST_PIPE_TEE, "pipe TEE"},
+          {AST_PIPE_IF, "pipe IF"},
+          {AST_PIPE_MATCH_RECOGNIZE, "pipe MATCH_RECOGNIZE"},
+          {AST_PIPE_LOG, "pipe LOG"},
+          {AST_PIPE_DESCRIBE, "pipe DESCRIBE"},
+          {AST_PIPE_PIVOT, "pipe PIVOT"},
+          {AST_PIPE_UNPIVOT, "pipe UNPIVOT"},
+          {AST_PIPE_WITH, "pipe WITH"},
+          {AST_PIPE_EXPORT_DATA, "pipe EXPORT DATA"},
+          {AST_PIPE_CREATE_TABLE, "pipe CREATE TABLE"},
+          {AST_PIPE_INSERT, "pipe INSERT"},
       });
   const absl::string_view* name =
       googlesql_base::FindOrNull(*kPipeOperatorNameMap, pipe_node->node_kind());
@@ -321,6 +333,17 @@ std::string PipeOperatorName(const ASTNode* pipe_node) {
     return std::string(*name);
   }
   return pipe_node->GetNodeKindString();
+}
+
+// Returns a human-readable title for a pipe operator node, for use as a heading
+// in query visualizer tooling, e.g. "|> WHERE".  Reuses `PipeOperatorName`,
+// turning its "pipe WHERE" style into the "|> WHERE" syntax.
+std::string PipeOperatorTitle(const ASTNode* pipe_node) {
+  std::string name = PipeOperatorName(pipe_node);
+  if (absl::StartsWith(name, "pipe ")) {
+    return absl::StrCat("|> ", absl::string_view(name).substr(5));
+  }
+  return name;
 }
 
 // Returns an error if the given query has an unbounded list of selected
@@ -1085,6 +1108,20 @@ absl::Status Resolver::ResolveQuery(
       inferred_type_for_base_query, output, output_name_list));
   GOOGLESQL_RET_CHECK(*output_name_list != nullptr);
 
+  // Record info for query visualizer tooling: the initial query (the FROM/SELECT
+  // before any pipe operators) produces the scan currently in `*output`, before
+  // the pipe operators below rebuild it.  Recording it on the `query_expr` node
+  // lets the visualizer link that line (e.g. a leading standard-syntax
+  // `SELECT ...`) to its ResolvedScan, the same way each pipe operator links.
+  if (query->query_expr() != nullptr && *output != nullptr) {
+    ASTNodeResolvedInfo& expr_info =
+        ast_node_resolved_info_map_[query->query_expr()];
+    expr_info.resolved_scan_info = ResolvedScanInfo{
+        .output_name_list = *output_name_list,
+        .scan = output->get(),
+    };
+  }
+
   absl::Span<const ASTPipeOperator* const> pipe_operator_list =
       query->pipe_operator_list();
   if (options.exclude_last_pipe_operator) {
@@ -1096,6 +1133,35 @@ absl::Status Resolver::ResolveQuery(
   GOOGLESQL_RETURN_IF_ERROR(ResolvePipeOperatorList(
       pipe_operator_list, scope, output, output_name_list,
       options.inferred_type_for_query, options.allow_terminal));
+
+  // Record query-level info for query visualizer tooling.  The title is the
+  // caller-provided hint if any (e.g. "Table subquery", "CTE subquery foo"),
+  // otherwise derived from the query's role.
+  {
+    ASTNodeResolvedInfo& query_info = ast_node_resolved_info_map_[query];
+    if (!options.node_title_hint.empty()) {
+      query_info.node_title = options.node_title_hint;
+    } else if (options.is_expr_subquery) {
+      query_info.node_title = "Expression subquery";
+    } else if (!query->pipe_operator_list().empty()) {
+      // A query with pipe operators; this node is the parent of both the
+      // initial query (FROM/SELECT) and the pipe operators that follow it.
+      query_info.node_title = "Query with pipe operators";
+    } else if (options.is_outer_query) {
+      query_info.node_title = "Query";
+    } else {
+      query_info.node_title = "Query fragment";
+    }
+    if (*output_name_list != nullptr) {
+      query_info.resolved_scan_info = ResolvedScanInfo{
+          .output_name_list = *output_name_list,
+          // The query's final scan, so the visualizer can cross-link this query
+          // layer (e.g. "Expression subquery") to the same ResolvedScan in the
+          // Resolved AST and SQLBuilder panes.
+          .scan = output->get(),
+      };
+    }
+  }
 
   if (in_strict_mode()) {
     GOOGLESQL_RETURN_IF_ERROR(
@@ -1263,6 +1329,11 @@ absl::Status Resolver::ResolvePipeOperatorList(
 
     GOOGLESQL_RET_CHECK(*current_name_list != nullptr);
     NameScope current_scope(outer_scope, *current_name_list);
+
+    // The names in scope before this pipe operator, captured for query
+    // visualizer tooling below.  After the operator is resolved,
+    // `*current_name_list` holds the names in scope afterwards.
+    NameListPtr input_name_list = *current_name_list;
 
     switch (pipe_operator->node_kind()) {
       case AST_PIPE_WHERE:
@@ -1461,6 +1532,33 @@ absl::Status Resolver::ResolvePipeOperatorList(
     // a table.
     GOOGLESQL_RET_CHECK_EQ(terminal_operator_name != nullptr,
                  *current_name_list == nullptr);
+
+    // Record information about this pipe operator for query visualizer tooling,
+    // including the names in scope before and after the operator.  For terminal
+    // operators, the output name list is null because they produce no table.
+    const ResolvedScan* operator_scan = current_scan->get();
+    // `|> MATCH_RECOGNIZE` resolves to a MatchRecognizeScan wrapped in a
+    // ProjectScan (which re-exposes the partitioning / measure columns).
+    // Attribute the operator to the MatchRecognizeScan -- the scan that *is* the
+    // operator -- so the visualizer links it to that scan (matching the
+    // SQLBuilder's `|> MATCH_RECOGNIZE`), not to the output projection.
+    if (pipe_operator->Is<ASTPipeMatchRecognize>() && operator_scan != nullptr &&
+        operator_scan->Is<ResolvedProjectScan>()) {
+      const ResolvedScan* inner =
+          operator_scan->GetAs<ResolvedProjectScan>()->input_scan();
+      if (inner != nullptr && inner->Is<ResolvedMatchRecognizeScan>()) {
+        operator_scan = inner;
+      }
+    }
+    ASTNodeResolvedInfo& resolved_info =
+        ast_node_resolved_info_map_[pipe_operator];
+    resolved_info.node_title = PipeOperatorTitle(pipe_operator);
+    resolved_info.resolved_scan_info = ResolvedScanInfo{
+        .is_pipe_operator = true,
+        .output_name_list = *current_name_list,
+        .input_name_list = std::move(input_name_list),
+        .scan = operator_scan,
+    };
   }
 
   // Now add the ResolvedWithScans at the end.
@@ -2871,6 +2969,10 @@ Resolver::ResolveSubpipeline(
         subpipeline_name_list,
         /*inferred_type_for_query=*/nullptr,
         /*allow_terminal=*/allow_terminal));
+    // Record a hierarchy entry so the visualizer's info box shows a
+    // "Subpipeline" step (like a subquery) between the subpipeline's pipe
+    // operators and the operator (e.g. FORK) that contains them.
+    ast_node_resolved_info_map_[ast_subpipeline].node_title = "Subpipeline";
   }
 
   return MakeResolvedSubpipeline(std::move(inside_scan));
@@ -3550,11 +3652,12 @@ Resolver::ResolveAliasedQuery(const ASTAliasedQuery* with_entry,
     // We always pass empty_name_scope_ when resolving the subquery inside
     // WITH.  Those queries must stand alone and cannot reference any
     // correlated columns or other names defined outside.
-    GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(with_entry->query(), empty_name_scope_.get(),
-                                 with_alias, &resolved_subquery,
-                                 &subquery_name_list,
-                                 /*parent_expr_resolution_info=*/nullptr,
-                                 /*options=*/{}));
+    GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(
+        with_entry->query(), empty_name_scope_.get(), with_alias,
+        &resolved_subquery, &subquery_name_list,
+        /*parent_expr_resolution_info=*/nullptr,
+        {.node_title_hint =
+             absl::StrCat("CTE subquery ", with_alias.ToString())}));
 
     // We don't want pseudo-columns from the subquery to make it out
     // of the WITH, so prune them away.
@@ -4754,6 +4857,15 @@ absl::Status Resolver::ResolveFromQuery(
   }
 
   *output_name_list = name_list;
+
+  // Record info for query visualizer tooling: a FROM query is the initial
+  // segment of a pipe query and produces this output NameList.
+  ASTNodeResolvedInfo& from_info = ast_node_resolved_info_map_[from_query];
+  from_info.node_title = "FROM query";
+  from_info.resolved_scan_info = ResolvedScanInfo{
+      .output_name_list = name_list,
+  };
+
   return absl::OkStatus();
 }
 
@@ -14679,7 +14791,7 @@ absl::Status Resolver::ResolveTableSubquery(
   GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(table_ref->subquery(), scope, alias,
                                &resolved_subquery, &subquery_name_list,
                                /*parent_expr_resolution_info=*/nullptr,
-                               /*options=*/{}));
+                               {.node_title_hint = "Table subquery"}));
   GOOGLESQL_RET_CHECK(nullptr != subquery_name_list);
 
   // A table subquery never preserves order, so we clear is_ordered on the
@@ -19002,6 +19114,16 @@ absl::Status Resolver::MakeScanForTable(
     GOOGLESQL_ASSIGN_OR_RETURN(name_list, NameList::AddRangeVariableInWrappingNameList(
                                     alias, alias_location, name_list));
   }
+
+  // Record information about this table scan for query visualizer tooling,
+  // keyed on the AST node for the table reference.
+  ASTNodeResolvedInfo& resolved_info = ast_node_resolved_info_map_[ast_location];
+  resolved_info.node_title = absl::StrCat("Table ", table->FullName());
+  resolved_info.table_scan_info = TableScanInfo{
+      .table = table,
+      .output_name_list = name_list,
+      .scan = table_scan.get(),
+  };
 
   *output_table_scan = std::move(table_scan);
   *output_name_list = std::move(name_list);

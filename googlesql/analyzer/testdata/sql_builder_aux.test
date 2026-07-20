@@ -31,13 +31,10 @@ CREATE TEMP TABLE X OPTIONS(x = 5, y = "abc", z = @test_param_array, z = "abc") 
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1
-|> AS keyvalue_2
-|> SELECT
-     keyvalue_2.a_1 AS key,
-     keyvalue_2.a_1 AS k1,
-     keyvalue_2.a_1 AS k2,
-     (keyvalue_2.a_1) + 1 AS k3
+     KeyValue.Key AS key,
+     KeyValue.Key AS k1,
+     KeyValue.Key AS k2,
+     (KeyValue.Key) + 1 AS k3
 |> LIMIT 5;
 ==
 
@@ -112,10 +109,10 @@ FROM
 [SQLBUILDER_OUTPUT]
 EXPORT DATA AS
 SELECT
-  55 AS a_1
-|> AS projectscan_2
+  55 AS int32_val1
+|> AS projectscan_1
 |> SELECT AS VALUE
-     NEW `googlesql_test.TestExtraPB`(CAST(55 AS INT32) AS int32_val1) AS a_3;
+     NEW `googlesql_test.TestExtraPB`(CAST(55 AS INT32) AS int32_val1) AS a_2;
 ==
 
 EXPLAIN select KitchenSink.repeated_date, KitchenSink.repeated_timestamp_micros
@@ -141,11 +138,8 @@ EXPLAIN
 FROM
   TestTable
 |> SELECT
-     TestTable.KitchenSink AS a_1
-|> AS testtable_2
-|> SELECT
-     testtable_2.a_1.repeated_date AS repeated_date,
-     testtable_2.a_1.repeated_timestamp_micros AS repeated_timestamp_micros;
+     TestTable.KitchenSink.repeated_date,
+     TestTable.KitchenSink.repeated_timestamp_micros;
 ==
 
 @{h1=1} EXPLAIN
@@ -166,12 +160,12 @@ FROM
 [SQLBUILDER_OUTPUT]
 @{ h1 = 1 } EXPLAIN @{ h2 = 2 } CREATE OR REPLACE TABLE x.y OPTIONS(o1 = 1) AS
 SELECT @{ h3 = 3 }
-  projectscan_2.a_1 AS a
+  projectscan_1.a_2 AS a
 FROM
   (
     SELECT
-      1 AS a_1
-    |> AS projectscan_2
+      1 AS a_2
+    |> AS projectscan_1
   );
 ==
 
@@ -1088,7 +1082,7 @@ RETURNS TABLE< INT64 > AS
 CREATE TABLE FUNCTION `my func`(a INT64)
 RETURNS TABLE< INT64 > AS
   SELECT
-    a + 2 AS a_1;
+    a + 2 AS result;
 ==
 
 # Create SQL table function with quoted variable.
@@ -1108,7 +1102,7 @@ RETURNS TABLE< INT64 > AS
 CREATE TABLE FUNCTION myfunc(`my var` INT64)
 RETURNS TABLE< INT64 > AS
   SELECT
-    (`my var`) + 2 AS a_1;
+    (`my var`) + 2 AS result;
 ==
 
 # Create SQL table function with explicit return type.
@@ -1134,7 +1128,7 @@ RETURNS TABLE< a INT64, result INT64 > AS
 CREATE TABLE FUNCTION myfunc(a INT64)
 RETURNS TABLE< a INT64, result INT64 > AS
   SELECT
-    a AS a,
+    a,
     a + 2 AS result;
 ==
 
@@ -1160,7 +1154,7 @@ RETURNS TABLE< a INT64, result INT64 > AS
 CREATE TABLE FUNCTION myfunc(a INT64)
 RETURNS TABLE< a INT64, result INT64 > AS
   SELECT
-    a AS a,
+    a,
     a + 2 AS result;
 ==
 

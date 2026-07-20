@@ -62,6 +62,7 @@
 #include "googlesql/common/graph_element_utils.h"
 #include "googlesql/common/measure_utils.h"
 #include "googlesql/common/thread_stack.h"
+#include "googlesql/common/utf_util.h"
 #include "googlesql/parser/parse_tree.h"
 #include "googlesql/public/annotation/collation.h"
 #include "googlesql/public/builtin_function.pb.h"
@@ -152,9 +153,51 @@ std::string SQLBuilder::GetColumnAlias(const ResolvedColumn& column) {
     return googlesql_base::FindOrDie(computed_column_alias(), column.column_id());
   }
 
-  const std::string alias = GenerateUniqueAliasName();
+  // In Pipe target mode, prefer a readable alias derived from the column's name
+  // (e.g. `int32`, `k`) instead of an opaque `a_<id>`, falling back to the
+  // generated name only for anonymous/internal columns (names that are empty or
+  // start with '$', such as `$col1`) or names that are not well-formed UTF-8
+  // (some internal columns carry binary names, e.g. anonymization partial
+  // aggregates, which cannot be emitted as a valid identifier). Uniqueness is
+  // preserved by suffixing.
+  std::string alias;
+  // ResolvedColumn::name() returns a std::string by value, so this must own the
+  // string -- binding it to a string_view would dangle into the destroyed
+  // temporary, and the reads below would be a use-after-free (observed as a
+  // corrupted alias under pipe target syntax).
+  const std::string name = column.name();
+  if (IsPipeSyntaxTargetMode() && !name.empty() &&
+      !absl::StartsWith(name, "$") && IsWellFormedUTF8(name)) {
+    alias = MakeUniqueColumnAlias(name);
+  } else {
+    alias = GenerateUniqueAliasName();
+  }
   googlesql_base::InsertOrDie(&mutable_computed_column_alias(), column.column_id(), alias);
   return alias;
+}
+
+bool SQLBuilder::ColumnAliasIsTaken(absl::string_view alias) const {
+  // SQL identifiers are case-insensitive, so aliases must be unique ignoring
+  // case (e.g. a table column `Value` and a group-by key `value` collide).
+  for (const auto& [column_id, column_alias] : computed_column_alias()) {
+    if (absl::EqualsIgnoreCase(column_alias, alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string SQLBuilder::MakeUniqueColumnAlias(absl::string_view name) {
+  std::string candidate = ToIdentifierLiteral(name);
+  if (!ColumnAliasIsTaken(candidate)) {
+    return candidate;
+  }
+  for (int suffix = 2;; ++suffix) {
+    candidate = ToIdentifierLiteral(absl::StrCat(name, "_", suffix));
+    if (!ColumnAliasIsTaken(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 std::string SQLBuilder::UpdateColumnAlias(const ResolvedColumn& column) {
@@ -673,7 +716,16 @@ absl::StatusOr<std::unique_ptr<SQLBuilder::QueryFragment>>
 SQLBuilder::ProcessNode(const ResolvedNode* node) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
   GOOGLESQL_RET_CHECK(node != nullptr);
-  GOOGLESQL_RETURN_IF_ERROR(node->Accept(this));
+  // Track the scan currently being visited for the visualizer side-channel, so
+  // AppendPipeOperator can attribute each emitted "|>" to its ResolvedScan.
+  // Restored afterwards so nested ProcessNode calls don't clobber it.
+  const ResolvedScan* saved_scan = current_scan_;
+  if (node->IsScan()) {
+    current_scan_ = node->GetAs<ResolvedScan>();
+  }
+  absl::Status accept_status = node->Accept(this);
+  current_scan_ = saved_scan;
+  GOOGLESQL_RETURN_IF_ERROR(accept_status);
   GOOGLESQL_RET_CHECK_EQ(query_fragments_.size(), 1) << CurrentStackTrace();
   return PopQueryFragment();
 }
@@ -2638,8 +2690,11 @@ absl::Status SQLBuilder::VisitResolvedGetRowField(
 absl::Status SQLBuilder::WrapQueryExpression(
     const ResolvedScan* node, QueryExpression* query_expression) {
   const std::string alias = GetScanAlias(node);
-  GOOGLESQL_RETURN_IF_ERROR(AddSelectListIfNeeded(node->column_list(), query_expression));
-  query_expression->Wrap(alias);
+  GOOGLESQL_RETURN_IF_ERROR(
+      AddSelectListIfNeeded(node->column_list(), query_expression, node));
+  // Visualizer: attribute the `|> AS alias` range-variable wrap to the scan
+  // being aliased.
+  query_expression->Wrap(alias, MakeScanMarker(node));
   SetPathForColumnList(node->column_list(), alias);
   return absl::OkStatus();
 }
@@ -2702,25 +2757,53 @@ absl::Status SQLBuilder::GetSelectList(
   // If any group_by column is computed in the select list, then update the sql
   // text for those columns in group_by_list inside the QueryExpression,
   // reflecting the ordinal position of select clause.
+  absl::flat_hash_set<int> materialized_group_by_columns;
   for (int pos = 0; pos < column_list.size(); ++pos) {
     const ResolvedColumn& col = column_list[pos];
     if (query_expression->HasGroupByColumn(col.column_id())) {
       query_expression->SetGroupByColumn(
           col.column_id(),
           absl::StrCat(pos + 1) /* select list ordinal position */);
+      materialized_group_by_columns.insert(col.column_id());
     }
   }
 
-  if (column_list.empty()) {
-    GOOGLESQL_RET_CHECK_EQ(select_list->size(), 0);
-    // Add a dummy value "NULL" to the select list if the column list is empty.
-    // This ensures that we form a valid query for scans with empty columns.
-    const std::string alias =
-        IsPipeSyntaxTargetMode() && query_expression->HasAnyGroupByColumn()
-            // In presence of group by columns, an alias in needed in Pipe
-            // syntax mode to form a syntactically correct query.
-            ? GenerateUniqueAliasName()
-            : "" /* no select alias */;
+  // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY <key>` must reference every
+  // group-by key by a (unique) alias, so each key has to be materialized in the
+  // select list. A key that is not in `column_list` -- e.g. a grouping key the
+  // resolver pruned from this scan's output -- was not assigned a select ordinal
+  // above and still holds its raw expression SQL in the group-by list. Append it
+  // here with a generated unique alias and record its ordinal, so the query can
+  // be formed in Pipe syntax instead of falling back to Standard syntax. The
+  // extra output column is harmless: a later operator (and the resolver, on
+  // re-analysis) prunes any column the query does not output. In the common case
+  // the aggregate already materializes every key, so nothing is appended here.
+  //
+  // Note: whether a key is already materialized is tracked explicitly
+  // (`materialized_group_by_columns`) rather than inferred from its stored
+  // value, because a group-by list entry holds either a select ordinal or the
+  // raw expression SQL, and the two are indistinguishable for an integer-valued
+  // key expression (e.g. `GROUP BY 1+2` or `GROUP BY CAST(1 AS INT64)`).
+  if (IsPipeSyntaxTargetMode()) {
+    for (const auto& [column_id, expr_sql] : query_expression->GroupByList()) {
+      if (materialized_group_by_columns.contains(column_id)) {
+        continue;
+      }
+      select_list->push_back(
+          std::make_pair(expr_sql, GenerateUniqueAliasName()));
+      query_expression->SetGroupByColumn(
+          column_id, absl::StrCat(select_list->size()) /* ordinal */);
+    }
+  }
+
+  if (select_list->empty()) {
+    // The scan has no output columns and no group-by keys were materialized
+    // above. Add a dummy value "NULL" to the select list. This ensures that we
+    // form a valid query for scans with empty columns. (In Pipe syntax mode a
+    // scan with group-by keys but an empty column list materializes those keys
+    // above, so it does not reach here and does not need this placeholder.)
+    GOOGLESQL_RET_CHECK(column_list.empty());
+    const std::string alias = "" /* no select alias */;
     select_list->push_back(std::make_pair("NULL", alias));
   }
 
@@ -2736,12 +2819,15 @@ absl::Status SQLBuilder::GetSelectList(const ResolvedColumnList& column_list,
 }
 
 absl::Status SQLBuilder::AddSelectListIfNeeded(
-    const ResolvedColumnList& column_list, QueryExpression* query_expression) {
+    const ResolvedColumnList& column_list, QueryExpression* query_expression,
+    const ResolvedScan* marker_scan) {
   if (!query_expression->CanFormSQLQuery()) {
     SQLAliasPairList select_list;
     GOOGLESQL_RETURN_IF_ERROR(GetSelectList(column_list, query_expression, &select_list));
     GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(select_list,
                                                    "" /* no select hints */));
+    // Visualizer: attribute this synthesized `|> SELECT` to the requested scan.
+    query_expression->SetSelectMarker(MakeScanMarker(marker_scan));
   }
   return absl::OkStatus();
 }
@@ -2775,6 +2861,9 @@ absl::Status SQLBuilder::VisitResolvedTableScan(const ResolvedTableScan* node) {
                      ProcessNode(node->for_system_time_expr()));
     absl::StrAppend(&from, " FOR SYSTEM_TIME AS OF ", result->GetSQL());
   }
+  // Visualizer: stamp the marker at the head of the `FROM <table>` so this base
+  // scan maps to its own leading segment.
+  from = absl::StrCat(MakeScanMarker(node), from);
   GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
 
   SQLAliasPairList select_list;
@@ -2815,6 +2904,8 @@ absl::Status SQLBuilder::VisitResolvedTableScan(const ResolvedTableScan* node) {
     }
   }
   GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(select_list, ""));
+  // Visualizer: attribute the column-listing `|> SELECT` to this table scan.
+  query_expression->SetSelectMarker(MakeScanMarker(node));
 
   if (node->lock_mode() != nullptr) {
     GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
@@ -3132,6 +3223,8 @@ absl::Status SQLBuilder::VisitResolvedMatchRecognizeScan(
   absl::StrAppend(&match_recognize, "\n) AS ", scan_alias);
 
   GOOGLESQL_RET_CHECK(query_expr->TrySetMatchRecognizeClause(match_recognize));
+  // Visualizer: attribute the `|> MATCH_RECOGNIZE` operator to this scan.
+  query_expr->SetMatchRecognizeMarker(MakeScanMarker(node));
   PushSQLForQueryExpression(node, query_expr.release());
 
   // Partitionining columns are visible downstream, but have already been named
@@ -3430,16 +3523,9 @@ absl::Status SQLBuilder::VisitResolvedAlignScan(const ResolvedAlignScan* node) {
 
 bool SQLBuilder::IsDegenerateProjectScan(
     const ResolvedProjectScan* node, const QueryExpression* query_expression) {
-  // In Pipe syntax mode, we cannot mark the project scan as degenerate
-  // when it wraps over an aggregate scan with group-by columns.
-  // Otherwise, the select list is overwritten with the output columns, and that
-  // causes a bad query to be output if there are duplicate column names.
-  if (IsPipeSyntaxTargetMode() &&
-      node->input_scan()->Is<ResolvedAggregateScanBase>() &&
-      query_expression->HasAnyGroupByColumn()) {
-    return false;
-  }
-
+  // Only reached in Standard syntax mode: Pipe syntax mode never elides a
+  // degenerate ProjectScan (see VisitResolvedProjectScan), so it does not call
+  // this.
   return node->expr_list_size() == 0     // no computed columns
          && node->hint_list_size() == 0  // no hints
          // same column list as the input scan
@@ -3462,6 +3548,49 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
     query_expression = std::move(result->query_expression);
   }
 
+  // Subpipeline projection: the input is a bare pipe operator chain (it starts
+  // from an empty ResolvedSubpipelineInputScan), so emit a `|> SELECT` operator
+  // listing the output columns and append it onto the chain. A subpipeline is
+  // always rendered in pipe syntax regardless of the global target syntax mode.
+  // The general FROM-rooted ProjectScan handling below uses the standard
+  // accumulate path.
+  if (query_expression->IsPipeOperatorChain()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+
+    std::map<int64_t /* column_id */, const ResolvedExpr*> col_to_expr_map;
+    for (const auto& expr : node->expr_list()) {
+      googlesql_base::InsertIfNotPresent(&col_to_expr_map, expr->column().column_id(),
+                              expr->expr());
+    }
+    SQLAliasPairList select_list;
+    GOOGLESQL_RETURN_IF_ERROR(GetSelectList(node->column_list(), col_to_expr_map, node,
+                                  query_expression.get(), &select_list));
+    std::string select_hints;
+    GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &select_hints));
+
+    std::vector<std::string> items;
+    items.reserve(select_list.size());
+    for (const auto& [column_sql, alias] : select_list) {
+      items.push_back(alias.empty() ? column_sql
+                                     : absl::StrCat(column_sql, " AS ", alias));
+    }
+    std::string op = absl::StrCat(
+        "SELECT ", select_hints.empty() ? "" : absl::StrCat(select_hints, " "),
+        absl::StrJoin(items, ", "));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op, /*is_pipe_operator_chain=*/true));
+
+    // The output columns now flow under their bare select aliases.
+    for (const ResolvedColumn& col : node->column_list()) {
+      SetPathForColumn(col, GetColumnAlias(col));
+    }
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   // When in Pipe syntax mode, if the input scan is not supported, wrap
   // the query expression in Standard syntax mode.
   if (IsPipeSyntaxTargetMode() &&
@@ -3471,7 +3600,13 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
     SetPathForColumnList(node->column_list(), alias);
   }
 
-  if (IsDegenerateProjectScan(node, query_expression.get()) &&
+  // In Pipe syntax mode, do not elide a degenerate (pass-through) ProjectScan:
+  // emit it through the normal path so every ResolvedProjectScan maps to a pipe
+  // operator (kept 1:1 even though the resulting `|> SELECT` is a no-op). In
+  // Standard syntax mode the elision is still applied -- a redundant nested
+  // SELECT there is pure noise.
+  if (!IsPipeSyntaxTargetMode() &&
+      IsDegenerateProjectScan(node, query_expression.get()) &&
       query_expression->CanFormSQLQuery()) {
     // NOTE: any future fields added to ProjectScan that are not IGNORABLE will
     // fail at CheckFieldsAccessed() when this condition is met.
@@ -3483,6 +3618,12 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
 
   // Capture has_group_by_clause before possibly wrapping the query.
   bool has_group_by_clause = query_expression->HasGroupByClause();
+  // For a plain table-scan input in Pipe mode, reference its columns by their
+  // natural names so we append `|> SELECT/EXTEND` directly onto `FROM <table>`
+  // rather than wrapping the scan under a fresh alias.
+  GOOGLESQL_RETURN_IF_ERROR(
+      TryUseLeafTableScanColumns(node->input_scan(), query_expression.get())
+          .status());
   if (query_expression->CanFormSQLQuery()) {
     GOOGLESQL_RETURN_IF_ERROR(
         WrapQueryExpression(node->input_scan(), query_expression.get()));
@@ -3501,6 +3642,9 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
   GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &select_hints));
 
   GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(select_list, select_hints));
+  // Visualizer: attribute the pipe SELECT operator this scan emits (rendered
+  // later by QueryExpression) back to this scan.
+  query_expression->SetSelectMarker(MakeScanMarker(node));
 
   // For queries that have only aggregate columns but no group-by columns, eg.
   // `select count(*) from table`, the following condition become true, and we
@@ -3822,8 +3966,8 @@ absl::StatusOr<std::string> SQLBuilder::ProcessResolvedTVFScan(
     std::string first_arg = std::move(argument_list[0]);
     argument_list.erase(argument_list.begin());
     from = absl::StrCat(first_arg.substr(1, first_arg.length() - 2), " ",
-                        QueryExpression::kPipe, " CALL ", name, "(",
-                        absl::StrJoin(argument_list, ", "), ")");
+                        QueryExpression::kPipe, MakeScanMarker(node), " CALL ",
+                        name, "(", absl::StrJoin(argument_list, ", "), ")");
   } else {
     from = absl::StrCat(name, "(", absl::StrJoin(argument_list, ", "), ")");
   }
@@ -3934,6 +4078,45 @@ absl::Status SQLBuilder::VisitResolvedFilterScan(
                    ProcessNode(node->input_scan()));
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
+
+  // In Pipe syntax mode, emit a single `|> WHERE` operator appended onto the
+  // running pipe SQL of the input scan. FilterScan does not change the column
+  // namespace, so the input's column bindings remain valid and no wrapping
+  // alias is introduced between operators. Inside a subpipeline body the target
+  // mode is forced to Pipe (see ScopedTargetSyntaxMode), so this branch covers
+  // the subpipeline case as well.
+  if (IsPipeSyntaxTargetMode() &&
+      !IsScanUnsupportedInPipeSyntax(node->input_scan())) {
+    // For a filter directly over a simple (non-value) table scan, expose the
+    // table's columns by their natural names and drop the table scan's select
+    // list, so the running pipe query is a clean `FROM <table>` and the WHERE
+    // references the columns directly without a leaf-boundary alias wrapper.
+    if (node->input_scan()->node_kind() == googlesql::RESOLVED_TABLE_SCAN) {
+      const auto* table_scan = node->input_scan()->GetAs<ResolvedTableScan>();
+      if (!table_scan->table()->IsValueTable()) {
+        GOOGLESQL_RETURN_IF_ERROR(SetPathForColumnsInScan(
+            table_scan, googlesql_base::FindWithDefault(table_alias_map(),
+                                                table_scan->table())));
+        query_expression->ResetSelectClause();
+      }
+    }
+    // Build the input pipe SQL first; this also binds the input scan's columns
+    // (via a one-time wrap of a structured input) before the filter expression
+    // is deparsed.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    const bool is_operator_chain = query_expression->IsPipeOperatorChain();
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                     ProcessNode(node->filter_expr()));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql,
+                           absl::StrCat("WHERE ", result->GetSQL()),
+                           is_operator_chain));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
 
   // When in Pipe syntax mode, if the input scan is not supported, wrap
   // the query expression in Standard syntax mode.
@@ -4223,6 +4406,33 @@ absl::Status SQLBuilder::SetPathForColumnsInScan(const ResolvedScan* scan,
   return absl::OkStatus();
 }
 
+absl::StatusOr<bool> SQLBuilder::TryUseLeafTableScanColumns(
+    const ResolvedScan* input_scan, QueryExpression* input_qe) {
+  if (!IsPipeSyntaxTargetMode()) {
+    return false;
+  }
+  if (input_scan->node_kind() != RESOLVED_TABLE_SCAN) {
+    return false;
+  }
+  const auto* table_scan = input_scan->GetAs<ResolvedTableScan>();
+  if (table_scan->table()->IsValueTable()) {
+    return false;
+  }
+  GOOGLESQL_RETURN_IF_ERROR(SetPathForColumnsInScan(
+      table_scan,
+      googlesql_base::FindWithDefault(table_alias_map(), table_scan->table())));
+  // Reserve a (natural-name) alias for each table column so that columns later
+  // derived from them -- e.g. a group-by key `k := <table_column>` -- are made
+  // globally unique against them and don't produce ambiguous bare references.
+  // When the table scan is collapsed into a consumer (e.g. an aggregate) its
+  // columns are otherwise referenced only by path and never get an alias.
+  for (const ResolvedColumn& column : table_scan->column_list()) {
+    GetColumnAlias(column);
+  }
+  input_qe->ResetSelectClause();
+  return true;
+}
+
 absl::Status SQLBuilder::SetPathForColumnsInReturningExpr(
     const ResolvedExpr* expr) {
   std::vector<std::unique_ptr<const ResolvedColumnRef>> refs;
@@ -4382,8 +4592,24 @@ absl::Status SQLBuilder::VisitResolvedJoinScan(const ResolvedJoinScan* node) {
 
   auto query_expression =
       std::make_unique<QueryExpression>(this->options_.target_syntax_mode);
-  GOOGLESQL_ASSIGN_OR_RETURN(std::string left_join_operand,
-                   GetJoinOperand(node->left_scan()));
+
+  // Process the left scan once. If it resolves to a subpipeline operator chain,
+  // the join is emitted as a `|> JOIN` operator appended onto that chain;
+  // otherwise the left operand is wrapped exactly as GetJoinOperand does.
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> left_fragment,
+                   ProcessNode(node->left_scan()));
+  std::unique_ptr<QueryExpression> left_qe =
+      std::move(left_fragment->query_expression);
+  const bool left_is_operator_chain = left_qe->IsPipeOperatorChain();
+  std::string left_join_operand;
+  if (left_is_operator_chain) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        left_join_operand, GetInputPipeSQL(node->left_scan(), left_qe.get()));
+  } else {
+    GOOGLESQL_RETURN_IF_ERROR(
+        WrapQueryExpression(node->left_scan(), left_qe.get()));
+    left_join_operand = std::string(left_qe->FromClause());
+  }
   std::string right_join_operand;
   if (build_using) {
     GOOGLESQL_ASSIGN_OR_RETURN(
@@ -4447,17 +4673,30 @@ absl::Status SQLBuilder::VisitResolvedJoinScan(const ResolvedJoinScan* node) {
     col_ref->MarkFieldsAccessed();
   }
 
-  std::string from;
-  absl::StrAppend(
-      &from, left_join_operand,
-      IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ",
+  std::string join_op = absl::StrCat(
       GetJoinTypeString(node->join_type(), node->join_expr() != nullptr), hints,
-      " ");
-  if (node->is_lateral()) {
-    absl::StrAppend(&from, "LATERAL ");
-  }
-  absl::StrAppend(&from, right_join_operand, join_expr_sql);
+      " ", node->is_lateral() ? "LATERAL " : "", right_join_operand,
+      join_expr_sql);
 
+  if (left_is_operator_chain) {
+    // Subpipeline: append `|> JOIN (right) ON/USING ...` onto the operator
+    // chain that flows in as the left operand.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(left_join_operand, join_op,
+                           /*is_pipe_operator_chain=*/true));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
+  // Visualizer: in pipe mode the join becomes a `|> JOIN` operator; stamp the
+  // marker at its head so it maps to this JoinScan.
+  std::string from = absl::StrCat(
+      left_join_operand,
+      IsPipeSyntaxTargetMode()
+          ? absl::StrCat(QueryExpression::kPipe, MakeScanMarker(node))
+          : " ",
+      join_op);
   GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
@@ -4533,23 +4772,43 @@ absl::Status SQLBuilder::VisitResolvedArrayScan(const ResolvedArrayScan* node) {
     }
     absl::StrAppend(&from, " AS ", GetColumnAlias(node->element_column()));
   } else {
+    // Process the input scan once. If it is a subpipeline operator chain, the
+    // array join is appended as a `|> [LEFT ]JOIN UNNEST(...)` operator onto the
+    // chain; otherwise the input is wrapped exactly as GetJoinOperand does.
+    bool input_is_operator_chain = false;
+    std::string input_pipe;  // chain pipe text (chain case)
+    std::string join_prefix;  // "<input> <sep>" (non-chain case)
     if (node->input_scan() != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(const std::string join_operand,
-                       GetJoinOperand(node->input_scan()));
-      absl::StrAppend(&from, join_operand,
-                      IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ",
-                      node->is_outer() ? "LEFT " : "", "JOIN ");
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input_fragment,
+                       ProcessNode(node->input_scan()));
+      std::unique_ptr<QueryExpression> input_qe =
+          std::move(input_fragment->query_expression);
+      input_is_operator_chain = input_qe->IsPipeOperatorChain();
+      if (input_is_operator_chain) {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            input_pipe, GetInputPipeSQL(node->input_scan(), input_qe.get()));
+      } else {
+        GOOGLESQL_RETURN_IF_ERROR(
+            WrapQueryExpression(node->input_scan(), input_qe.get()));
+        absl::StrAppend(&join_prefix, input_qe->FromClause(),
+                        IsPipeSyntaxTargetMode() ? QueryExpression::kPipe : " ");
+      }
     }
 
+    // Build the array-join operator text (everything after the input).
+    std::string array_op;
+    if (node->input_scan() != nullptr) {
+      absl::StrAppend(&array_op, node->is_outer() ? "LEFT " : "", "JOIN ");
+    }
     bool is_multiway_enabled = options_.language_options.LanguageFeatureEnabled(
         FEATURE_MULTIWAY_UNNEST);
-    absl::StrAppend(&from, "UNNEST(");
+    absl::StrAppend(&array_op, "UNNEST(");
     for (int i = 0; i < node->array_expr_list_size(); ++i) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> array_expr,
                        ProcessNode(node->array_expr_list(i)));
-      absl::StrAppend(&from, i > 0 ? ", " : "", array_expr->GetSQL());
+      absl::StrAppend(&array_op, i > 0 ? ", " : "", array_expr->GetSQL());
       if (is_multiway_enabled) {
-        absl::StrAppend(&from, " AS ",
+        absl::StrAppend(&array_op, " AS ",
                         GetColumnAlias(node->element_column_list(i)));
       }
     }
@@ -4557,28 +4816,38 @@ absl::Status SQLBuilder::VisitResolvedArrayScan(const ResolvedArrayScan* node) {
     if (node->array_zip_mode() != nullptr) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> mode,
                        ProcessNode(node->array_zip_mode()));
-      absl::StrAppend(&from, ", mode =>", mode->GetSQL());
+      absl::StrAppend(&array_op, ", mode =>", mode->GetSQL());
     }
-    absl::StrAppend(&from, ") ");
+    absl::StrAppend(&array_op, ") ");
 
     // When multiway UNNEST language feature is disabled and we see a singleton
     // UNNEST, we omit "AS" and write `UNNEST(<expr>) <alias>` directly for
     // backward compatibility reason.
     if (!is_multiway_enabled) {
       GOOGLESQL_RET_CHECK(node->element_column_list_size() == 1);
-      absl::StrAppend(&from, GetColumnAlias(node->element_column_list(0)));
+      absl::StrAppend(&array_op, GetColumnAlias(node->element_column_list(0)));
     }
 
     if (node->array_offset_column() != nullptr) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                        ProcessNode(node->array_offset_column()));
-      absl::StrAppend(&from, " WITH OFFSET ", result->GetSQL());
+      absl::StrAppend(&array_op, " WITH OFFSET ", result->GetSQL());
     }
     if (node->join_expr() != nullptr) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                        ProcessNode(node->join_expr()));
-      absl::StrAppend(&from, " ON ", result->GetSQL());
+      absl::StrAppend(&array_op, " ON ", result->GetSQL());
     }
+
+    if (input_is_operator_chain) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::unique_ptr<QueryExpression> out_qe,
+          AppendPipeOperator(input_pipe, array_op,
+                             /*is_pipe_operator_chain=*/true));
+      PushSQLForQueryExpression(node, out_qe.release());
+      return absl::OkStatus();
+    }
+    absl::StrAppend(&from, join_prefix, array_op);
   }
 
   GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
@@ -4593,6 +4862,39 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
 
+  // In Pipe syntax mode, emit a single pipe-native `|> LIMIT ... OFFSET ...`
+  // operator via AppendPipeOperator (which records the producing scan for the
+  // visualizer), rather than setting a QueryExpression clause.  Inside a
+  // subpipeline body the target mode is forced to Pipe, so this also covers the
+  // operator-chain input case.
+  if (IsPipeSyntaxTargetMode()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    std::string op = "LIMIT ";
+    if (node->limit() != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(node->limit()));
+      absl::StrAppend(&op, result->GetSQL());
+    } else {
+      absl::StrAppend(&op, "ALL");
+    }
+    if (node->offset() != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(node->offset()));
+      absl::StrAppend(&op, " OFFSET ", result->GetSQL());
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op,
+                           query_expression->IsPipeOperatorChain()));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
+  // The accumulate path below sets a LIMIT/OFFSET clause on the QueryExpression
+  // and lets GetSQLQuery render LIMIT ... OFFSET ... in Standard syntax mode.
+  // CanSetLimitClause does not require a FROM clause.
   if (!query_expression->CanSetLimitClause()) {
     GOOGLESQL_RETURN_IF_ERROR(
         WrapQueryExpression(node->input_scan(), query_expression.get()));
@@ -4615,8 +4917,12 @@ absl::Status SQLBuilder::VisitResolvedLimitOffsetScan(
                      ProcessNode(node->offset()));
     GOOGLESQL_RET_CHECK(query_expression->TrySetOffsetClause(result->GetSQL()));
   }
-  GOOGLESQL_RETURN_IF_ERROR(
-      AddSelectListIfNeeded(node->column_list(), query_expression.get()));
+  // A subpipeline's operator chain has an implicit input and needs no SELECT
+  // clause; adding one would emit a spurious `|> SELECT`.
+  if (!query_expression->IsPipeOperatorChain()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        AddSelectListIfNeeded(node->column_list(), query_expression.get()));
+  }
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }
@@ -5358,6 +5664,33 @@ absl::Status SQLBuilder::VisitResolvedSetOperationScan(
   }
 
   const auto& pair = GetOpTypePair(node->op_type());
+
+  // Subpipeline: if the first operand is an operator chain (the subpipeline
+  // input flowing into a `|> UNION/INTERSECT/EXCEPT`), emit the set operation as
+  // a pipe operator appended onto that chain: `|> <TYPE> <MODIFIER> (q2), ...`.
+  // Only the simple BY_POSITION form is handled this way; CORRESPONDING falls
+  // through to the standard balanced rendering.
+  if (node->column_match_mode() == ResolvedSetOperationScan::BY_POSITION &&
+      !set_op_scan_list.empty() &&
+      set_op_scan_list[0]->IsPipeOperatorChain()) {
+    std::string chain_pipe =
+        set_op_scan_list[0]->GetSQLQuery(TargetSyntaxMode::kPipe);
+    std::string op = absl::StrCat(pair.first, " ", pair.second);
+    if (!query_hints.empty()) {
+      absl::StrAppend(&op, " ", query_hints);
+    }
+    for (int i = 1; i < set_op_scan_list.size(); ++i) {
+      absl::StrAppend(
+          &op, i == 1 ? " " : ", ", "(",
+          set_op_scan_list[i]->GetSQLQuery(TargetSyntaxMode::kPipe), ")");
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(chain_pipe, op, /*is_pipe_operator_chain=*/true));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   GOOGLESQL_RET_CHECK(query_expression->TrySetSetOpScanList(
       &set_op_scan_list, pair.first, pair.second,
       GetSetOperationColumnMatchMode(node->column_match_mode()),
@@ -5416,13 +5749,40 @@ absl::Status SQLBuilder::VisitResolvedOrderByScan(
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
 
+  std::string order_by_hint_list;
+  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &order_by_hint_list));
+
+  // In Pipe syntax mode, emit a single `|> ORDER BY` operator. All input
+  // columns continue to flow, so order-by items can reference them directly
+  // without the wrap-and-reselect needed in Standard syntax. Inside a
+  // subpipeline body the target mode is forced to Pipe (see
+  // ScopedTargetSyntaxMode), so this branch covers the subpipeline case too.
+  if (IsPipeSyntaxTargetMode()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    std::vector<std::string> order_by_list;
+    for (const auto& order_by_item : node->order_by_item_list()) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> item_result,
+                       ProcessNode(order_by_item.get()));
+      order_by_list.push_back(item_result->GetSQL());
+    }
+    std::string op = absl::StrCat(
+        "ORDER ",
+        order_by_hint_list.empty() ? "" : absl::StrCat(order_by_hint_list, " "),
+        "BY ", absl::StrJoin(order_by_list, ", "));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op,
+                           query_expression->IsPipeOperatorChain()));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   // Wrap the input scan to avoid losing columns only used by order-by items
   // but not the select list.
   GOOGLESQL_RETURN_IF_ERROR(
       WrapQueryExpression(node->input_scan(), query_expression.get()));
-
-  std::string order_by_hint_list;
-  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &order_by_hint_list));
 
   GOOGLESQL_RETURN_IF_ERROR(
       AddSelectListIfNeeded(node->column_list(), query_expression.get()));
@@ -5495,6 +5855,23 @@ static absl::Status CheckNoSuccessiveAggregateScansWithDeferredColumns(
   return absl::OkStatus();
 }
 
+// Returns the set of group-by key column ids that, in Pipe syntax mode, must
+// always be materialized by a preceding `|> EXTEND` rather than inlined into the
+// pipe GROUP BY clause: constant/literal keys, since a bare literal is rejected
+// there as an ordinal or "GROUP BY literal value". (Additional keys may be
+// materialized at render time inside ROLLUP/CUBE/grouping-sets; see
+// QueryExpression::TryAppendGroupByClause.)
+static absl::flat_hash_set<int> ComputePipeGroupByForcedExtendColumns(
+    const ResolvedAggregateScanBase* node) {
+  absl::flat_hash_set<int> columns_to_extend;
+  for (const auto& computed_col : node->group_by_list()) {
+    if (computed_col->expr()->Is<ResolvedLiteral>()) {
+      columns_to_extend.insert(computed_col->column().column_id());
+    }
+  }
+  return columns_to_extend;
+}
+
 absl::Status SQLBuilder::ProcessAggregateScanBase(
     const ResolvedAggregateScanBase* node, bool is_differencial_privacy_scan,
     absl::flat_hash_map<int, int> grouping_column_id_map,
@@ -5506,6 +5883,11 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
         node->grouping_set_list(), node->rollup_column_list(),
         rollup_column_id_list, grouping_set_ids_info));
   }
+  // For a plain table-scan input in Pipe mode, reference its columns by their
+  // natural names so we append `|> AGGREGATE` directly onto `FROM <table>`
+  // rather than wrapping the scan under a fresh alias.
+  GOOGLESQL_RETURN_IF_ERROR(
+      TryUseLeafTableScanColumns(node->input_scan(), query_expression).status());
   if (!query_expression->CanSetGroupByClause()) {
     GOOGLESQL_RETURN_IF_ERROR(WrapQueryExpression(node->input_scan(), query_expression));
   }
@@ -5571,9 +5953,42 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
         group_by_list, group_by_hints, grouping_set_ids_info,
         rollup_column_id_list));
   }
+  query_expression->SetGroupByForcedExtendColumns(
+      ComputePipeGroupByForcedExtendColumns(node));
+  // Visualizer: attribute the pipe AGGREGATE/GROUP BY operator this scan emits
+  // (rendered later by QueryExpression) back to this scan.
+  query_expression->SetGroupByMarker(MakeScanMarker(current_scan_));
   if (!scans_to_collapse_.contains(node)) {
+    // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY` emits an output column
+    // for every grouping key. When the aggregate groups by columns that the
+    // resolver pruned from its output column list, add those columns to the
+    // select list so the grouping keys get aliases (required by pipe syntax).
+    // The pipe AGGREGATE then emits them as extra trailing output columns. This
+    // is harmless -- the aggregate faithfully computes those grouping keys -- and
+    // a later operator (e.g. the statement's final projection) drops any that the
+    // query does not output. In the common case (all grouping keys are already
+    // output) nothing is added.
+    //
+    // Scans that are unsupported in pipe syntax (anonymized / aggregation
+    // threshold) are rendered as a standard-syntax subquery by their consumer,
+    // so they must not be augmented (the extra grouping keys would leak into the
+    // standard SELECT) -- skip them here.
+    ResolvedColumnList select_column_list = node->column_list();
+    if (IsPipeSyntaxTargetMode() && !group_by_list.empty() &&
+        !node->column_list().empty() && !IsScanUnsupportedInPipeSyntax(node)) {
+      absl::flat_hash_set<int> output_column_ids;
+      for (const ResolvedColumn& col : node->column_list()) {
+        output_column_ids.insert(col.column_id());
+      }
+      for (const auto& computed_col : node->group_by_list()) {
+        const ResolvedColumn& group_by_column = computed_col->column();
+        if (output_column_ids.insert(group_by_column.column_id()).second) {
+          select_column_list.push_back(group_by_column);
+        }
+      }
+    }
     GOOGLESQL_RETURN_IF_ERROR(
-        AddSelectListIfNeeded(node->column_list(), query_expression));
+        AddSelectListIfNeeded(select_column_list, query_expression));
     // For queries that have only aggregate columns but no group-by columns, eg.
     // `select count(*) from table`, the following condition become true, and we
     // capture that information in the query_expression so that it can be used
@@ -5851,6 +6266,23 @@ absl::Status SQLBuilder::VisitResolvedSampleScan(
   std::unique_ptr<QueryExpression> query_expression(
       input_result->query_expression.release());
 
+  // Subpipeline: append a single `|> TABLESAMPLE ...` operator onto the input's
+  // operator chain. GetSqlForSample builds the full sample clause (including
+  // PARTITION BY / WITH WEIGHT / REPEATABLE).
+  if (query_expression->IsPipeOperatorChain()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string pipe_sql,
+        GetInputPipeSQL(node->input_scan(), query_expression.get()));
+    GOOGLESQL_ASSIGN_OR_RETURN(std::string sample,
+                     GetSqlForSample(node, /*is_gql=*/false));
+    std::string op(absl::StripLeadingAsciiWhitespace(sample));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<QueryExpression> out_qe,
+        AppendPipeOperator(pipe_sql, op, /*is_pipe_operator_chain=*/true));
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
   std::string from_clause;
   switch (node->input_scan()->node_kind()) {
     case RESOLVED_TABLE_SCAN: {
@@ -6068,10 +6500,32 @@ absl::Status SQLBuilder::VisitResolvedGeneralizedQueryStmt(
     return absl::OkStatus();
   }
 
-  // TODO Implement SQLBuilder for these.  We can't
-  // currently generate them without using subqueries around pipe operators
-  // like FORK that don't work in subqueries.
-  GOOGLESQL_RET_CHECK_FAIL() << "SQLBuilder for generalized statements not supported yet";
+  // A generalized query uses pipe operators like FORK that cannot appear inside
+  // a subquery, so the whole statement must be rendered in pipe syntax. This
+  // requires the SQLBuilder to be in Pipe target syntax mode.
+  GOOGLESQL_RET_CHECK(IsPipeSyntaxTargetMode())
+      << "Generalized query statements can only be rendered in Pipe syntax "
+         "target mode";
+
+  // `output_schema` is present if the outer query returns a table; if so, mark
+  // its fields accessed. It doesn't add syntax of its own here.
+  if (node->output_schema() != nullptr) {
+    for (const auto& output_column :
+         node->output_schema()->output_column_list()) {
+      output_column->MarkFieldsAccessed();
+    }
+    node->output_schema()->is_value_table();
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                   ProcessNode(node->query()));
+  std::unique_ptr<QueryExpression> query_expr =
+      std::move(result->query_expression);
+  GOOGLESQL_RET_CHECK(query_expr != nullptr);
+
+  PushQueryFragment(node,
+                    query_expr->GetSQLQuery(TargetSyntaxMode::kPipe));
+  return absl::OkStatus();
 }
 
 absl::Status SQLBuilder::VisitResolvedMultiStmt(const ResolvedMultiStmt* node) {
@@ -11972,6 +12426,83 @@ SQLBuilder::MaybeWrapPipeQueryAsStandardQuery(
   return pipe_query_expr;
 }
 
+absl::StatusOr<std::string> SQLBuilder::GetInputPipeSQL(
+    const ResolvedScan* input_scan, QueryExpression* input_qe) {
+  // A subpipeline body is a bare operator chain (no FROM root, possibly empty).
+  // Render it (any set clauses, e.g. from an aggregate, collapse into the
+  // operator-chain text via GetFromClausePipeSQL) so the next operator appends
+  // directly onto it. This is valid in any target syntax mode, since
+  // subpipelines are always pipe.
+  if (input_qe->IsPipeOperatorChain()) {
+    return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
+  }
+  GOOGLESQL_RET_CHECK(IsPipeSyntaxTargetMode());
+  // If the input renders as a complete query (it carries a SELECT or a set
+  // operation), it is not yet a pipe head: lift it into a pipe query once,
+  // binding its output columns under a fresh alias so the appended operator can
+  // reference them. This covers a leaf scan, an aggregate/project still built by
+  // the standard-accumulate path, and the `SELECT * FROM UNNEST(...)` query that
+  // stands in for a ResolvedSubpipelineInputScan.
+  //
+  // Otherwise the input is already a pipe head -- a running pipe query parked in
+  // the FROM clause, or a bare `FROM <table>` (optionally with FOR UPDATE) whose
+  // columns the caller already bound -- so it is rendered directly with no
+  // re-aliasing wrapper. GetSQLQuery(kPipe) supplies the leading FROM keyword
+  // for a bare table and emits an already-pipe string verbatim.
+  //
+  // For a plain table-scan input, expose its columns by their natural names so
+  // the operator appends directly onto `FROM <table>`. For any other input that
+  // already carries a SELECT / AGGREGATE / set operation, reference its output
+  // columns by the (unique) bare aliases it already produced, rather than
+  // binding them under a fresh `|> AS <rangevar>`. A bare pipe head (a running
+  // pipe query whose columns the caller already bound) is rendered directly.
+  GOOGLESQL_ASSIGN_OR_RETURN(bool used_leaf_columns,
+                   TryUseLeafTableScanColumns(input_scan, input_qe));
+  if (!used_leaf_columns && input_qe->CanFormSQLQuery()) {
+    for (const ResolvedColumn& column : input_scan->column_list()) {
+      SetPathForColumn(column, GetColumnAlias(column));
+    }
+  }
+  return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
+}
+
+absl::StatusOr<std::unique_ptr<QueryExpression>>
+SQLBuilder::MakePipeQueryExpression(absl::string_view pipe_sql) {
+  auto query_expression =
+      std::make_unique<QueryExpression>(TargetSyntaxMode::kPipe);
+  GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(pipe_sql));
+  return query_expression;
+}
+
+std::string SQLBuilder::MakeScanMarker(const ResolvedScan* scan) {
+  if (!options_.record_pipe_operator_markers || scan == nullptr) {
+    return "";
+  }
+  const int index = static_cast<int>(marker_scans_.size());
+  marker_scans_.push_back(scan);
+  return absl::StrCat("/*S", index, "*/");
+}
+
+absl::StatusOr<std::unique_ptr<QueryExpression>> SQLBuilder::AppendPipeOperator(
+    absl::string_view pipe_sql, absl::string_view op_sql,
+    bool is_pipe_operator_chain) {
+  // Visualizer side-channel: stamp an inline marker identifying the scan
+  // responsible for this operator at the head of its SQL, so the marker travels
+  // to the operator's exact final textual position.  No-op (empty marker) when
+  // recording is disabled; see pipe_operator_markers().
+  const std::string marker = MakeScanMarker(current_scan_);
+  std::string out_sql =
+      pipe_sql.empty()
+          ? absl::StrCat(marker, op_sql)
+          : absl::StrCat(pipe_sql, QueryExpression::kPipe, marker, op_sql);
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> query_expression,
+                   MakePipeQueryExpression(out_sql));
+  if (is_pipe_operator_chain) {
+    query_expression->MarkAsPipeOperatorChain();
+  }
+  return query_expression;
+}
+
 absl::Status SQLBuilder::VisitResolvedDescribeScan(
     const ResolvedDescribeScan* node) {
   // Generate SQL for the input scan.
@@ -11996,7 +12527,7 @@ absl::Status SQLBuilder::VisitResolvedDescribeScan(
   // <input_scan> |> DESCRIBE
   std::string sql =
       absl::StrCat(query_expr->GetSQLQuery(TargetSyntaxMode::kPipe),
-                   QueryExpression::kPipe, "DESCRIBE");
+                   QueryExpression::kPipe, MakeScanMarker(node), "DESCRIBE");
 
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> new_query_expr,
                    MaybeWrapPipeQueryAsStandardQuery(*node, sql));
@@ -12012,12 +12543,23 @@ absl::Status SQLBuilder::VisitResolvedStaticDescribeScan(
                    ProcessNode(node->input_scan()));
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
-  GOOGLESQL_RETURN_IF_ERROR(WrapQueryExpression(node->input_scan(), query_expr.get()));
 
-  // TODO We just lose |> STATIC_DESCRIBE for now.
-  // When the SQLBuilder supports adding a pipe operator, we should add it.
-  PushSQLForQueryExpression(node, query_expr.release());
+  GOOGLESQL_RETURN_IF_ERROR(
+      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
 
+  // STATIC_DESCRIBE is a no-op pass-through; its describe_text is produced at
+  // analysis time and is not part of the syntax, so the operator takes no
+  // arguments.  The new `|> STATIC_DESCRIBE` will recompute it when re-analyzed.
+  // Construct the SQL for the pipe operator as follows:
+  //   <input_scan> |> STATIC_DESCRIBE
+  std::string sql = absl::StrCat(
+      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe), QueryExpression::kPipe,
+      MakeScanMarker(node), "STATIC_DESCRIBE");
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> new_query_expr,
+                   MaybeWrapPipeQueryAsStandardQuery(*node, sql));
+
+  PushSQLForQueryExpression(node, new_query_expr.release());
   return absl::OkStatus();
 }
 
@@ -12029,29 +12571,24 @@ absl::Status SQLBuilder::VisitResolvedAssertScan(
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
 
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(node->input_scan(), query_expr.get(),
+                              &is_operator_chain));
 
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> condition,
                    ProcessNode(node->condition()));
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> message,
                    ProcessNode(node->message()));
-
-  GOOGLESQL_RET_CHECK(input != nullptr);
   GOOGLESQL_RET_CHECK(condition != nullptr);
   GOOGLESQL_RET_CHECK(message != nullptr);
 
   // Construct the SQL for the pipe operator as follows:
   // <input_scan> |> ASSERT <condition>, <message>
-  std::string assert_sql = absl::StrCat(
-      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe), QueryExpression::kPipe,
-      "ASSERT ", condition->GetSQL(), ", ", message->GetSQL());
-
-  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> assert_query_expr,
-                   MaybeWrapPipeQueryAsStandardQuery(*node, assert_sql));
-
-  PushSQLForQueryExpression(node, assert_query_expr.release());
-  return absl::OkStatus();
+  std::string op =
+      absl::StrCat("ASSERT ", condition->GetSQL(), ", ", message->GetSQL());
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
 }
 
 absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
@@ -12061,14 +12598,16 @@ absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
 
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
+  // Render the input to pipe SQL before processing the subpipeline.
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(node->input_scan(), query_expr.get(),
+                              &is_operator_chain));
 
-  // The subpipeline under ABSL_LOG doesn't affect the main execution pipeline so we
+  // The subpipeline under LOG doesn't affect the main execution pipeline so we
   // don't want any of its added aliases to affect later operators.
   // Save the state so we can undo any changes it makes.
-  // Depending how this gets used for different operators, this may belong
-  // as part of VisitResolvedSubpipeline rather than getting copied,
   // Save state on the heap because it might be large.
   auto saved_state = std::make_unique<CopyableState>(state_);
 
@@ -12077,7 +12616,7 @@ absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
                    ProcessNode(node->subpipeline()));
 
   // Avoid errors about unreferenced fields.  The output columns don't show up
-  // as part of the syntax for ABSL_LOG.
+  // as part of the syntax for LOG.
   GOOGLESQL_RET_CHECK(node->output_schema() != nullptr);
   for (const auto& output_column :
        node->output_schema()->output_column_list()) {
@@ -12086,20 +12625,64 @@ absl::Status SQLBuilder::VisitResolvedLogScan(const ResolvedLogScan* node) {
   node->output_schema()->is_value_table();
 
   // Construct the SQL for the pipe operator as follows:
-  //   <input_scan> |> ABSL_LOG <hint> <subpipeline>
-  std::string log_sql =
-      absl::StrCat(query_expr->GetSQLQuery(TargetSyntaxMode::kPipe),
-                   QueryExpression::kPipe, "LOG ");
-  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &log_sql));
-  absl::StrAppend(&log_sql, subpipeline_fragment->GetSQL());
+  //   <input_scan> |> LOG <hint> <subpipeline>
+  std::string op = "LOG ";
+  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &op));
+  absl::StrAppend(&op, subpipeline_fragment->GetSQL());
 
-  // Restore the state from before the ABSL_LOG subpipeline was analyzed.
+  // Restore the state from before the LOG subpipeline was analyzed.
   state_ = std::move(*saved_state);
 
-  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> output_query_expr,
-                   MaybeWrapPipeQueryAsStandardQuery(*node, log_sql));
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
+}
 
-  PushSQLForQueryExpression(node, output_query_expr.release());
+absl::StatusOr<std::string> SQLBuilder::RenderPipeOperatorInput(
+    const ResolvedScan* input_scan, QueryExpression* input_qe,
+    bool* is_operator_chain) {
+  *is_operator_chain = input_qe->IsPipeOperatorChain();
+  if (*is_operator_chain) {
+    // The input is a subpipeline operator chain; append directly onto it.
+    return std::string(input_qe->FromClause());
+  }
+  // For a plain table-scan input, reference its columns by their natural names.
+  // For a structured input (carrying a SELECT / AGGREGATE / set operation),
+  // reference its output columns by their bare aliases. A bare pipe head is
+  // rendered directly. None of these need a `|> AS <rangevar>` wrapper.
+  GOOGLESQL_ASSIGN_OR_RETURN(bool used_leaf_columns,
+                   TryUseLeafTableScanColumns(input_scan, input_qe));
+  if (!used_leaf_columns && input_qe->CanFormSQLQuery()) {
+    for (const ResolvedColumn& column : input_scan->column_list()) {
+      SetPathForColumn(column, GetColumnAlias(column));
+    }
+  }
+  return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
+}
+
+absl::Status SQLBuilder::FinishPipeOperatorScan(const ResolvedScan* node,
+                                                absl::string_view pipe_sql,
+                                                bool is_operator_chain,
+                                                absl::string_view op_sql) {
+  // Visualizer side-channel: stamp the inline marker at this operator's head so
+  // it maps back to `node` (no-op when marker recording is disabled).
+  const std::string marker = MakeScanMarker(node);
+  std::string combined =
+      pipe_sql.empty()
+          ? absl::StrCat(marker, op_sql)
+          : absl::StrCat(pipe_sql, QueryExpression::kPipe, marker, op_sql);
+
+  if (is_operator_chain) {
+    // This operator is itself inside a subpipeline, so keep producing an
+    // operator chain for the enclosing subpipeline to wrap.
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> out_qe,
+                     MakePipeQueryExpression(combined));
+    out_qe->MarkAsPipeOperatorChain();
+    PushSQLForQueryExpression(node, out_qe.release());
+    return absl::OkStatus();
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> out_qe,
+                   MaybeWrapPipeQueryAsStandardQuery(*node, combined));
+  PushSQLForQueryExpression(node, out_qe.release());
   return absl::OkStatus();
 }
 
@@ -12111,29 +12694,35 @@ absl::Status SQLBuilder::VisitResolvedPipeIfScan(
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
 
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
+  // Render the input to pipe SQL *before* processing the selected subpipeline.
+  // The IF's output columns are the columns flowing out of the selected
+  // subpipeline, so we want the subpipeline's rebinding of those columns to be
+  // the final word; we therefore must not save/restore state around it.
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(node->input_scan(), query_expr.get(),
+                              &is_operator_chain));
 
-  std::string if_sql = absl::StrCat(
-      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe), QueryExpression::kPipe);
-
+  // Build the IF operator body: IF <cond> THEN <sub> [ELSEIF ...] [ELSE <sub>].
+  std::string op;
   for (int i = 0; i < node->if_case_list().size(); ++i) {
     const ResolvedPipeIfCase* if_case = node->if_case_list(i);
     bool is_selected_case = (i == node->selected_case());
     if (i == 0) {
-      absl::StrAppend(&if_sql, "IF ");
+      absl::StrAppend(&op, "IF ");
     } else if (if_case->IsElse()) {
       GOOGLESQL_RET_CHECK_EQ(i, node->if_case_list().size() - 1);
-      absl::StrAppend(&if_sql, "ELSE ");
+      absl::StrAppend(&op, "ELSE ");
     } else {
-      absl::StrAppend(&if_sql, "ELSEIF ");
+      absl::StrAppend(&op, "ELSEIF ");
     }
 
     if (!if_case->IsElse()) {
       GOOGLESQL_RET_CHECK(if_case->condition() != nullptr);
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> condition,
                        ProcessNode(if_case->condition()));
-      absl::StrAppend(&if_sql, condition->GetSQL(), " THEN ");
+      absl::StrAppend(&op, condition->GetSQL(), " THEN ");
     }
 
     // For the selected case, build the subpipeline from its resolved AST.
@@ -12142,18 +12731,73 @@ absl::Status SQLBuilder::VisitResolvedPipeIfScan(
       GOOGLESQL_RET_CHECK(if_case->subpipeline() != nullptr);
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> fragment,
                        ProcessNode(if_case->subpipeline()));
-      absl::StrAppend(&if_sql, fragment->GetSQL(), "\n");
+      absl::StrAppend(&op, fragment->GetSQL(), "\n");
     } else {
       GOOGLESQL_RET_CHECK(!if_case->subpipeline_sql().empty());
-      absl::StrAppend(&if_sql, if_case->subpipeline_sql(), "\n");
+      absl::StrAppend(&op, if_case->subpipeline_sql(), "\n");
     }
   }
 
-  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> output_query_expr,
-                   MaybeWrapPipeQueryAsStandardQuery(*node, if_sql));
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
+}
 
-  PushSQLForQueryExpression(node, output_query_expr.release());
-  return absl::OkStatus();
+absl::StatusOr<std::string> SQLBuilder::GetPipeSubpipelineListSQL(
+    absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+        subpipeline_list) {
+  std::vector<std::string> parts;
+  parts.reserve(subpipeline_list.size());
+  for (const auto& item : subpipeline_list) {
+    GOOGLESQL_RET_CHECK(item->subpipeline() != nullptr);
+    // Each subpipeline is an independent branch over the same input. Save the
+    // state so any aliases/column paths it adds don't affect later branches or
+    // the continuing pipeline. Save state on the heap because it might be large.
+    auto saved_state = std::make_unique<CopyableState>(state_);
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> fragment,
+                     ProcessNode(item->subpipeline()));
+    parts.push_back(fragment->GetSQL());
+
+    // The output schema (if any) doesn't add syntax, but avoid errors about
+    // unreferenced fields.
+    if (item->output_schema() != nullptr) {
+      for (const auto& output_column :
+           item->output_schema()->output_column_list()) {
+        output_column->MarkFieldsAccessed();
+      }
+      item->output_schema()->is_value_table();
+    }
+
+    state_ = std::move(*saved_state);
+  }
+  return absl::StrJoin(parts, ", ");
+}
+
+absl::Status SQLBuilder::VisitResolvedPipeForkOrTeeScan(
+    const ResolvedScan* node, const ResolvedScan* input_scan,
+    absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+        subpipeline_list,
+    absl::string_view keyword) {
+  // Generate SQL for the input scan.
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input,
+                   ProcessNode(input_scan));
+  std::unique_ptr<QueryExpression> query_expr =
+      std::move(input->query_expression);
+
+  // Render the input to pipe SQL before processing the subpipelines.
+  bool is_operator_chain = false;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string pipe_sql,
+      RenderPipeOperatorInput(input_scan, query_expr.get(),
+                              &is_operator_chain));
+
+  // Construct the SQL for the pipe operator as follows:
+  //   <input_scan> |> FORK <hint> (<subpipeline>), (<subpipeline>), ...
+  std::string op = absl::StrCat(keyword, " ");
+  GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &op));
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string subpipelines_sql,
+                   GetPipeSubpipelineListSQL(subpipeline_list));
+  absl::StrAppend(&op, subpipelines_sql);
+
+  return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
 }
 
 absl::Status SQLBuilder::VisitResolvedFinishScan(
@@ -12179,18 +12823,14 @@ absl::Status SQLBuilder::VisitResolvedFinishScan(
 
 absl::Status SQLBuilder::VisitResolvedPipeForkScan(
     const ResolvedPipeForkScan* node) {
-  // TODO Implement SQLBuilder for FORK.  We can't
-  // currently generate it without using subqueries, and FORK doesn't work
-  // in subqueries.
-  GOOGLESQL_RET_CHECK_FAIL() << "SQLBuilder for FORK not supported yet";
+  return VisitResolvedPipeForkOrTeeScan(node, node->input_scan(),
+                                        node->subpipeline_list(), "FORK");
 }
 
 absl::Status SQLBuilder::VisitResolvedPipeTeeScan(
     const ResolvedPipeTeeScan* node) {
-  // TODO Implement SQLBuilder for TEE.  We can't
-  // currently generate it without using subqueries, and TEE doesn't work
-  // in subqueries.
-  GOOGLESQL_RET_CHECK_FAIL() << "SQLBuilder for TEE not supported yet";
+  return VisitResolvedPipeForkOrTeeScan(node, node->input_scan(),
+                                        node->subpipeline_list(), "TEE");
 }
 
 absl::Status SQLBuilder::VisitResolvedPipeExportDataScan(
@@ -12213,62 +12853,37 @@ absl::Status SQLBuilder::VisitResolvedPipeInsertScan(
 
 absl::Status SQLBuilder::VisitResolvedSubpipeline(
     const ResolvedSubpipeline* node) {
-  // This is a hack to generate subpipeline SQL before we have SQLBuilder pipe
-  // syntax support.  We want it to start with a pipe operator, maybe using an
-  // empty string for the ResolvedSubpipelineInputScan, and then adding pipe
-  // operators onto it.
-  //
-  // Instead, using the standard-syntax builder, we'll get an inside-out query
-  // that has the ResolvedSubpipelineInputScan in the middle.  To make that work
-  // as a subpipeline, we'll generate a complex subquery something like this.
-  // See the code below for the full pattern.
-  //
-  //   |> AGRREGATE ARRAY_AGG(STRUCT(<column list>)) AS __SubpipelineInput__
-  //   |> JOIN UNNEST(ARRAY(
-  //        # This subquery is the one generated by the SQLBuilder.
-  //        SELECT ...
-  //        FROM (
-  //          # This subquery is the ResolvedSubpipelineInputScan.
-  //          SELECT * FROM UNNEST(__SubpipelineInput__)
-  //        )
-  //
-  // Explanation:
-  // It first bundles the subpipeline input into one row as an array of structs.
-  // Then it does a lateral join (using the array hack) to execute a subquery
-  // (generated by SQLBuilder for the subpipeline) over that one row of input.
-  // The innermost subquery comes from the ResolvedSubpipelineInputScan, and
-  // it will UNNEST the array value to produce the subpipeline input rows.
-  //
-  // When we have real pipe syntax support in the SQLBuilder, we can avoid this.
-  // TODO Replace with pipe SQLBuilder support.
-
-  // Generate SQL for the scan.  This will generate a query that starts by
-  // reading a ResolvedSubpipelineInputScan placeholder table.
+  // A subpipeline is always rendered in pipe syntax. It starts from an empty
+  // ResolvedSubpipelineInputScan (see VisitResolvedSubpipelineInputScan) and
+  // its scans append pipe operators onto that empty operator chain, producing a
+  // QueryExpression whose `from_` holds the bare operator sequence (e.g.
+  // "WHERE x |> SELECT y"). We wrap that in parentheses with a leading pipe to
+  // form the subpipeline syntax consumed by FORK/TEE/IF/LOG:
+  //   ( |> WHERE x |> SELECT y )
+  // A subpipeline is always pipe syntax, even when the enclosing query is being
+  // rendered in standard syntax (the enclosing FORK/TEE/IF/LOG operator wraps
+  // the result into a standard subquery as needed). Force Pipe target mode for
+  // the duration of building the subpipeline body.
+  ScopedTargetSyntaxMode scoped_mode(this, TargetSyntaxMode::kPipe);
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input,
                    ProcessNode(node->scan()));
-
-  // Convert the query to a subquery. This also adds the needed parentheses.
   std::unique_ptr<QueryExpression> query_expr =
       std::move(input->query_expression);
   GOOGLESQL_RET_CHECK(query_expr != nullptr);
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(node->scan(), query_expr.get()));
-  std::string subquery_sql = query_expr->GetSQLQuery(TargetSyntaxMode::kPipe);
+  GOOGLESQL_RET_CHECK(query_expr->IsPipeOperatorChain())
+      << "Subpipeline body did not resolve to a pipe operator chain";
 
-  // Generate the subpipeline SQL.
-  // The `SELECT *` pieces seem to work but may have some edge case issues.
-  // If this was permanent, it should probably list columns explicitly.
-  std::string sql = absl::StrCat(
-      R"(( |> SELECT AS STRUCT *
-  |> AS __StructValue__
-  |> AGGREGATE ARRAY_AGG(__StructValue__) AS __SubpipelineInput__
-  |> JOIN UNNEST(ARRAY(
-          )",
-      subquery_sql, QueryExpression::kPipe, R"(
-     SELECT AS STRUCT *))
-  |> SELECT *
-  |> AS )",
-      GetScanAlias(node->scan()), ")\n");
+  // Render the operator chain. Any clauses set on the QE by the last operator
+  // (e.g. an aggregate's `|> AGGREGATE`) collapse into the operator-chain text
+  // via GetFromClausePipeSQL, which renders the chain's `from_` verbatim.
+  std::string operators =
+      query_expr->GetSQLQuery(TargetSyntaxMode::kPipe);
+  std::string sql;
+  if (operators.empty()) {
+    sql = "()";
+  } else {
+    absl::StrAppend(&sql, "(\n  |> ", operators, "\n)");
+  }
 
   // Return the subpipeline as a fragment, since it isn't a query.
   PushQueryFragment(node, sql);
@@ -12277,22 +12892,16 @@ absl::Status SQLBuilder::VisitResolvedSubpipeline(
 
 absl::Status SQLBuilder::VisitResolvedSubpipelineInputScan(
     const ResolvedSubpipelineInputScan* node) {
-  // This node is a placeholder scan at the start of a subpipeline.  It
-  // shouldn't actually show up in the SQL, since the subpipeline starts
-  // directly with pipe operators, so we'd prefer to just return an empty
-  // string here and then let the following scans add pipe operators onto it.
-  //
-  // We can't do that yet, since the SQLBuilder will generate a standard syntax
-  // query rather than pipe operators.  So we need to generate a query that
-  // works as the innermost scan for that query.  The pattern is described
-  // above in VisitResolvedSubpipeline.
-
+  // This node is a placeholder scan at the start of a subpipeline. It does not
+  // show up in the SQL: a subpipeline starts directly with pipe operators, so
+  // we return an empty operator-chain QueryExpression and let the following
+  // scans append pipe operators onto it (see GetInputPipeSQL and
+  // VisitResolvedSubpipeline). A subpipeline is always pipe syntax, so the
+  // operator-chain QueryExpression uses Pipe target mode regardless of the
+  // global target syntax mode.
   auto query_expression =
-      std::make_unique<QueryExpression>(this->options_.target_syntax_mode);
-  GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause("UNNEST(__SubpipelineInput__)"));
-  GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(
-      {std::make_pair("*", "" /* no select_alias */)}, "" /* no hints */));
-
+      std::make_unique<QueryExpression>(TargetSyntaxMode::kPipe);
+  query_expression->MarkAsPipeOperatorChain();
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }

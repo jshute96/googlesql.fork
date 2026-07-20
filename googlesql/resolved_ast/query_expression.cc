@@ -71,15 +71,48 @@ absl::StatusOr<QueryExpression::QueryType> QueryExpression::GetQueryType()
 // Joins entries present in <list> (with pairs as elements) separated by
 // <delimiter>. While appending each pair we add the second element (if present)
 // as an alias to the first element.
+// Interprets a group-by entry's stored value as a 1-based select-list ordinal,
+// returning the corresponding 0-based index when it is one. Defined below.
+static std::optional<int> GetGroupByColumnOrdinal(
+    absl::string_view column_ordinal_or_sql);
+
+// Returns true if `expr` is a plain column-reference path (only identifiers,
+// dots and backticks) whose trailing component is `alias`, so an explicit
+// `AS <alias>` would be redundant (e.g. `t.k AS k`, `k AS k`). When
+// `case_sensitive` is false the trailing component is compared ignoring case
+// (SQL identifiers are case-insensitive), which is what callers need when
+// deciding whether inlining `expr` bare would still yield a column reachable by
+// `alias` -- the rendered path keeps the original case (`t.Value`) while the
+// alias is lower-cased (`value`).
+static bool AliasIsRedundant(absl::string_view expr, absl::string_view alias,
+                             bool case_sensitive = true) {
+  if (alias.empty()) {
+    return false;
+  }
+  for (const char c : expr) {
+    if (!(absl::ascii_isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+          c == '.' || c == '`' || c == '$')) {
+      return false;
+    }
+  }
+  const size_t dot = expr.rfind('.');
+  const absl::string_view trailing =
+      (dot == absl::string_view::npos) ? expr : expr.substr(dot + 1);
+  return case_sensitive ? trailing == alias
+                        : absl::EqualsIgnoreCase(trailing, alias);
+}
+
 static std::string JoinListWithAliases(
     absl::Span<const std::pair<std::string, std::string>> list,
-    absl::string_view delimiter) {
+    absl::string_view delimiter, bool omit_redundant_aliases = false) {
   std::string list_str;
   bool first = true;
   for (const auto& entry : list) {
     if (!first) absl::StrAppend(&list_str, delimiter);
 
-    if (entry.second.empty()) {
+    if (entry.second.empty() ||
+        (omit_redundant_aliases &&
+         AliasIsRedundant(entry.first, entry.second))) {
       absl::StrAppend(&list_str, entry.first);
     } else {
       absl::StrAppend(&list_str, entry.first, " AS ", entry.second);
@@ -101,13 +134,16 @@ std::string QueryExpression::GetWithClauseSQL() const {
   return sql;
 }
 
-bool QueryExpression::TryAppendSelectClause(std::string& sql) const {
+bool QueryExpression::TryAppendSelectClause(
+    std::string& sql, bool omit_redundant_aliases) const {
   if (select_list_.empty()) {
     return false;
   }
 
   ABSL_DCHECK(set_op_type_.empty() && set_op_modifier_.empty() &&
          set_op_scan_list_.empty());
+  // Visualizer: stamp the marker at the head of this SELECT operator.
+  absl::StrAppend(&sql, select_marker_);
   absl::StrAppend(
       &sql, "SELECT ",
       anonymization_options_.empty()
@@ -115,7 +151,7 @@ bool QueryExpression::TryAppendSelectClause(std::string& sql) const {
           : absl::StrCat(anonymization_options_, " "),
       query_hints_.empty() ? "" : absl::StrCat(query_hints_, " "),
       select_as_modifier_.empty() ? "" : absl::StrCat(select_as_modifier_, " "),
-      JoinListWithAliases(select_list_, ", "));
+      JoinListWithAliases(select_list_, ", ", omit_redundant_aliases));
   return true;
 }
 
@@ -183,6 +219,13 @@ std::string QueryExpression::GetFromClauseStandardSQL() const {
 }
 
 std::string QueryExpression::GetFromClausePipeSQL() const {
+  // A pipe operator chain (a subpipeline body) holds a bare sequence of pipe
+  // operators in `from_` (e.g. "WHERE x |> SELECT y"), not a FROM-rooted query,
+  // so it is rendered verbatim -- never prefixed with FROM.
+  if (is_pipe_operator_chain_) {
+    return from_;
+  }
+
   if (from_.empty()) {
     return "";
   }
@@ -245,7 +288,8 @@ bool QueryExpression::TryAppendMatchRecognizeClause(std::string& sql) const {
     return false;
   }
 
-  absl::StrAppend(&sql, match_recognize_);
+  // Visualizer: stamp the marker at the head of this MATCH_RECOGNIZE operator.
+  absl::StrAppend(&sql, match_recognize_marker_, match_recognize_);
   return true;
 }
 
@@ -373,6 +417,31 @@ bool QueryExpression::TryAppendGroupByClause(
       (group_by_all_ && !pipe_mode) || !group_by_list_.empty();
 
   bool appended = false;
+  // In Pipe syntax mode, a GROUP BY inlines each key expression directly
+  // (`<expr> AS <alias>` for a plain GROUP BY, or the bare `<expr>` inside
+  // `ROLLUP(...)`/`CUBE(...)`/`GROUPING SETS(...)`, where the grammar forbids
+  // aliases), avoiding a separate `|> EXTEND` operator (and the extra output
+  // column it would materialize, which can otherwise collide with an input
+  // column of the same name). Keys that cannot be inlined are instead
+  // materialized by a preceding `|> EXTEND ... AS <alias>` and referenced by
+  // alias: constant/literal keys always (recorded in
+  // `group_by_forced_extend_columns_`), and -- inside ROLLUP/CUBE/grouping-sets,
+  // where aliases are not allowed -- any key whose expression's implicit output
+  // name does not already equal its assigned alias (so the alias must be set by
+  // the EXTEND).
+  const bool has_grouping_structure =
+      !rollup_column_id_list_.empty() || !grouping_set_ids_info_.IsEmpty();
+  auto column_needs_extend = [this, has_grouping_structure](int column_id) {
+    if (group_by_forced_extend_columns_.contains(column_id)) {
+      return true;
+    }
+    if (!has_grouping_structure) {
+      return false;
+    }
+    return !AliasIsRedundant(GetGroupByColumnSqlOrDie(column_id),
+                             GetGroupByColumnAliasOrDie(column_id),
+                             /*case_sensitive=*/false);
+  };
   if (pipe_mode) {
     // In Pipe syntax mode, the GROUP BY ... part can refer to columns only by
     // aliases, not ordinal.
@@ -381,25 +450,50 @@ bool QueryExpression::TryAppendGroupByClause(
     auto [group_by_columns, aggregate_columns] =
         GetGroupByAndAggregateColumns();
 
-    // If there are group-by columns, we add them along with their aliases as
-    // EXTEND clauses, so that we can refer to those aliases in the GROUP BY ...
-    // part later.
-    if (!group_by_columns.empty()) {
+    // Collect the (sql, alias) pairs for the group-by keys that must be
+    // materialized by a preceding `|> EXTEND` (rather than inlined).
+    SQLAliasPairList extend_columns;
+    for (const auto& [column_id, ordinal_or_sql] : group_by_list_) {
+      if (!column_needs_extend(column_id)) {
+        continue;
+      }
+      std::optional<int> ordinal = GetGroupByColumnOrdinal(ordinal_or_sql);
+      if (ordinal.has_value()) {
+        extend_columns.push_back(select_list_.at(*ordinal));
+      }
+    }
+
+    // Visualizer: stamp the marker at the very head of this pipe operator (the
+    // EXTEND, or the AGGREGATE when there is no EXTEND) so it lands in the
+    // operator's segment.  Only when something is actually emitted, so we never
+    // leave an orphan marker with no "|>".
+    if (!group_by_marker_.empty() &&
+        (!extend_columns.empty() || group_by_required ||
+         !aggregate_columns.empty())) {
+      absl::StrAppend(&sql, group_by_marker_);
+    }
+
+    if (!extend_columns.empty()) {
       absl::StrAppend(&sql, "EXTEND ",
-                      JoinListWithAliases(group_by_columns, ", "), kPipe);
+                      JoinListWithAliases(extend_columns, ", ",
+                                          /*omit_redundant_aliases=*/true),
+                      kPipe);
       appended = true;
     }
 
     // If there are aggregate columns, or the GROUP BY ... part is required, we
     // add the AGGREGATE ... part, with the aggregate columns and their aliases.
     if (group_by_required || !aggregate_columns.empty()) {
-      ReplaceGroupingExpressionsWithAliases(aggregate_columns,
-                                            group_by_columns);
+      // For group-by keys materialized by a preceding `|> EXTEND`, rewrite
+      // `GROUPING(<expr>)` to reference the EXTEND alias. Inlined keys keep the
+      // bare expression, which `GROUPING(<expr>)` already references.
+      ReplaceGroupingExpressionsWithAliases(aggregate_columns, extend_columns);
       absl::StrAppend(&sql, "AGGREGATE ",
                       anonymization_options_.empty()
                           ? ""
                           : absl::StrCat(anonymization_options_, " "),
-                      JoinListWithAliases(aggregate_columns, ", "),
+                      JoinListWithAliases(aggregate_columns, ", ",
+                                          /*omit_redundant_aliases=*/true),
                       aggregate_columns.empty() ? "" : " ");
       appended = true;
     }
@@ -415,11 +509,18 @@ bool QueryExpression::TryAppendGroupByClause(
       &sql, " GROUP ",
       group_by_hints_.empty() ? "" : absl::StrCat(group_by_hints_, " "), "BY ");
 
-  // In Pipe syntax mode, we must use the group-by column aliases, whereas
-  // in Standard syntax mode, we are okay to use the group-by columns directly.
-  auto get_column_or_alias = [this, pipe_mode](int column_id) {
-    return pipe_mode ? GetGroupByColumnAliasOrDie(column_id)
-                     : GetGroupByColumnOrDie(column_id);
+  // In Standard syntax mode, we use the group-by column SQL directly. In Pipe
+  // syntax mode we inline the key expression (required inside ROLLUP/CUBE/
+  // grouping-sets, where aliases are not allowed); keys materialized by a
+  // preceding `|> EXTEND` are instead referenced by their aliases.
+  auto get_column_or_alias = [this, pipe_mode,
+                              &column_needs_extend](int column_id) {
+    if (!pipe_mode) {
+      return GetGroupByColumnOrDie(column_id);
+    }
+    return column_needs_extend(column_id)
+               ? GetGroupByColumnAliasOrDie(column_id)
+               : GetGroupByColumnSqlOrDie(column_id);
   };
 
   // The Pipe syntax mode does not support GROUP BY ALL.
@@ -460,20 +561,35 @@ bool QueryExpression::TryAppendGroupByClause(
       AppendGroupingSetIdsInfoToSql(grouping_set_ids_info_, append_column_list,
                                     sql);
     } else {
-      // We assume while iterating the group_by_list_, the entries will be
-      // sorted by the column id.
+      // Plain GROUP BY (no ROLLUP/CUBE/grouping-sets). We assume while iterating
+      // the group_by_list_, the entries will be sorted by the column id.
       absl::StrAppend(
-          &sql, absl::StrJoin(
-                    group_by_list_, ", ",
-                    [this, pipe_mode](
-                        std::string* out,
-                        const std::pair<int, std::string>& column_id_and_sql) {
-                      auto column_alias_or_sql =
-                          pipe_mode ? GetGroupByColumnAliasOrDie(
-                                          column_id_and_sql.first)
-                                    : column_id_and_sql.second;
-                      absl::StrAppend(out, column_alias_or_sql);
-                    }));
+          &sql,
+          absl::StrJoin(
+              group_by_list_, ", ",
+              [this, pipe_mode, &column_needs_extend](
+                  std::string* out,
+                  const std::pair<int, std::string>& column_id_and_sql) {
+                const int column_id = column_id_and_sql.first;
+                if (!pipe_mode) {
+                  absl::StrAppend(out, column_id_and_sql.second);
+                  return;
+                }
+                if (column_needs_extend(column_id)) {
+                  // Materialized by a preceding `|> EXTEND`; reference its
+                  // alias.
+                  absl::StrAppend(out, GetGroupByColumnAliasOrDie(column_id));
+                  return;
+                }
+                // Inline as `<expr> AS <alias>`, omitting a redundant alias.
+                const std::string expr_sql = GetGroupByColumnSqlOrDie(column_id);
+                const std::string alias = GetGroupByColumnAliasOrDie(column_id);
+                if (AliasIsRedundant(expr_sql, alias)) {
+                  absl::StrAppend(out, expr_sql);
+                } else {
+                  absl::StrAppend(out, expr_sql, " AS ", alias);
+                }
+              }));
     }
   }
   return true;
@@ -601,39 +717,21 @@ bool QueryExpression::CanFormPipeSQLQuery() const {
     return false;
   }
 
-  // This query has GROUP BY clause.
-  if (HasGroupByClauseOrOnlyAggregateColumns()) {
-    // In Pipe SQL syntax, we must refer to group-by columns using their
-    // aliases. If we have group-by columns without aliases, we cannot form the
-    // query in Pipe SQL syntax.
-    if (!AllGroupByColumnsHaveAliases()) {
-      return false;
-    } else {
-      // If all group-by columns have aliases, we still cannot form the query in
-      // Pipe SQL syntax if there are columns with duplicate aliases.
-      if (!rollup_column_id_list_.empty()) {
-        absl::flat_hash_map<int, std::string> aliases;
-        int i = 0;
-        for (int column_id : rollup_column_id_list_) {
-          aliases[i++] = GetGroupByColumnAliasOrDie(column_id);
-        }
-        if (HasDuplicateAliases(aliases)) {
-          return false;
-        }
-      }
-
-      auto [group_by_columns, _] = GetGroupByAndAggregateColumns();
-      if (!group_by_columns.empty()) {
-        absl::flat_hash_map<int, absl::string_view> aliases;
-        int i = 0;
-        for (auto const& entry : group_by_columns) {
-          aliases[i++] = entry.second;
-        }
-        if (HasDuplicateAliases(aliases)) {
-          return false;
-        }
-      }
-    }
+  // In Pipe SQL syntax, `|> AGGREGATE ... GROUP BY <key>` must refer to every
+  // group-by key by an alias, so each key has to be materialized in the select
+  // list. The SQLBuilder guarantees this (see SQLBuilder::GetSelectList, which
+  // assigns a unique alias to every group-by key in Pipe syntax mode, including
+  // keys pruned from the scan output). This is a defensive guard against any
+  // path that bypasses that materialization: if a key still has no alias, fall
+  // back to Standard syntax rather than crash while rendering.
+  //
+  // Distinct group-by columns always get distinct aliases, so duplicate aliases
+  // are no longer a reason to fall back; a column intentionally repeated in
+  // ROLLUP/CUBE/GROUPING SETS (e.g. `ROLLUP(x, y, x)`) reuses its own alias,
+  // which is valid Pipe syntax.
+  if (HasGroupByClauseOrOnlyAggregateColumns() &&
+      !AllGroupByColumnsHaveAliases()) {
+    return false;
   }
 
   return true;
@@ -689,7 +787,9 @@ std::string QueryExpression::GetPipeSQLQuery() const {
   // If the GROUP BY clause was added, there is no need to add the SELECT
   // clause because the aggregate columns are already in the GROUP BY clause.
   if (!group_by_clause_added) {
-    AppendSeparator(TryAppendSelectClause(sql), sql, kPipe);
+    AppendSeparator(
+        TryAppendSelectClause(sql, /*omit_redundant_aliases=*/true), sql,
+        kPipe);
   }
 
   bool limit_clause_added = TryAppendLimitClause(sql);
@@ -715,7 +815,8 @@ std::string QueryExpression::GetPipeSQLQuery() const {
 
 void QueryExpression::WrapImpl(absl::string_view alias,
                                TargetSyntaxMode subquery_target_syntax_mode,
-                               TargetSyntaxMode target_syntax_mode) {
+                               TargetSyntaxMode target_syntax_mode,
+                               absl::string_view pipe_marker) {
   ABSL_DCHECK(CanFormSQLQuery());
   ABSL_DCHECK(!alias.empty());
 
@@ -742,7 +843,7 @@ void QueryExpression::WrapImpl(absl::string_view alias,
       if (absl::StartsWith(sql, "FROM ")) {
         sql.erase(0, 5);
       }
-      from_ = absl::StrCat(sql, kPipe, "AS ", alias);
+      from_ = absl::StrCat(sql, kPipe, pipe_marker, "AS ", alias);
       break;
     }
   }
@@ -921,7 +1022,11 @@ bool QueryExpression::CanSetSetOpScanList() const {
          !HasWhereClause() && !HasGroupByClause();
 }
 bool QueryExpression::CanSetGroupByClause() const {
-  return !HasGroupByClause() && HasFromClause() && CanSetSelectClause();
+  // A pipe operator chain (a subpipeline body) has no FROM clause -- its input
+  // is implicit -- but it can still take a `|> AGGREGATE ... GROUP BY ...`
+  // operator, so don't require a FROM clause in that case.
+  return !HasGroupByClause() &&
+         (HasFromClause() || is_pipe_operator_chain_) && CanSetSelectClause();
 }
 bool QueryExpression::CanSetOrderByClause() const {
   return !HasOrderByClause() && !HasLimitClause() && !HasOffsetClause() &&
@@ -981,6 +1086,18 @@ std::string QueryExpression::GetGroupByColumnAliasOrDie(int column_id) const {
   ABSL_CHECK(ordinal.has_value());  // Crash OK. Follows the same pattern as
                                // GetGroupByColumnOrDie.
   return select_list_.at(*ordinal).second;
+}
+
+std::string QueryExpression::GetGroupByColumnSqlOrDie(int column_id) const {
+  std::string column_ordinal_or_sql = GetGroupByColumnOrDie(column_id);
+  std::optional<int> ordinal = GetGroupByColumnOrdinal(column_ordinal_or_sql);
+  // If the group-by key was materialized into the select list (the common
+  // case), return its expression SQL there; otherwise the stored value is
+  // already the expression SQL.
+  if (ordinal.has_value()) {
+    return select_list_.at(*ordinal).first;
+  }
+  return column_ordinal_or_sql;
 }
 
 bool QueryExpression::AllGroupByColumnsHaveAliases() const {
@@ -1103,6 +1220,7 @@ absl::Status QueryExpression::SetGroupByOnlyAggregateColumns(
 void QueryExpression::ClearAllClauses() {
   with_list_.clear();
   select_list_.clear();
+  select_marker_.clear();
   select_as_modifier_.clear();
   query_hints_.clear();
   from_.clear();
@@ -1118,6 +1236,7 @@ void QueryExpression::ClearAllClauses() {
   group_by_only_aggregate_columns_ = false;
   group_by_list_.clear();
   group_by_hints_.clear();
+  group_by_marker_.clear();
   order_by_list_.clear();
   order_by_hints_.clear();
   limit_.clear();
@@ -1127,23 +1246,48 @@ void QueryExpression::ClearAllClauses() {
   pivot_.clear();
   unpivot_.clear();
   match_recognize_.clear();
+  match_recognize_marker_.clear();
   align_.clear();
   lock_mode_.clear();
 }
 
+// These structural checks look at the leading keyword of a SQL fragment.  The
+// prefix is the original "\\s*\\(*\\s*" (leading whitespace, opening parens,
+// whitespace) with a block-comment skip inserted at the two spots an injected
+// comment can sit before the keyword: at the very start ("/*marker*/SELECT ...")
+// and just inside an opening paren ("(/*marker*/SELECT ...) UNION ...").
+// Skipping these comments stops the query visualizer's "/*S7*/" pipe-operator
+// markers (see SQLBuilder::record_pipe_operator_markers) from hiding the keyword
+// and flipping the decision (e.g. dropping a needed FROM, or adding a spurious
+// one).  The comment body "(?:[^*]|\\*[^/])*" stops at the first "*/" so it
+// cannot span across multiple comments (a naive ".*?" backtracks across
+// "/*A*/ x /*B*/" and matches a keyword after the *second* comment).  With no
+// comments present the prefix is byte-for-byte the original "\\s*\\(*\\s*", so
+// non-visualizer output is unaffected.
+//
+// The macros must stay string literals so the patterns are compile-time-constant
+// char arrays (LazyRE2 stores the pointer and builds the RE2 lazily).
+#define GOOGLESQL_QE_COMMENTS "(?:/\\*(?:[^*]|\\*[^/])*\\*/\\s*)*"
+#define GOOGLESQL_QE_LEADING_NOISE \
+  "^\\s*" GOOGLESQL_QE_COMMENTS "\\(*\\s*" GOOGLESQL_QE_COMMENTS
+
 bool StartsWithSelectOrFromOrWith(absl::string_view sql) {
-  static const LazyRE2 kRegex = {"^\\s*\\(*\\s*(WITH|SELECT|FROM)\\s+"};
+  static const LazyRE2 kRegex = {
+      GOOGLESQL_QE_LEADING_NOISE "(WITH|SELECT|FROM)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
 
 bool StartsWithSelectOrFrom(absl::string_view sql) {
-  static const LazyRE2 kRegex = {"^\\s*\\(*\\s*(SELECT|FROM)\\s+"};
+  static const LazyRE2 kRegex = {GOOGLESQL_QE_LEADING_NOISE "(SELECT|FROM)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
 
 bool StartsWithWith(absl::string_view sql) {
-  static const LazyRE2 kRegex = {"^\\s*\\(*\\s*(WITH)\\s+"};
+  static const LazyRE2 kRegex = {GOOGLESQL_QE_LEADING_NOISE "(WITH)\\s+"};
   return RE2::PartialMatch(sql, *kRegex);
 }
+
+#undef GOOGLESQL_QE_LEADING_NOISE
+#undef GOOGLESQL_QE_COMMENTS
 
 }  // namespace googlesql

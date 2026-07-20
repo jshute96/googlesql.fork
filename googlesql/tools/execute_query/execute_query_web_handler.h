@@ -107,13 +107,25 @@ class ExecuteQueryWebHandler {
   bool HandleRequest(const ExecuteQueryWebRequest& request,
                      const Writer& writer);
 
+  // Renders the static shell of the full-window /visualize page (GET
+  // /visualize). The shell's JavaScript then POSTs the saved request back to
+  // /visualize and injects the content rendered by HandleVisualizeContent.
+  bool HandleVisualizeShell(const Writer& writer);
+
+  // Runs the query in visualize-only mode and renders just the visualizer
+  // content fragment (POST /visualize), which the shell page injects.
+  bool HandleVisualizeContent(const ExecuteQueryWebRequest& request,
+                              const Writer& writer);
+
  private:
   absl::Status ExecuteQueryImpl(const ExecuteQueryWebRequest& request,
                                 ExecuteQueryConfig& config,
-                                ExecuteQueryWriter& exec_query_writer);
+                                ExecuteQueryWriter& exec_query_writer,
+                                bool force_visualize_only = false);
   bool ExecuteQuery(const ExecuteQueryWebRequest& request,
                     ExecuteQueryConfig& config, std::string& error_msg,
-                    ExecuteQueryWriter& exec_query_writer);
+                    ExecuteQueryWriter& exec_query_writer,
+                    bool force_visualize_only = false);
 
   const QueryWebTemplates& templates_;
 };

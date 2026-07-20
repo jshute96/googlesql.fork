@@ -929,7 +929,7 @@ RETURNS BOOL AS (
 [SQLBUILDER_OUTPUT]
 CREATE AGGREGATE FUNCTION LambdaArgHidesFunctionArg(key INT64)
 RETURNS BOOL AS (
-  ANY_VALUE(ARRAY_INCLUDES(ARRAY< INT64 >[1, 2, 3], (a_1) -> a_1 > 3)
+  ANY_VALUE(ARRAY_INCLUDES(ARRAY< INT64 >[1, 2, 3], (key) -> key > 3)
     GROUP BY key)
 );
 
@@ -1020,17 +1020,17 @@ CREATE AGGREGATE FUNCTION LambdaArgHidesFunctionArg(key INT64)
 RETURNS BOOL AS (
   ANY_VALUE((
       SELECT
-        ARRAY< INT64 >[1, 2, 3] AS a_1
-      |> AS projectscan_2
+        ARRAY< INT64 >[1, 2, 3] AS array_to_search
+      |> AS projectscan_1
       |> SELECT
-           `IF`((projectscan_2.a_1) IS NULL, CAST(NULL AS BOOL), EXISTS(
+           `IF`((projectscan_1.array_to_search) IS NULL, CAST(NULL AS BOOL), EXISTS(
                FROM
-                 UNNEST(projectscan_2.a_1) AS a_4
+                 UNNEST(projectscan_1.array_to_search) AS element
                |> WHERE
-                    a_4 > 3
+                    element > 3
                |> SELECT
-                    1 AS a_5
-             )) AS a_3
+                    1 AS a_3
+             )) AS a_2
     )
     GROUP BY key)
 );
@@ -1086,7 +1086,7 @@ RETURNS BOOL AS (
 [SQLBUILDER_OUTPUT]
 CREATE AGGREGATE FUNCTION LambdaBodyAccessingGroupingKey(key INT64)
 RETURNS BOOL AS (
-  ANY_VALUE(ARRAY_INCLUDES(ARRAY< INT64 >[1, 2, 3], (a_1) -> key > 3)
+  ANY_VALUE(ARRAY_INCLUDES(ARRAY< INT64 >[1, 2, 3], (e) -> key > 3)
     GROUP BY key)
 );
 
@@ -1180,17 +1180,17 @@ CREATE AGGREGATE FUNCTION LambdaBodyAccessingGroupingKey(key INT64)
 RETURNS BOOL AS (
   ANY_VALUE((
       SELECT
-        ARRAY< INT64 >[1, 2, 3] AS a_1
-      |> AS projectscan_2
+        ARRAY< INT64 >[1, 2, 3] AS array_to_search
+      |> AS projectscan_1
       |> SELECT
-           `IF`((projectscan_2.a_1) IS NULL, CAST(NULL AS BOOL), EXISTS(
+           `IF`((projectscan_1.array_to_search) IS NULL, CAST(NULL AS BOOL), EXISTS(
                FROM
-                 UNNEST(projectscan_2.a_1) AS a_4
+                 UNNEST(projectscan_1.array_to_search) AS element
                |> WHERE
                     key > 3
                |> SELECT
-                    1 AS a_5
-             )) AS a_3
+                    1 AS a_3
+             )) AS a_2
     )
     GROUP BY key)
 );
@@ -1268,7 +1268,11 @@ RETURNS INT64 AS (
         UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_1
       |> AGGREGATE
            SUM(key
-             GROUP BY key) AS a_2)
+             GROUP BY key) AS a_2
+      |> AS aggregatescan_3
+      |> SELECT
+           aggregatescan_3.a_2
+    )
     GROUP BY key)
 );
 ==
@@ -1420,24 +1424,28 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_1
+  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS x
 |> SELECT
-     ARRAY_TRANSFORM(ARRAY< INT64 >[a_1], (a_3) -> (
+     ARRAY_TRANSFORM(ARRAY< INT64 >[x], (e) -> (
          FROM
-           UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_4
+           UNNEST(ARRAY< INT64 >[1, 2, 3]) AS y
          |> AGGREGATE
               SUM((
-                  SELECT
-                    MAX(KeyValue.Key) AS a_7
                   FROM
                     KeyValue
-                  WHERE
-                    (KeyValue.Key) < a_3
-                  GROUP BY KeyValue.Value
-                  |> AS aggregatescan_8
+                  |> WHERE
+                       (KeyValue.Key) < e
+                  |> AGGREGATE
+                       MAX(KeyValue.Key) AS a_2
+                     GROUP BY KeyValue.Value AS value_2
+                  |> AS aggregatescan_3
                   |> SELECT
-                       aggregatescan_8.a_7 AS a_7
-                )) AS a_9)) AS a_2;
+                       aggregatescan_3.a_2
+                )) AS a_4
+         |> AS aggregatescan_5
+         |> SELECT
+              aggregatescan_5.a_4
+       )) AS a_1;
 
 [REWRITTEN AST]
 QueryStmt
@@ -1591,41 +1599,44 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_1
+  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS x
 |> SELECT
      (
        SELECT
-         ARRAY< INT64 >[a_1] AS a_3
-       |> AS projectscan_4
+         ARRAY< INT64 >[x] AS array_to_transform
+       |> AS projectscan_2
        |> SELECT
-            `IF`((projectscan_4.a_3) IS NULL, CAST(NULL AS ARRAY< INT64 >), ARRAY(
+            `IF`((projectscan_2.array_to_transform) IS NULL, CAST(NULL AS ARRAY< INT64 >), ARRAY(
                 FROM
-                  UNNEST(projectscan_4.a_3) AS a_6 WITH OFFSET AS a_7
+                  UNNEST(projectscan_2.array_to_transform) AS element WITH OFFSET AS off
                 |> SELECT
-                     a_6 AS a_6,
-                     a_7 AS a_7,
+                     element,
+                     off,
                      (
                        FROM
-                         UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_9
+                         UNNEST(ARRAY< INT64 >[1, 2, 3]) AS y
                        |> AGGREGATE
                             SUM((
-                                SELECT
-                                  MAX(KeyValue.Key) AS a_12
                                 FROM
                                   KeyValue
-                                WHERE
-                                  (KeyValue.Key) < a_6
-                                GROUP BY KeyValue.Value
-                                |> AS aggregatescan_13
+                                |> WHERE
+                                     (KeyValue.Key) < element
+                                |> AGGREGATE
+                                     MAX(KeyValue.Key) AS a_5
+                                   GROUP BY KeyValue.Value AS value_2
+                                |> AS aggregatescan_6
                                 |> SELECT
-                                     aggregatescan_13.a_12 AS a_12
-                              )) AS a_14) AS a_8
-                |> AS projectscan_15
-                |> ORDER BY projectscan_15.a_7
+                                     aggregatescan_6.a_5
+                              )) AS a_7
+                       |> AS aggregatescan_8
+                       |> SELECT
+                            aggregatescan_8.a_7
+                     ) AS a_4
+                |> ORDER BY off
                 |> SELECT
-                     projectscan_15.a_8 AS a_8
-              )) AS a_5
-     ) AS a_2;
+                     a_4
+              )) AS a_3
+     ) AS a_1;
 ==
 
 #
@@ -1684,10 +1695,14 @@ CREATE FUNCTION GroupingConstantFromUnnest(arr ARRAY< INT64 >, int64_arg INT64)
 RETURNS INT64 AS (
   (
     FROM
-      UNNEST(arr) AS a_1
+      UNNEST(arr) AS X
     |> AGGREGATE
-         SUM(a_1
-           GROUP BY a_1) AS a_2)
+         SUM(X
+           GROUP BY X) AS a_1
+    |> AS aggregatescan_2
+    |> SELECT
+         aggregatescan_2.a_1
+  )
 );
 ==
 
@@ -1746,10 +1761,14 @@ CREATE FUNCTION GroupingConstantFromArg(arr ARRAY< INT64 >, int64_arg INT64)
 RETURNS INT64 AS (
   (
     FROM
-      UNNEST(arr) AS a_1
+      UNNEST(arr) AS X
     |> AGGREGATE
          SUM(int64_arg
-           GROUP BY a_1) AS a_2)
+           GROUP BY X) AS a_1
+    |> AS aggregatescan_2
+    |> SELECT
+         aggregatescan_2.a_1
+  )
 );
 ==
 
@@ -1801,7 +1820,7 @@ RETURNS INT64 AS (
 [SQLBUILDER_OUTPUT]
 CREATE AGGREGATE FUNCTION WithExprAccessingGroupingConstAndArg(key INT64, not_aggregate_arg INT64 NOT AGGREGATE)
 RETURNS INT64 AS (
-  SUM(WITH(a_1 AS key * 2, a_1 + not_aggregate_arg)
+  SUM(WITH(key_times_two AS key * 2, key_times_two + not_aggregate_arg)
     GROUP BY key)
 );
 
@@ -1867,10 +1886,10 @@ CREATE AGGREGATE FUNCTION WithExprAccessingGroupingConstAndArg(key INT64, not_ag
 RETURNS INT64 AS (
   SUM((
       SELECT
-        key * 2 AS a_1
-      |> AS projectscan_2
+        key * 2 AS key_times_two
+      |> AS projectscan_1
       |> SELECT
-           (projectscan_2.a_1) + not_aggregate_arg AS a_3
+           (projectscan_1.key_times_two) + not_aggregate_arg AS injected
     )
     GROUP BY key)
 );
@@ -1949,7 +1968,11 @@ RETURNS DOUBLE AS (
         UNNEST(arr1) AS a_1
       |> AGGREGATE
            MAX(key
-             GROUP BY key) AS a_2) AS DOUBLE)
+             GROUP BY key) AS a_2
+      |> AS aggregatescan_3
+      |> SELECT
+           aggregatescan_3.a_2
+    ) AS DOUBLE)
     GROUP BY key)
 );
 ==

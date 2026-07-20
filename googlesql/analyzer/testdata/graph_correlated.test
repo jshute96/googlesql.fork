@@ -280,67 +280,64 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS ! %)
+      (n IS ! %)
     COLUMNS(
       (
         FROM
           KeyValue
-        |> SELECT
-             KeyValue.Key AS a_4
-        |> AS keyvalue_5
         |> SELECT
              (
                FROM
                  GRAPH_TABLE(
                    aml
                    MATCH
-                     (a_8 IS ! %)
+                     (m IS ! %)
                    COLUMNS(
-                     keyvalue_5.a_4 AS a_9,
-                     PROPERTY_EXISTS(a_2, name) AS a_10,
+                     KeyValue.Key AS key_2,
+                     PROPERTY_EXISTS(n, name) AS n_has_name,
                      (
                        SELECT
-                         PROPERTY_EXISTS(a_8, name) AS a_12
-                     ) AS a_11,
+                         PROPERTY_EXISTS(m, name) AS a_4
+                     ) AS m_has_name,
                      (
                        SELECT
-                         SAME(a_8, a_8) AS a_14
-                     ) AS a_13,
-                     SAME(a_8, a_8) AS a_15,
-                     SAME(a_2, a_2) AS a_16
+                         SAME(m, m) AS a_5
+                     ) AS same_m_m,
+                     SAME(m, m) AS same_m_m_2,
+                     SAME(n, n) AS same_n_n
                    )
-                 ) AS aml_7
+                 ) AS aml_3
                |> SELECT
-                    aml_7.a_9 AS a_9,
-                    aml_7.a_10 AS a_10,
-                    aml_7.a_11 AS a_11,
-                    aml_7.a_13 AS a_13,
-                    aml_7.a_15 AS a_15,
-                    aml_7.a_16 AS a_16
-               |> AS graphtablescan_17
+                    aml_3.key_2,
+                    aml_3.n_has_name,
+                    aml_3.m_has_name,
+                    aml_3.same_m_m,
+                    aml_3.same_m_m_2,
+                    aml_3.same_n_n
+               |> AS graphtablescan_6
                |> SELECT
-                    1 AS a_18
-               |> LIMIT 1) AS a_6
-        |> LIMIT 1) AS a_3,
+                    1 AS a_7
+               |> LIMIT 1) AS a_2
+        |> LIMIT 1) AS sub_query,
       (
         SELECT
-          PROPERTY_EXISTS(a_2, name) AS a_20
-      ) AS a_19,
+          PROPERTY_EXISTS(n, name) AS a_8
+      ) AS n_has_name_2,
       (
         SELECT
-          SAME(a_2, a_2) AS a_22
-      ) AS a_21,
-      SAME(a_2, a_2) AS a_23
+          SAME(n, n) AS a_9
+      ) AS same_n_n_2,
+      SAME(n, n) AS same_n_n_2_2
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3,
-     aml_1.a_19 AS a_19,
-     aml_1.a_21 AS a_21,
-     aml_1.a_23 AS a_23
-|> AS graphtablescan_24
+     aml_1.sub_query,
+     aml_1.n_has_name_2,
+     aml_1.same_n_n_2,
+     aml_1.same_n_n_2_2
+|> AS graphtablescan_10
 |> SELECT
-     1 AS a_25;
+     1 AS a_11;
 --
 # Nested subquery: outer layer has no matching table chain but inner layer has
 # multiple matching table chains.
@@ -592,67 +589,64 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS ! %)
+      (n IS ! %)
     COLUMNS(
       (
         FROM
           KeyValue
-        |> SELECT
-             KeyValue.Key AS a_4
-        |> AS keyvalue_5
         |> SELECT
              (
                FROM
                  GRAPH_TABLE(
                    aml
                    MATCH
-                     (a_8 IS %)
+                     (m IS %)
                    COLUMNS(
-                     keyvalue_5.a_4 AS a_9,
-                     PROPERTY_EXISTS(a_2, name) AS a_10,
+                     KeyValue.Key AS key_2,
+                     PROPERTY_EXISTS(n, name) AS n_has_name,
                      (
                        SELECT
-                         PROPERTY_EXISTS(a_8, name) AS a_12
-                     ) AS a_11,
+                         PROPERTY_EXISTS(m, name) AS a_4
+                     ) AS m_has_name,
                      (
                        SELECT
-                         SAME(a_8, a_8) AS a_14
-                     ) AS a_13,
-                     SAME(a_8, a_8) AS a_15,
-                     SAME(a_2, a_2) AS a_16
+                         SAME(m, m) AS a_5
+                     ) AS same_m_m,
+                     SAME(m, m) AS same_m_m_2,
+                     SAME(n, n) AS same_n_n
                    )
-                 ) AS aml_7
+                 ) AS aml_3
                |> SELECT
-                    aml_7.a_9 AS a_9,
-                    aml_7.a_10 AS a_10,
-                    aml_7.a_11 AS a_11,
-                    aml_7.a_13 AS a_13,
-                    aml_7.a_15 AS a_15,
-                    aml_7.a_16 AS a_16
-               |> AS graphtablescan_17
+                    aml_3.key_2,
+                    aml_3.n_has_name,
+                    aml_3.m_has_name,
+                    aml_3.same_m_m,
+                    aml_3.same_m_m_2,
+                    aml_3.same_n_n
+               |> AS graphtablescan_6
                |> SELECT
-                    1 AS a_18
-               |> LIMIT 1) AS a_6
-        |> LIMIT 1) AS a_3,
+                    1 AS a_7
+               |> LIMIT 1) AS a_2
+        |> LIMIT 1) AS sub_query,
       (
         SELECT
-          PROPERTY_EXISTS(a_2, name) AS a_20
-      ) AS a_19,
+          PROPERTY_EXISTS(n, name) AS a_8
+      ) AS n_has_name_2,
       (
         SELECT
-          SAME(a_2, a_2) AS a_22
-      ) AS a_21,
-      SAME(a_2, a_2) AS a_23
+          SAME(n, n) AS a_9
+      ) AS same_n_n_2,
+      SAME(n, n) AS same_n_n_2_2
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3,
-     aml_1.a_19 AS a_19,
-     aml_1.a_21 AS a_21,
-     aml_1.a_23 AS a_23
-|> AS graphtablescan_24
+     aml_1.sub_query,
+     aml_1.n_has_name_2,
+     aml_1.same_n_n_2,
+     aml_1.same_n_n_2_2
+|> AS graphtablescan_10
 |> SELECT
-     1 AS a_25;
+     1 AS a_11;
 --
 # Nested subquery: outer layer has multiple matching table chains but inner
 # layer has no matching table chain.
@@ -904,67 +898,64 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS %)
+      (n IS %)
     COLUMNS(
       (
         FROM
           KeyValue
-        |> SELECT
-             KeyValue.Key AS a_4
-        |> AS keyvalue_5
         |> SELECT
              (
                FROM
                  GRAPH_TABLE(
                    aml
                    MATCH
-                     (a_8 IS ! %)
+                     (m IS ! %)
                    COLUMNS(
-                     keyvalue_5.a_4 AS a_9,
-                     PROPERTY_EXISTS(a_2, name) AS a_10,
+                     KeyValue.Key AS key_2,
+                     PROPERTY_EXISTS(n, name) AS n_has_name,
                      (
                        SELECT
-                         PROPERTY_EXISTS(a_8, name) AS a_12
-                     ) AS a_11,
+                         PROPERTY_EXISTS(m, name) AS a_4
+                     ) AS m_has_name,
                      (
                        SELECT
-                         SAME(a_8, a_8) AS a_14
-                     ) AS a_13,
-                     SAME(a_8, a_8) AS a_15,
-                     SAME(a_2, a_2) AS a_16
+                         SAME(m, m) AS a_5
+                     ) AS same_m_m,
+                     SAME(m, m) AS same_m_m_2,
+                     SAME(n, n) AS same_n_n
                    )
-                 ) AS aml_7
+                 ) AS aml_3
                |> SELECT
-                    aml_7.a_9 AS a_9,
-                    aml_7.a_10 AS a_10,
-                    aml_7.a_11 AS a_11,
-                    aml_7.a_13 AS a_13,
-                    aml_7.a_15 AS a_15,
-                    aml_7.a_16 AS a_16
-               |> AS graphtablescan_17
+                    aml_3.key_2,
+                    aml_3.n_has_name,
+                    aml_3.m_has_name,
+                    aml_3.same_m_m,
+                    aml_3.same_m_m_2,
+                    aml_3.same_n_n
+               |> AS graphtablescan_6
                |> SELECT
-                    1 AS a_18
-               |> LIMIT 1) AS a_6
-        |> LIMIT 1) AS a_3,
+                    1 AS a_7
+               |> LIMIT 1) AS a_2
+        |> LIMIT 1) AS sub_query,
       (
         SELECT
-          PROPERTY_EXISTS(a_2, name) AS a_20
-      ) AS a_19,
+          PROPERTY_EXISTS(n, name) AS a_8
+      ) AS n_has_name_2,
       (
         SELECT
-          SAME(a_2, a_2) AS a_22
-      ) AS a_21,
-      SAME(a_2, a_2) AS a_23
+          SAME(n, n) AS a_9
+      ) AS same_n_n_2,
+      SAME(n, n) AS same_n_n_2_2
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3,
-     aml_1.a_19 AS a_19,
-     aml_1.a_21 AS a_21,
-     aml_1.a_23 AS a_23
-|> AS graphtablescan_24
+     aml_1.sub_query,
+     aml_1.n_has_name_2,
+     aml_1.same_n_n_2,
+     aml_1.same_n_n_2_2
+|> AS graphtablescan_10
 |> SELECT
-     1 AS a_25;
+     1 AS a_11;
 --
 # Nested subquery: both outer layer and inner layer has multiple matching table
 # chains.
@@ -1212,64 +1203,61 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS %)
+      (n IS %)
     COLUMNS(
       (
         FROM
           KeyValue
-        |> SELECT
-             KeyValue.Key AS a_4
-        |> AS keyvalue_5
         |> SELECT
              (
                FROM
                  GRAPH_TABLE(
                    aml
                    MATCH
-                     (a_8 IS %)
+                     (m IS %)
                    COLUMNS(
-                     keyvalue_5.a_4 AS a_9,
-                     PROPERTY_EXISTS(a_2, name) AS a_10,
+                     KeyValue.Key AS key_2,
+                     PROPERTY_EXISTS(n, name) AS n_has_name,
                      (
                        SELECT
-                         PROPERTY_EXISTS(a_8, name) AS a_12
-                     ) AS a_11,
+                         PROPERTY_EXISTS(m, name) AS a_4
+                     ) AS m_has_name,
                      (
                        SELECT
-                         SAME(a_8, a_8) AS a_14
-                     ) AS a_13,
-                     SAME(a_8, a_8) AS a_15,
-                     SAME(a_2, a_2) AS a_16
+                         SAME(m, m) AS a_5
+                     ) AS same_m_m,
+                     SAME(m, m) AS same_m_m_2,
+                     SAME(n, n) AS same_n_n
                    )
-                 ) AS aml_7
+                 ) AS aml_3
                |> SELECT
-                    aml_7.a_9 AS a_9,
-                    aml_7.a_10 AS a_10,
-                    aml_7.a_11 AS a_11,
-                    aml_7.a_13 AS a_13,
-                    aml_7.a_15 AS a_15,
-                    aml_7.a_16 AS a_16
-               |> AS graphtablescan_17
+                    aml_3.key_2,
+                    aml_3.n_has_name,
+                    aml_3.m_has_name,
+                    aml_3.same_m_m,
+                    aml_3.same_m_m_2,
+                    aml_3.same_n_n
+               |> AS graphtablescan_6
                |> SELECT
-                    1 AS a_18
-               |> LIMIT 1) AS a_6
-        |> LIMIT 1) AS a_3,
+                    1 AS a_7
+               |> LIMIT 1) AS a_2
+        |> LIMIT 1) AS sub_query,
       (
         SELECT
-          PROPERTY_EXISTS(a_2, name) AS a_20
-      ) AS a_19,
+          PROPERTY_EXISTS(n, name) AS a_8
+      ) AS n_has_name_2,
       (
         SELECT
-          SAME(a_2, a_2) AS a_22
-      ) AS a_21,
-      SAME(a_2, a_2) AS a_23
+          SAME(n, n) AS a_9
+      ) AS same_n_n_2,
+      SAME(n, n) AS same_n_n_2_2
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3,
-     aml_1.a_19 AS a_19,
-     aml_1.a_21 AS a_21,
-     aml_1.a_23 AS a_23
-|> AS graphtablescan_24
+     aml_1.sub_query,
+     aml_1.n_has_name_2,
+     aml_1.same_n_n_2,
+     aml_1.same_n_n_2_2
+|> AS graphtablescan_10
 |> SELECT
-     1 AS a_25;
+     1 AS a_11;

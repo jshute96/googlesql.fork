@@ -1757,7 +1757,13 @@ class AnalyzerTestRunner {
           if (outcome.ast_debug == pre_rewrite_result_string) {
             continue;
           }
-          if (test_case_options_.GetBool(kRunSqlBuilder)) {
+          if (test_case_options_.GetBool(kRunSqlBuilder) &&
+              // A ResolvedMultiStmt (produced by REWRITE_GENERALIZED_STMT for
+              // operators like FORK/TEE) has no single-statement SQL form, so it
+              // cannot be round-tripped through the SQLBuilder and re-analyzed
+              // as a single statement. The SQLBuilder for the corresponding
+              // pre-rewrite ResolvedGeneralizedQueryStmt is exercised above.
+              !rewrite_output->resolved_statement()->Is<ResolvedMultiStmt>()) {
             TestSqlBuilder(test_case, options, catalog, /*is_statement=*/true,
                            rewrite_output.get(), &outcome.sqlbuilder_output);
           }
@@ -3538,6 +3544,42 @@ class AnalyzerTestRunner {
       *result_string =
           absl::StrCat("ERROR from SQLBuilder: ", FormatError(visitor_status));
       FAIL() << *result_string;
+    }
+
+    // Round-trip the query visualizer's flags: building with inline
+    // pipe-operator markers enabled (record_pipe_operator_markers, used by
+    // execute_query's visualizer to tie each emitted operator back to its
+    // ResolvedScan) must produce exactly the same SQL once the "/*S<n>*/"
+    // markers are stripped.  Markers are inert SQL comments at operator heads;
+    // if one ever perturbs the output -- e.g. a leading marker defeating a
+    // "starts with SELECT/FROM" check and dropping a needed FROM -- the stripped
+    // marked output diverges from the unmarked output and this catches it.
+    {
+      SQLBuilder::SQLBuilderOptions marked_options = builder_options;
+      marked_options.record_pipe_operator_markers = true;
+      SQLBuilderWithNestedCatalogSupport marked_builder(marked_options);
+      absl::Status marked_status = marked_builder.Process(*ast);
+      std::string marked_sql;
+      if (marked_status.ok()) {
+        auto marked_or_error = marked_builder.GetSql();
+        if (marked_or_error.ok()) {
+          marked_sql = marked_or_error.value();
+        } else {
+          marked_status = marked_or_error.status();
+        }
+      }
+      GOOGLESQL_EXPECT_OK(marked_status)
+          << "SQLBuilder failed only with pipe-operator markers enabled";
+      if (marked_status.ok()) {
+        std::string stripped = marked_sql;
+        RE2::GlobalReplace(&stripped, R"(/\*S\d+\*/)", "");
+        EXPECT_EQ(stripped, builder_sql)
+            << "Pipe-operator markers changed the generated SQL structure "
+               "(marked output with markers stripped != unmarked output).\n"
+               "[MARKED]\n"
+            << marked_sql << "\n[UNMARKED]\n"
+            << builder_sql;
+      }
     }
 
     std::string formatted_sql;

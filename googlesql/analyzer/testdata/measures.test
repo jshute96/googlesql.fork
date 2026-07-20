@@ -553,14 +553,21 @@ QueryStmt
 
 [SQLBUILDER_OUTPUT]
 SELECT
-  measuretable_singlekey_2.a_1 AS key
+  staticdescribescan_3.a_1 AS key
 FROM
   (
     SELECT
-      MeasureTable_SingleKey.key AS a_1
+      measuretable_singlekey_2.a_1 AS a_1
     FROM
-      MeasureTable_SingleKey
-  ) AS measuretable_singlekey_2;
+      (
+        SELECT
+          MeasureTable_SingleKey.key AS a_1
+        FROM
+          MeasureTable_SingleKey
+        |> AS measuretable_singlekey_2
+        |> STATIC_DESCRIBE
+      )
+  ) AS staticdescribescan_3;
 ==
 
 SELECT
@@ -5319,14 +5326,21 @@ QueryStmt
 
 [SQLBUILDER_OUTPUT]
 SELECT
-  AGG(measuretable_singlekey_2.a_1) AS col
+  AGG(staticdescribescan_3.a_1) AS col
 FROM
   (
     SELECT
-      MeasureTable_SingleKey.measure_sum_quantity AS a_1
+      measuretable_singlekey_2.a_1 AS a_1
     FROM
-      MeasureTable_SingleKey
-  ) AS measuretable_singlekey_2;
+      (
+        SELECT
+          MeasureTable_SingleKey.measure_sum_quantity AS a_1
+        FROM
+          MeasureTable_SingleKey
+        |> AS measuretable_singlekey_2
+        |> STATIC_DESCRIBE
+      )
+  ) AS staticdescribescan_3;
 
 [REWRITTEN AST]
 QueryStmt
@@ -5422,27 +5436,34 @@ QueryStmt
                       +-field_idx=0
 [SQLBUILDER_OUTPUT]
 SELECT
-  aggregatescan_7.a_6 AS col
+  aggregatescan_8.a_7 AS col
 FROM
   (
     SELECT
-      SUM(ANY_VALUE(projectscan_5.a_4.referenced_columns.quantity)
-        GROUP BY projectscan_5.a_4.key_columns) AS a_6
+      SUM(ANY_VALUE(staticdescribescan_6.a_4.referenced_columns.quantity)
+        GROUP BY staticdescribescan_6.a_4.key_columns) AS a_7
     FROM
       (
         SELECT
-          STRUCT< referenced_columns STRUCT< quantity INT64 >, key_columns STRUCT< key INT64 > > (STRUCT< quantity INT64 >
-            (measuretable_singlekey_3.a_2), STRUCT< key INT64 > (measuretable_singlekey_3.a_1)) AS a_4
+          projectscan_5.a_4 AS a_4
         FROM
           (
             SELECT
-              MeasureTable_SingleKey.key AS a_1,
-              MeasureTable_SingleKey.quantity AS a_2
+              STRUCT< referenced_columns STRUCT< quantity INT64 >, key_columns STRUCT< key INT64 > > (STRUCT< quantity INT64 >
+                (measuretable_singlekey_3.a_2), STRUCT< key INT64 > (measuretable_singlekey_3.a_1)) AS a_4
             FROM
-              MeasureTable_SingleKey
-          ) AS measuretable_singlekey_3
-      ) AS projectscan_5
-  ) AS aggregatescan_7;
+              (
+                SELECT
+                  MeasureTable_SingleKey.key AS a_1,
+                  MeasureTable_SingleKey.quantity AS a_2
+                FROM
+                  MeasureTable_SingleKey
+              ) AS measuretable_singlekey_3
+            |> AS projectscan_5
+            |> STATIC_DESCRIBE
+          )
+      ) AS staticdescribescan_6
+  ) AS aggregatescan_8;
 ==
 
 # Measures can propagate through SampleScan

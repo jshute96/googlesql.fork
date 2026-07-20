@@ -2490,13 +2490,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-    ORDER BY a_2.birthday
+      (p IS Person)
+    ORDER BY p.birthday
     RETURN
-      a_2.birthday AS a_3
+      p.birthday AS birthday
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS birthday;
+     aml_1.birthday
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.birthday;
 ==
 
 # Standalone ORDER BY statement: multiple ordering expressions.
@@ -2623,17 +2626,21 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
-    ORDER BY a_2.birthday, a_4.balance DESC
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
+    ORDER BY p.birthday, a.balance DESC
     RETURN
-      a_2.birthday AS a_5,
-      a_4.balance AS a_6
+      p.birthday AS birthday,
+      a.balance AS balance
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS birthday,
-     aml_1.a_6 AS balance;
+     aml_1.birthday,
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.birthday,
+     graphtablescan_3.balance;
 ==
 
 # Standalone ORDER BY statement: accepts COLLATE and NULLS order clauses.
@@ -2764,17 +2771,21 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
-    ORDER BY a_2.name COLLATE "en_US" NULLS FIRST, a_4.balance DESC NULLS LAST
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
+    ORDER BY p.name COLLATE "en_US" NULLS FIRST, a.balance DESC NULLS LAST
     RETURN
-      a_2.birthday AS a_5,
-      a_4.balance AS a_6
+      p.birthday AS birthday,
+      a.balance AS balance
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS birthday,
-     aml_1.a_6 AS balance;
+     aml_1.birthday,
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.birthday,
+     graphtablescan_3.balance;
 ==
 
 # Standalone ORDER BY statement with LIMIT and SKIP clauses.
@@ -2878,14 +2889,17 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-    ORDER BY a_2.name
+      (p IS Person)
+    ORDER BY p.name
     OFFSET 10 LIMIT 20
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Consecutive standalone ORDER BY statements.
@@ -3022,18 +3036,22 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
-    ORDER BY a_2.name
-    ORDER BY a_4.balance
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
+    ORDER BY p.name
+    ORDER BY a.balance
     RETURN
-      a_2.name AS a_5,
-      a_4.balance AS a_6
+      p.name AS name,
+      a.balance AS balance
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS name,
-     aml_1.a_6 AS balance;
+     aml_1.name,
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.balance;
 ==
 
 # Standalone OFFSET/LIMIT statement.
@@ -3116,13 +3134,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     OFFSET 10 LIMIT 20
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Standalone OFFSET statement.
@@ -3211,13 +3232,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     OFFSET 10
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -3293,13 +3317,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     OFFSET 10
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Standalone OFFSET statement/LIMIT statement with kint64max/2.
@@ -3391,13 +3418,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     OFFSET 10 LIMIT 4611686018427387903
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -3473,13 +3503,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     OFFSET 10
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Standalone OFFSET/LIMIT statements including kint64max/2.
@@ -3579,14 +3612,17 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     OFFSET 10 LIMIT 4611686018427387903
     LIMIT 5
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 --
 ALTERNATION GROUP: <empty>
 --
@@ -3668,13 +3704,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     OFFSET 10 LIMIT 5
     RETURN
-      a_2.name AS a_3
+      p.name AS name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # ORDER BY expression on standalone statement.
@@ -3786,15 +3825,19 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-    ORDER BY (LENGTH(a_2.name)) * CAST(a_2.age AS INT64) DESC
+      (p IS Person)
+    ORDER BY (LENGTH(p.name)) * CAST(p.age AS INT64) DESC
     RETURN
-      a_2.name AS a_3,
-      a_2.age AS a_4
+      p.name AS name,
+      p.age AS age
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name,
-     aml_1.a_4 AS age;
+     aml_1.name,
+     aml_1.age
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name,
+     graphtablescan_2.age;
 ==
 
 # ORDER BY statement after RETURN statement.
@@ -3887,13 +3930,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     RETURN
-      a_2.name AS a_3
-    ORDER BY a_2.name
+      p.name AS name
+    ORDER BY p.name
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # ORDER BY statement after RETURN statement: multiple ordering expressions.
@@ -4018,17 +4064,21 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
     RETURN
-      a_2.name AS a_5,
-      a_4.balance AS a_6
-    ORDER BY a_2.name, a_4.balance DESC
+      p.name AS name,
+      a.balance AS balance
+    ORDER BY p.name, a.balance DESC
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS name,
-     aml_1.a_6 AS balance;
+     aml_1.name,
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY statement after RETURN statement:
@@ -4158,17 +4208,21 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
     RETURN
-      a_2.name AS a_5,
-      a_4.balance AS a_6
-    ORDER BY a_2.name COLLATE "en_US" NULLS FIRST, a_4.balance DESC NULLS LAST
+      p.name AS name,
+      a.balance AS balance
+    ORDER BY p.name COLLATE "en_US" NULLS FIRST, a.balance DESC NULLS LAST
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS name,
-     aml_1.a_6 AS balance;
+     aml_1.name,
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY statement after RETURN statement with LIMIT and OFFSET clauses.
@@ -4269,13 +4323,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     RETURN
-      a_2.name AS a_3
-    ORDER BY a_2.name OFFSET 10 LIMIT 20
+      p.name AS name
+    ORDER BY p.name OFFSET 10 LIMIT 20
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # Consecutive ORDER BY statements after RETURN statement separated by NEXT.
@@ -4413,22 +4470,26 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
     RETURN
-      a_2.name AS a_5,
-      a_4.balance AS a_6
-    ORDER BY a_5 LIMIT 10
+      p.name AS name,
+      a.balance AS balance
+    ORDER BY name LIMIT 10
     NEXT
-    ORDER BY a_6
+    ORDER BY balance
     RETURN
-      a_5 AS a_7,
-      a_6 AS a_8
+      name AS name_2,
+      balance AS balance_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS name,
-     aml_1.a_8 AS balance;
+     aml_1.name_2,
+     aml_1.balance_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name_2 AS name,
+     graphtablescan_3.balance_2 AS balance;
 ==
 
 # OFFSET/LIMIT statement after RETURN statement.
@@ -4510,13 +4571,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (p IS Person)
     RETURN
-      a_2.name AS a_3
+      p.name AS name
     OFFSET 10 LIMIT 20
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS name;
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.name;
 ==
 
 # ORDER BY expression after RETURN statement.
@@ -4640,19 +4704,24 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
     RETURN
-      a_2.name AS a_5,
-      a_2.age AS a_6,
-      a_4.balance AS a_7
-    ORDER BY CAST(a_2.age AS UINT64) * (a_4.balance) DESC
+      p.name AS name,
+      p.age AS age,
+      a.balance AS balance
+    ORDER BY CAST(p.age AS UINT64) * (a.balance) DESC
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS name,
-     aml_1.a_6 AS age,
-     aml_1.a_7 AS balance;
+     aml_1.name,
+     aml_1.age,
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.age,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY functions, aggregates and aliases after RETURN statement.
@@ -4799,20 +4868,25 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS Transfer]->
-      (a_4 IS Account)
+      (p IS Person)
+      -[a_2 IS Transfer]->
+      (a IS Account)
     RETURN
-      a_2.name AS a_5,
-      AVG(CAST(a_2.age AS UINT64)) AS a_6,
-      SUM(a_4.balance) AS a_7
-    GROUP BY a_5
-    ORDER BY (CAST(LENGTH(a_2.name) AS DOUBLE) * (AVG(CAST(a_2.age AS UINT64)))) * CAST(SUM(a_4.balance) AS DOUBLE) DESC
+      p.name AS name,
+      AVG(CAST(p.age AS UINT64)) AS age,
+      SUM(a.balance) AS balance
+    GROUP BY name
+    ORDER BY (CAST(LENGTH(p.name) AS DOUBLE) * (AVG(CAST(p.age AS UINT64)))) * CAST(SUM(a.balance) AS DOUBLE) DESC
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS name,
-     aml_1.a_6 AS age,
-     aml_1.a_7 AS balance;
+     aml_1.name,
+     aml_1.age,
+     aml_1.balance
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name,
+     graphtablescan_3.age,
+     graphtablescan_3.balance;
 ==
 
 # ORDER BY clause on RETURN statement when anonymous variables exist.
@@ -4939,15 +5013,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
+      (a IS (% | ! %))
+      -[a_2 IS (% | ! %)]->
+      (b IS (% | ! %))
     RETURN
-      a_2.name AS a_5
-    ORDER BY a_2.name
+      a.name AS name
+    ORDER BY a.name
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS name;
+     aml_1.name
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name;
 ==
 
 # ORDER BY clause on RETURN statement with aggregates and anonymous variables.
@@ -5069,15 +5146,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
+      (a IS (% | ! %))
+      -[a_2 IS (% | ! %)]->
+      (b IS (% | ! %))
     RETURN DISTINCT
-      a_2.name AS a_5
-    ORDER BY a_5
+      a.name AS name
+    ORDER BY name
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS name;
+     aml_1.name
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.name;
 ==
 
 # ORDER BY graph node is not allowed

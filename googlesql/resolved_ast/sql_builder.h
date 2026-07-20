@@ -274,6 +274,13 @@ class SQLBuilder : public ResolvedASTVisitor {
     // TODO: Remove once all engines are updated to use FLOAT32 in
     // the external mode.
     bool use_external_float32 = false;
+
+    // Visualizer support (pipe target mode only).  When true, AppendPipeOperator
+    // embeds an inline "/*S<n>*/" marker comment at the head of each emitted
+    // pipe operator; <n> indexes pipe_operator_markers() back to the producing
+    // ResolvedScan.  See pipe_operator_markers().  The caller must strip the
+    // markers before the SQL is formatted, lexed, or displayed.
+    bool record_pipe_operator_markers = false;
   };
 
   explicit SQLBuilder(const SQLBuilderOptions& options = SQLBuilderOptions());
@@ -291,6 +298,20 @@ class SQLBuilder : public ResolvedASTVisitor {
   // generation didn't miss any semantically meaningful part of the related AST
   // node.
   absl::StatusOr<std::string> GetSql();
+
+  // Visualizer support (pipe target mode).  When
+  // `options_.record_pipe_operator_markers` is set, each pipe operator emitted
+  // via AppendPipeOperator is prefixed in the generated SQL with an inline
+  // marker comment "/*S<n>*/", where <n> indexes this table back to the
+  // ResolvedScan that produced the operator.  Because the marker is embedded in
+  // the operator's own SQL text, it ends up in the operator's exact final
+  // textual position (surviving concatenation, range-variable wrapping, and
+  // parenthesized nesting), giving the execute_query visualizer an exact,
+  // hierarchy-safe operator -> ResolvedScan mapping with no positional guessing.
+  // The caller strips the markers before display.  Empty when not recording.
+  const std::vector<const ResolvedScan*>& pipe_operator_markers() const {
+    return marker_scans_;
+  }
 
   // This deprecated version can crash in some cases.  Use GetSql() instead.
   // This one also returns successfully with "" if no nodes have been visited,
@@ -1026,8 +1047,12 @@ class SQLBuilder : public ResolvedASTVisitor {
 
   // Adds select_list for columns present in <column_list> inside the
   // <query_expression>, if not present.
+  // `marker_scan`, when non-null and a select clause is actually added,
+  // attributes the resulting pipe SELECT operator to that scan for the
+  // visualizer (see pipe_operator_markers()).
   absl::Status AddSelectListIfNeeded(const ResolvedColumnList& column_list,
-                                     QueryExpression* query_expression);
+                                     QueryExpression* query_expression,
+                                     const ResolvedScan* marker_scan = nullptr);
 
   // Merges the <type> and the <annotations> trees and prints the column
   // schema to <text>.
@@ -1069,6 +1094,14 @@ class SQLBuilder : public ResolvedASTVisitor {
 
   // Returns the alias to be used to select the column.
   std::string GetColumnAlias(const ResolvedColumn& column);
+
+  // In Pipe target mode, derives a readable column alias from a meaningful base
+  // name (the ResolvedColumn's name), made globally unique among already-assigned
+  // column aliases by appending a numeric suffix (`name`, `name_2`, ...).
+  std::string MakeUniqueColumnAlias(absl::string_view name);
+
+  // Returns true if `alias` has already been assigned to some column.
+  bool ColumnAliasIsTaken(absl::string_view alias) const;
 
   // Create a new alias to be used for the column, replacing any existing alias.
   std::string UpdateColumnAlias(const ResolvedColumn& column);
@@ -1380,12 +1413,45 @@ class SQLBuilder : public ResolvedASTVisitor {
  private:
   CopyableState state_;
 
+  // The target syntax mode currently in effect. Normally this is
+  // `options_.target_syntax_mode`, but it can be temporarily overridden -- e.g.
+  // a subpipeline body is always generated in Pipe syntax, even when the
+  // enclosing query is being generated in Standard syntax. See
+  // ScopedTargetSyntaxMode.
+  std::optional<TargetSyntaxMode> target_syntax_mode_override_;
+
+  TargetSyntaxMode CurrentTargetSyntaxMode() const {
+    return target_syntax_mode_override_.value_or(options_.target_syntax_mode);
+  }
+
+  // RAII helper that overrides the current target syntax mode for the duration
+  // of a scope (used when generating a subpipeline body, which must be Pipe
+  // syntax regardless of the enclosing query's mode), restoring the previous
+  // value on destruction.
+  class ScopedTargetSyntaxMode {
+   public:
+    ScopedTargetSyntaxMode(SQLBuilder* builder, TargetSyntaxMode mode)
+        : builder_(builder),
+          previous_(builder->target_syntax_mode_override_) {
+      builder_->target_syntax_mode_override_ = mode;
+    }
+    ~ScopedTargetSyntaxMode() {
+      builder_->target_syntax_mode_override_ = previous_;
+    }
+    ScopedTargetSyntaxMode(const ScopedTargetSyntaxMode&) = delete;
+    ScopedTargetSyntaxMode& operator=(const ScopedTargetSyntaxMode&) = delete;
+
+   private:
+    SQLBuilder* builder_;
+    std::optional<TargetSyntaxMode> previous_;
+  };
+
   bool IsPipeSyntaxTargetMode() {
-    return options_.target_syntax_mode == TargetSyntaxMode::kPipe;
+    return CurrentTargetSyntaxMode() == TargetSyntaxMode::kPipe;
   }
 
   bool IsStandardSyntaxTargetMode() {
-    return options_.target_syntax_mode == TargetSyntaxMode::kStandard;
+    return CurrentTargetSyntaxMode() == TargetSyntaxMode::kStandard;
   }
 
   // Helper function to perform operation on value table's column for
@@ -1466,6 +1532,97 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::StatusOr<std::unique_ptr<QueryExpression>>
   MaybeWrapPipeQueryAsStandardQuery(const ResolvedScan& pipe_query_node,
                                     absl::string_view pipe_sql);
+
+  // Pipe-append framework (pipe target mode only).
+  //
+  // `GetInputPipeSQL` returns the running pipe-syntax SQL string for
+  // `input_scan`'s already-processed `input_qe`, ready to have
+  // " |> <operator>" appended:
+  //   - If `input_qe` renders as a complete query (it carries a SELECT or set
+  //     operation), MaybeWrapStandardQueryAsPipeQuery lifts it into a pipe query
+  //     once, binding its output columns under a fresh alias. This covers a leaf
+  //     scan, an aggregate/project on the standard-accumulate path, and the
+  //     `SELECT * FROM UNNEST(...)` stand-in for a ResolvedSubpipelineInputScan.
+  //   - Otherwise `input_qe` is already a pipe head (a running pipe query parked
+  //     in the FROM clause, or a bare `FROM <table>`); its pipe string is
+  //     returned directly so no re-aliasing wrapper is added and the previous
+  //     operators' column bindings stay valid.
+  // `input_qe` is consumed for its text; it may be mutated by the wrap.
+  absl::StatusOr<std::string> GetInputPipeSQL(const ResolvedScan* input_scan,
+                                              QueryExpression* input_qe);
+
+  // In Pipe syntax mode, if `input_scan` is a plain (non-value) table scan,
+  // expose its columns by their natural table-qualified names and drop the
+  // scan's SELECT list, so a pipe operator can be appended directly onto
+  // `FROM <table>` instead of forcing a `|> SELECT ... |> AS <alias>`
+  // re-aliasing wrapper. Returns true if the optimization was applied. A no-op
+  // (returns false) in Standard syntax mode or for non-table-scan inputs.
+  absl::StatusOr<bool> TryUseLeafTableScanColumns(const ResolvedScan* input_scan,
+                                                  QueryExpression* input_qe);
+
+  // Builds a "running pipe query" QueryExpression whose FROM clause carries the
+  // complete pipe-syntax string `pipe_sql`. The result does not carry a SELECT,
+  // so a later operator can be appended (via GetInputPipeSQL) without wrapping.
+  absl::StatusOr<std::unique_ptr<QueryExpression>> MakePipeQueryExpression(
+      absl::string_view pipe_sql);
+
+  // Combines a running pipe SQL string `pipe_sql` (from GetInputPipeSQL) with a
+  // single pipe operator `op_sql` (e.g. "WHERE x > 5"), inserting the leading
+  // " |> " unless `pipe_sql` is empty, and returns the resulting running pipe
+  // QueryExpression. When `is_pipe_operator_chain` is true the result is marked
+  // as an operator chain (a subpipeline body with no FROM root).
+  absl::StatusOr<std::unique_ptr<QueryExpression>> AppendPipeOperator(
+      absl::string_view pipe_sql, absl::string_view op_sql,
+      bool is_pipe_operator_chain = false);
+
+  // Renders the input scan of a subpipeline-bearing pipe operator (IF, LOG,
+  // FORK, TEE, ...) to its running pipe SQL. This must be called *before* the
+  // operator's subpipeline(s) are processed, so that any rebinding of the output
+  // columns done while building the subpipeline is the final word. Sets
+  // `*is_operator_chain` to true if the input is itself an operator chain (this
+  // operator is nested inside another subpipeline).
+  absl::StatusOr<std::string> RenderPipeOperatorInput(
+      const ResolvedScan* input_scan, QueryExpression* input_qe,
+      bool* is_operator_chain);
+
+  // Pushes the result of appending a single pipe operator `op_sql` (e.g.
+  // "IF ... THEN ...", "LOG ...") onto `pipe_sql` (from
+  // RenderPipeOperatorInput). If `is_operator_chain` is true (this operator is
+  // itself inside a subpipeline), the result is another operator chain;
+  // otherwise the result is wrapped back into a standard query when the target
+  // syntax is standard.
+  absl::Status FinishPipeOperatorScan(const ResolvedScan* node,
+                                      absl::string_view pipe_sql,
+                                      bool is_operator_chain,
+                                      absl::string_view op_sql);
+
+  // Visualizer side-channel (see pipe_operator_markers()).  `current_scan_` is
+  // the ResolvedScan whose Visit method is currently running, maintained by
+  // ProcessNode.  When recording is enabled, MakeScanMarker allocates a marker
+  // index for a scan and AppendPipeOperator stamps it into the operator's SQL.
+  const ResolvedScan* current_scan_ = nullptr;
+  std::vector<const ResolvedScan*> marker_scans_;
+
+  // Allocates a marker for `scan` and returns the inline marker comment
+  // ("/*S<n>*/") to embed at the head of its pipe operator's SQL, or "" when
+  // recording is disabled or `scan` is null.  See pipe_operator_markers().
+  std::string MakeScanMarker(const ResolvedScan* scan);
+
+  // Builds the comma-separated subpipeline list shared by the pipe FORK and TEE
+  // operators (e.g. "( |> SELECT key ), ( |> WHERE true )"). Each subpipeline is
+  // an independent branch over the same input, so the SQLBuilder state (column
+  // paths, aliases, ...) is saved and restored around each one.
+  absl::StatusOr<std::string> GetPipeSubpipelineListSQL(
+      absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+          subpipeline_list);
+
+  // Shared implementation for the pipe FORK and TEE operators. `keyword` is
+  // either "FORK" or "TEE".
+  absl::Status VisitResolvedPipeForkOrTeeScan(
+      const ResolvedScan* node, const ResolvedScan* input_scan,
+      absl::Span<const std::unique_ptr<const ResolvedGeneralizedQuerySubpipeline>>
+          subpipeline_list,
+      absl::string_view keyword);
 
   // Mode to indicate how to general SQL for a TVF.
   enum class TVFBuildMode {

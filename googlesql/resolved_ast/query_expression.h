@@ -164,8 +164,11 @@ class QueryExpression {
   //
   // 2. After calling Wrap("alias", kPipe), FromClause() will return:
   // "KeyValue |> SELECT Key |> AS alias"
-  void Wrap(absl::string_view alias) {
-    WrapImpl(alias, target_syntax_mode_, target_syntax_mode_);
+  // `pipe_marker` is an opaque visualizer marker (see SetGroupByMarker) stamped
+  // at the head of the emitted `|> AS alias` operator in pipe mode; empty and
+  // inert unless the SQLBuilder is recording markers.
+  void Wrap(absl::string_view alias, absl::string_view pipe_marker = "") {
+    WrapImpl(alias, target_syntax_mode_, target_syntax_mode_, pipe_marker);
   }
 
   // Mutates the QueryExpression, wrapping its previous form as a subquery in
@@ -272,6 +275,15 @@ class QueryExpression {
 
   absl::string_view FromClause() const { return from_; }
 
+  // In Pipe syntax mode, marks that `from_` holds a bare sequence of pipe
+  // operators (e.g. `WHERE x |> SELECT y`) rather than a FROM-rooted query.
+  // This is how a subpipeline is represented: it starts from an empty
+  // ResolvedSubpipelineInputScan and operators are appended onto it, so it has
+  // no FROM clause. Such a QueryExpression must be rendered as-is (not prefixed
+  // with FROM) and must not be wrapped as a standard subquery.
+  void MarkAsPipeOperatorChain() { is_pipe_operator_chain_ = true; }
+  bool IsPipeOperatorChain() const { return is_pipe_operator_chain_; }
+
   // Returns an immutable reference to select_list_. For QueryExpression built
   // from a SetOp scan, it returns the select_list_ of its first subquery.
   const SQLAliasPairList& SelectList() const;
@@ -287,6 +299,12 @@ class QueryExpression {
 
   // Returns the alias of the group-by column by its column id.
   std::string GetGroupByColumnAliasOrDie(int column_id) const;
+
+  // Returns the select-list SQL expression of the group-by column by its column
+  // id. Used in Pipe syntax mode to inline a group-by key expression (e.g.
+  // inside `ROLLUP(...)`/`CUBE(...)`/`GROUPING SETS(...)`, where the grammar
+  // forbids aliases) instead of referencing a preceding `|> EXTEND` alias.
+  std::string GetGroupByColumnSqlOrDie(int column_id) const;
 
   // Returns true if all group-by columns have aliases.
   bool AllGroupByColumnsHaveAliases() const;
@@ -310,6 +328,37 @@ class QueryExpression {
 
   void SetGroupByColumn(int column_id, std::string column_sql) {
     group_by_list_.insert_or_assign(column_id, column_sql);
+  }
+
+  // Records the set of group-by key column ids that must always be materialized
+  // via a preceding `|> EXTEND` instead of being inlined into the pipe
+  // `GROUP BY` clause (constant/literal keys). See
+  // `group_by_forced_extend_columns_`.
+  void SetGroupByForcedExtendColumns(absl::flat_hash_set<int> column_ids) {
+    group_by_forced_extend_columns_ = std::move(column_ids);
+  }
+
+  // Visualizer side-channel: an opaque marker string the SQLBuilder stamps at
+  // the head of the pipe AGGREGATE/GROUP BY operator this query expression
+  // renders, identifying the producing ResolvedScan (see
+  // SQLBuilder::pipe_operator_markers()).  Empty (and inert) unless the
+  // SQLBuilder is recording markers in pipe mode.
+  void SetGroupByMarker(absl::string_view marker) {
+    group_by_marker_ = std::string(marker);
+  }
+
+  // Visualizer side-channel: an opaque marker stamped at the head of the pipe
+  // SELECT operator this query expression renders, identifying the producing
+  // ResolvedScan.  See SetGroupByMarker().
+  void SetSelectMarker(absl::string_view marker) {
+    select_marker_ = std::string(marker);
+  }
+
+  // Visualizer side-channel: an opaque marker stamped at the head of the pipe
+  // MATCH_RECOGNIZE operator this query expression renders, identifying the
+  // producing ResolvedScan.  See SetGroupByMarker().
+  void SetMatchRecognizeMarker(absl::string_view marker) {
+    match_recognize_marker_ = std::string(marker);
   }
 
   absl::Status SetGroupByAllClause(
@@ -351,7 +400,8 @@ class QueryExpression {
   // Appenders for each clause. If the clause exists, they create the SQL for
   // the clause and append it to <sql>. They return true if the clause SQL is
   // appended, false otherwise.
-  bool TryAppendSelectClause(std::string& sql) const;
+  bool TryAppendSelectClause(std::string& sql,
+                             bool omit_redundant_aliases = false) const;
   bool TryAppendSetOpClauses(std::string& sql,
                              TargetSyntaxMode target_syntax_mode) const;
   bool TryAppendPivotClause(std::string& sql) const;
@@ -402,7 +452,8 @@ class QueryExpression {
   // return: "(SELECT Key FROM KeyValue) |> AS alias"
   void WrapImpl(absl::string_view alias,
                 TargetSyntaxMode subquery_target_syntax_mode,
-                TargetSyntaxMode target_syntax_mode);
+                TargetSyntaxMode target_syntax_mode,
+                absl::string_view pipe_marker = "");
 
   void ClearAllClauses();
 
@@ -419,6 +470,9 @@ class QueryExpression {
   std::vector<std::pair<std::string /* select column */,
                         std::string /* select alias */>>
       select_list_;
+
+  // Visualizer marker (see SetSelectMarker()); empty unless recording markers.
+  std::string select_marker_;
 
   // The output columns of the set operations with column_match_mode =
   // CORRESPONDING or CORRESPONDING_BY. This field is needed because for those
@@ -470,7 +524,22 @@ class QueryExpression {
   // Column IDs of group by keys.
   GroupingSetIdsInfo grouping_set_ids_info_;
 
+  // Column IDs of the group-by keys that, in Pipe syntax mode, must always be
+  // materialized via a preceding `|> EXTEND ... AS <alias>` and then referenced
+  // by alias, rather than inlined directly into the pipe GROUP BY clause. These
+  // are constant/literal keys: a bare literal is rejected as an ordinal or
+  // "GROUP BY literal value". Inside ROLLUP/CUBE/grouping-sets, additional keys
+  // are materialized at render time (see TryAppendGroupByClause) because the
+  // grammar forbids aliases there.
+  absl::flat_hash_set<int> group_by_forced_extend_columns_;
+
   std::string group_by_hints_;
+
+  // Visualizer marker (see SetGroupByMarker()); empty unless recording markers.
+  std::string group_by_marker_;
+
+  // Visualizer marker (see SetMatchRecognizeMarker()); empty unless recording.
+  std::string match_recognize_marker_;
 
   std::vector<std::string> order_by_list_;
   std::string order_by_hints_;
@@ -495,6 +564,10 @@ class QueryExpression {
 
   // If true, the group-by clause contains only aggregate columns.
   bool group_by_only_aggregate_columns_ = false;
+
+  // If true, `from_` is a bare sequence of pipe operators (a subpipeline body),
+  // not a FROM-rooted query. See MarkAsPipeOperatorChain().
+  bool is_pipe_operator_chain_ = false;
 };
 
 // Returns true if the aliases, which are the values of the given map are not

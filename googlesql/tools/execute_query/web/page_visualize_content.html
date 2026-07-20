@@ -1,0 +1,36 @@
+{{#error}}
+<div class="visualize-error"><pre id="error" class="error">{{error}}</pre></div>
+{{/error}}
+{{^has_viz}}
+{{^error}}
+<div class="visualize-placeholder">No visualizable statements in this query.</div>
+{{/error}}
+{{/has_viz}}
+{{#has_viz}}
+<div class="visualize-bar">
+  {{#multiple}}
+  <label class="visualize-bar-item">Statement:
+    <select id="visualize-stmt-select">
+      {{#viz_statements}}
+      <option value="{{index}}">Statement {{index}}</option>
+      {{/viz_statements}}
+    </select>
+  </label>
+  {{/multiple}}
+  <span id="visualize-rewrite-toggle" class="visualize-rewrite-toggle" hidden>
+    <button type="button" class="viz-rewrite-tab active" data-rewrite="pre">Pre-rewrite</button>
+    <button type="button" class="viz-rewrite-tab" data-rewrite="post">Post-rewrite</button>
+  </span>
+</div>
+<div id="visualize-statements">
+  {{#viz_statements}}
+  <div class="visualize-statement" data-stmt-index="{{index}}" data-has-post="{{#has_post_rewrite}}1{{/has_post_rewrite}}{{^has_post_rewrite}}0{{/has_post_rewrite}}">
+    {{#viz_blocks}}
+    <div class="visualize-block" data-rewrite="{{rewrite_key}}">
+      {{> viz_block}}
+    </div>
+    {{/viz_blocks}}
+  </div>
+  {{/viz_statements}}
+</div>
+{{/has_viz}}

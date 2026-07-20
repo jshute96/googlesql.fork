@@ -26,6 +26,8 @@
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "googlesql/resolved_ast/resolved_node.h"
 #include "googlesql/tools/execute_query/output_query_result.h"
+#include "absl/flags/declare.h"
+#include "absl/flags/flag.h"
 #include "absl/status/status.h"
 #include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
@@ -35,6 +37,11 @@
 #include "googlesql/base/status_macros.h"
 #include "mstch/mstch.hpp"
 #include "re2/re2.h"
+
+// Defined in execute_query_tool.cc; honoured here so the web Analyze output uses
+// the same linear/tree rendering choice as the command-line tool.
+ABSL_DECLARE_FLAG(bool, linear_resolved_ast);
+ABSL_DECLARE_FLAG(bool, linear_and_tree_resolved_ast);
 
 namespace googlesql {
 
@@ -264,11 +271,29 @@ absl::Status ExecuteQueryWebWriter::resolved(const ResolvedNode& ast,
   // `result_analyzed` in a triple mustache to disable HTML escaping.
   // We make sure that the string is HTML-escaped before inserting it into the
   // template.
+  const bool linear_and_tree =
+      absl::GetFlag(FLAGS_linear_and_tree_resolved_ast);
+  const bool linear = absl::GetFlag(FLAGS_linear_resolved_ast);
+  std::string debug_string;
+  if (linear_and_tree) {
+    // Both renderings: the nested tree first, then the linear version.
+    debug_string = absl::StrCat(
+        ast.DebugString(ResolvedNode::DebugStringConfig{
+            .print_created_columns = true, .use_box_glyphs = true}),
+        "\nLinear:\n",
+        ast.DebugString(ResolvedNode::DebugStringConfig{
+            .print_created_columns = true,
+            .use_box_glyphs = true,
+            .linear_mode = true}));
+  } else {
+    debug_string = ast.DebugString(ResolvedNode::DebugStringConfig{
+        .print_created_columns = true,
+        .use_box_glyphs = true,
+        .linear_mode = linear});
+  }
   current_statement_params_[absl::StrCat("result_analyzed",
                                          post_rewrite ? "_post_rewrite" : "")] =
-      DecorateASTDebugStringWithHTMLTags(
-          ast.DebugString(ResolvedNode::DebugStringConfig{
-              .print_created_columns = true, .use_box_glyphs = true}));
+      DecorateASTDebugStringWithHTMLTags(debug_string);
   got_results_ = true;
   return absl::OkStatus();
 }
@@ -321,8 +346,28 @@ absl::Status ExecuteQueryWebWriter::ExecutedExpression(const ResolvedNode& ast,
 }
 
 void ExecuteQueryWebWriter::FlushStatement(bool at_end, std::string error_msg) {
+  // statement_index_ is the current statement's 1-based script position,
+  // advanced in StartStatement (see the comment there).
   if (GotResults()) {
     current_statement_params_["result"] = true;
+  }
+
+  // Record a viz-statements entry for the full-window /visualize page when this
+  // statement produced visualizer output.
+  if (!current_viz_blocks_.empty()) {
+    mstch::map viz_stmt;
+    viz_stmt["index"] = statement_index_;
+    viz_stmt["viz_blocks"] = current_viz_blocks_;
+    if (current_has_post_rewrite_) viz_stmt["has_post_rewrite"] = true;
+    viz_statement_params_array_.push_back(std::move(viz_stmt));
+  }
+  current_viz_blocks_.clear();
+  current_has_post_rewrite_ = false;
+  // Collect per-statement errors (in query mode these are delivered here rather
+  // than via ExecuteQuery's return status) so the full-window /visualize page
+  // can surface why a statement produced no visualization.
+  if (!error_msg.empty()) {
+    absl::StrAppend(&viz_error_, viz_error_.empty() ? "" : "\n", error_msg);
   }
   if (!error_msg.empty()) {
     // The error string contains HTML, so the template contains

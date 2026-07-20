@@ -25,6 +25,7 @@
 #include "googlesql/public/strings.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
@@ -278,6 +279,390 @@ std::string FormatResultTable(const reflection::ResultTable& result_table,
   }
 
   return output;
+}
+
+namespace {
+
+// HTML-escape `s` for embedding as text content.
+std::string EscapeHtml(absl::string_view s) {
+  return absl::StrReplaceAll(
+      s, {{"&", "&amp;"}, {"<", "&lt;"}, {">", "&gt;"}, {"\"", "&quot;"}});
+}
+
+// How a piece of text differs between the input and output NameLists.
+enum class Mark { kSame, kAdd, kDel };
+
+// A run of text with a single diff status.
+struct Seg {
+  std::string text;  // raw (un-escaped) display text; its length is the width
+  Mark mark = Mark::kSame;
+};
+// A table cell is a sequence of segments (so a single cell can show, e.g., an
+// old type struck through followed by the new type added).
+using Cell = std::vector<Seg>;
+
+// A table row.  If `row_mark` is kAdd/kDel the whole row is highlighted and the
+// individual segments are left unmarked; otherwise per-segment marks apply.
+struct Row {
+  Mark row_mark = Mark::kSame;
+  std::vector<Cell> cells;
+};
+
+int PlainWidth(const Cell& cell) {
+  int width = 0;
+  for (const Seg& seg : cell) width += static_cast<int>(seg.text.size());
+  return width;
+}
+
+std::string WrapMark(Mark mark, absl::string_view html) {
+  switch (mark) {
+    case Mark::kAdd:
+      return absl::StrCat("<span class=\"nl-add\">", html, "</span>");
+    case Mark::kDel:
+      return absl::StrCat("<span class=\"nl-del\">", html, "</span>");
+    case Mark::kSame:
+      return std::string(html);
+  }
+  return std::string(html);
+}
+
+std::string RenderCell(const Cell& cell) {
+  std::string out;
+  for (const Seg& seg : cell) {
+    absl::StrAppend(&out, WrapMark(seg.mark, EscapeHtml(seg.text)));
+  }
+  return out;
+}
+
+// A pairing of an input index and an output index.  A -1 means the item is
+// absent on that side (i.e. it was deleted or added).
+struct Pairing {
+  int in_index;
+  int out_index;
+};
+
+// Classic LCS-based diff over two key sequences.  Returns aligned pairings in
+// merged order: matched keys carry both indices, deletions carry only the
+// input index, insertions only the output index.
+std::vector<Pairing> LcsDiff(absl::Span<const std::string> a,
+                             absl::Span<const std::string> b) {
+  const int n = static_cast<int>(a.size());
+  const int m = static_cast<int>(b.size());
+  std::vector<std::vector<int>> dp(n + 1, std::vector<int>(m + 1, 0));
+  for (int i = n - 1; i >= 0; --i) {
+    for (int j = m - 1; j >= 0; --j) {
+      dp[i][j] = (a[i] == b[j]) ? dp[i + 1][j + 1] + 1
+                                : std::max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  std::vector<Pairing> out;
+  int i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] == b[j]) {
+      out.push_back({i, j});
+      ++i;
+      ++j;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push_back({i, -1});
+      ++i;
+    } else {
+      out.push_back({-1, j});
+      ++j;
+    }
+  }
+  while (i < n) out.push_back({i++, -1});
+  while (j < m) out.push_back({-1, j++});
+  return out;
+}
+
+std::string ColumnNameDisplay(const reflection::Column& column) {
+  return column.column_name().empty() ? "<unnamed>"
+                                      : QuoteName(column.column_name());
+}
+
+// Renders one diff line: each cell padded to its column width, with a
+// two-space gap, trailing spaces stripped.  A row-level add/delete wraps the
+// whole line so the highlight covers it edge to edge.
+std::string RenderRow(const Row& row, absl::Span<const int> widths) {
+  std::string line;
+  for (size_t i = 0; i < widths.size(); ++i) {
+    const Cell empty_cell;
+    const Cell& cell = i < row.cells.size() ? row.cells[i] : empty_cell;
+    const bool plain_row = row.row_mark == Mark::kSame;
+    // For a whole-row mark the segments are unmarked text; render them plain so
+    // we don't nest spans inside the row wrapper.
+    if (plain_row) {
+      absl::StrAppend(&line, RenderCell(cell));
+    } else {
+      std::string text;
+      for (const Seg& seg : cell) absl::StrAppend(&text, seg.text);
+      absl::StrAppend(&line, EscapeHtml(text));
+    }
+    int pad = static_cast<int>(widths[i]) - PlainWidth(cell) + 2;
+    if (pad < 2) pad = 2;
+    absl::StrAppend(&line, std::string(pad, ' '));
+  }
+  while (!line.empty() && line.back() == ' ') line.pop_back();
+  return WrapMark(row.row_mark, line);
+}
+
+std::string RenderTable(absl::Span<const std::string> header,
+                        absl::Span<const Row> rows) {
+  const int ncol = static_cast<int>(header.size());
+  std::vector<int> widths(ncol);
+  for (int i = 0; i < ncol; ++i) widths[i] = static_cast<int>(header[i].size());
+  for (const Row& row : rows) {
+    for (int i = 0; i < ncol && i < static_cast<int>(row.cells.size()); ++i) {
+      widths[i] = std::max(widths[i], PlainWidth(row.cells[i]));
+    }
+  }
+  std::string out;
+  // Header line.
+  {
+    std::string line;
+    for (int i = 0; i < ncol; ++i) {
+      absl::StrAppend(&line, EscapeHtml(header[i]),
+                      std::string(widths[i] - header[i].size() + 2, ' '));
+    }
+    StripTrailingSpaces(&line);
+    absl::StrAppend(&out, line, "\n");
+  }
+  // Separator line.
+  {
+    std::string line;
+    for (int i = 0; i < ncol; ++i) {
+      absl::StrAppend(&line, std::string(widths[i], '-'), "  ");
+    }
+    StripTrailingSpaces(&line);
+    absl::StrAppend(&out, line, "\n");
+  }
+  for (const Row& row : rows) {
+    absl::StrAppend(&out, RenderRow(row, widths), "\n");
+  }
+  return out;
+}
+
+// Builds the per-item diff of two name lists shown inside one table-alias cell.
+Cell DiffNameListCell(
+    const google::protobuf::RepeatedPtrField<std::string>& in_names,
+    const google::protobuf::RepeatedPtrField<std::string>& out_names) {
+  std::vector<std::string> a(in_names.begin(), in_names.end());
+  std::vector<std::string> b(out_names.begin(), out_names.end());
+  Cell cell;
+  bool first = true;
+  for (const Pairing& p : LcsDiff(a, b)) {
+    if (!first) cell.push_back({", ", Mark::kSame});
+    first = false;
+    if (p.in_index >= 0 && p.out_index >= 0) {
+      cell.push_back({QuoteName(b[p.out_index]), Mark::kSame});
+    } else if (p.in_index >= 0) {
+      cell.push_back({QuoteName(a[p.in_index]), Mark::kDel});
+    } else {
+      cell.push_back({QuoteName(b[p.out_index]), Mark::kAdd});
+    }
+  }
+  return cell;
+}
+
+Cell PlainNameListCell(
+    const google::protobuf::RepeatedPtrField<std::string>& names) {
+  Cell cell;
+  bool first = true;
+  for (const std::string& name : names) {
+    if (!first) cell.push_back({", ", Mark::kSame});
+    first = false;
+    cell.push_back({QuoteName(name), Mark::kSame});
+  }
+  return cell;
+}
+
+bool AnyColumnHasTableAlias(const reflection::ResultTable& table) {
+  for (const reflection::Column& column : table.column()) {
+    if (!column.table_alias().empty()) return true;
+  }
+  return !table.table_alias().empty();
+}
+
+// Builds the rows for a column-or-pseudo-column section, diffing input vs.
+// output.  Columns are matched by (table alias, name); a matched column whose
+// type changed shows an inline type diff.
+std::vector<Row> DiffColumnRows(
+    const google::protobuf::RepeatedPtrField<reflection::Column>& in_columns,
+    const google::protobuf::RepeatedPtrField<reflection::Column>& out_columns,
+    bool has_table_aliases) {
+  auto key = [](const reflection::Column& c) {
+    return absl::StrCat(c.table_alias(), "\t", c.column_name());
+  };
+  std::vector<std::string> in_keys, out_keys;
+  for (const auto& c : in_columns) in_keys.push_back(key(c));
+  for (const auto& c : out_columns) out_keys.push_back(key(c));
+
+  auto basic_cells = [&](const reflection::Column& c, Cell type_cell) {
+    Row row;
+    if (has_table_aliases) {
+      row.cells.push_back({{QuoteName(c.table_alias()), Mark::kSame}});
+    }
+    row.cells.push_back({{ColumnNameDisplay(c), Mark::kSame}});
+    row.cells.push_back(std::move(type_cell));
+    return row;
+  };
+
+  std::vector<Row> rows;
+  for (const Pairing& p : LcsDiff(in_keys, out_keys)) {
+    if (p.in_index >= 0 && p.out_index >= 0) {
+      const reflection::Column& ci = in_columns[p.in_index];
+      const reflection::Column& co = out_columns[p.out_index];
+      Cell type_cell;
+      if (ci.type() == co.type()) {
+        type_cell.push_back({co.type(), Mark::kSame});
+      } else {
+        type_cell.push_back({ci.type(), Mark::kDel});
+        type_cell.push_back({" ", Mark::kSame});
+        type_cell.push_back({co.type(), Mark::kAdd});
+      }
+      rows.push_back(basic_cells(co, std::move(type_cell)));
+    } else if (p.in_index >= 0) {
+      const reflection::Column& ci = in_columns[p.in_index];
+      Row row = basic_cells(ci, {{ci.type(), Mark::kSame}});
+      row.row_mark = Mark::kDel;
+      rows.push_back(std::move(row));
+    } else {
+      const reflection::Column& co = out_columns[p.out_index];
+      Row row = basic_cells(co, {{co.type(), Mark::kSame}});
+      row.row_mark = Mark::kAdd;
+      rows.push_back(std::move(row));
+    }
+  }
+  return rows;
+}
+
+// Builds the rows for a table-alias-or-CTE section, diffing input vs. output.
+// Aliases are matched by name; matched aliases show a per-item diff of their
+// column lists.
+std::vector<Row> DiffTableAliasRows(
+    const google::protobuf::RepeatedPtrField<reflection::TableAlias>& in_aliases,
+    const google::protobuf::RepeatedPtrField<reflection::TableAlias>&
+        out_aliases,
+    bool include_pseudo) {
+  std::vector<std::string> in_keys, out_keys;
+  for (const auto& t : in_aliases) in_keys.push_back(t.name());
+  for (const auto& t : out_aliases) out_keys.push_back(t.name());
+
+  std::vector<Row> rows;
+  for (const Pairing& p : LcsDiff(in_keys, out_keys)) {
+    Row row;
+    if (p.in_index >= 0 && p.out_index >= 0) {
+      const reflection::TableAlias& ti = in_aliases[p.in_index];
+      const reflection::TableAlias& to = out_aliases[p.out_index];
+      row.cells.push_back({{QuoteName(to.name()), Mark::kSame}});
+      row.cells.push_back(
+          DiffNameListCell(ti.column_name(), to.column_name()));
+      if (include_pseudo) {
+        row.cells.push_back(DiffNameListCell(ti.pseudo_column_name(),
+                                             to.pseudo_column_name()));
+      }
+    } else {
+      const bool deleted = p.in_index >= 0;
+      const reflection::TableAlias& t =
+          deleted ? in_aliases[p.in_index] : out_aliases[p.out_index];
+      row.row_mark = deleted ? Mark::kDel : Mark::kAdd;
+      row.cells.push_back({{QuoteName(t.name()), Mark::kSame}});
+      row.cells.push_back(PlainNameListCell(t.column_name()));
+      if (include_pseudo) {
+        row.cells.push_back(PlainNameListCell(t.pseudo_column_name()));
+      }
+    }
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+bool HasAnyPseudo(
+    const google::protobuf::RepeatedPtrField<reflection::TableAlias>& a,
+    const google::protobuf::RepeatedPtrField<reflection::TableAlias>& b) {
+  for (const auto& t : a) {
+    if (!t.pseudo_column_name().empty()) return true;
+  }
+  for (const auto& t : b) {
+    if (!t.pseudo_column_name().empty()) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+std::string FormatResultTableDiffHtml(const reflection::ResultTable& input,
+                                      const reflection::ResultTable& output) {
+  std::string out;
+  const bool has_table_aliases =
+      AnyColumnHasTableAlias(input) || AnyColumnHasTableAlias(output);
+
+  std::vector<std::string> columns_header = {"Column Name", "Type"};
+  if (has_table_aliases) {
+    columns_header.insert(columns_header.begin(), "Table Alias");
+  }
+
+  if (!input.column().empty() || !output.column().empty()) {
+    std::vector<Row> rows =
+        DiffColumnRows(input.column(), output.column(), has_table_aliases);
+    absl::StrAppend(&out, FormatHeader("Columns"),
+                    RenderTable(columns_header, rows));
+  }
+
+  if (!input.pseudo_column().empty() || !output.pseudo_column().empty()) {
+    std::vector<Row> rows = DiffColumnRows(input.pseudo_column(),
+                                           output.pseudo_column(),
+                                           has_table_aliases);
+    absl::StrAppend(&out, "\n", FormatHeader("Pseudo-columns"),
+                    RenderTable(columns_header, rows));
+  }
+
+  if (has_table_aliases &&
+      (!input.table_alias().empty() || !output.table_alias().empty())) {
+    const bool include_pseudo =
+        HasAnyPseudo(input.table_alias(), output.table_alias());
+    std::vector<std::string> header = {"Table Alias", "Columns",
+                                       "Pseudo-columns"};
+    if (!include_pseudo) header.pop_back();
+    std::vector<Row> rows = DiffTableAliasRows(input.table_alias(),
+                                               output.table_alias(),
+                                               include_pseudo);
+    absl::StrAppend(&out, "\n", FormatHeader("Table Aliases"),
+                    RenderTable(header, rows));
+  }
+
+  if (!input.common_table_expression().empty() ||
+      !output.common_table_expression().empty()) {
+    const bool include_pseudo = HasAnyPseudo(
+        input.common_table_expression(), output.common_table_expression());
+    std::vector<std::string> header = {"Name", "Columns", "Pseudo-columns"};
+    if (!include_pseudo) header.pop_back();
+    std::vector<Row> rows =
+        DiffTableAliasRows(input.common_table_expression(),
+                           output.common_table_expression(), include_pseudo);
+    absl::StrAppend(&out, "\n", FormatHeader("Common table expressions"),
+                    RenderTable(header, rows));
+  }
+
+  // Trailing description lines for value-table / ordered status.
+  auto flag_line = [](bool in_flag, bool out_flag,
+                      absl::string_view text) -> std::string {
+    if (!in_flag && !out_flag) return "";
+    Mark mark = Mark::kSame;
+    if (in_flag && !out_flag) mark = Mark::kDel;
+    if (!in_flag && out_flag) mark = Mark::kAdd;
+    return absl::StrCat(WrapMark(mark, EscapeHtml(text)), "\n");
+  };
+  std::string value_line = flag_line(input.is_value_table(),
+                                     output.is_value_table(),
+                                     "Result is a value table.");
+  std::string ordered_line =
+      flag_line(input.is_ordered(), output.is_ordered(), "Result is ordered.");
+  if (!value_line.empty() || !ordered_line.empty()) {
+    absl::StrAppend(&out, "\n", value_line, ordered_line);
+  }
+
+  return absl::StrReplaceAll(out, {{"\n", "<br>"}});
 }
 
 }  // namespace reflection

@@ -180,6 +180,9 @@ common --registry=https://raw.githubusercontent.com/bazelbuild/bazel-central-reg
 The host-Go / host-tool settings above (in `MODULE.bazel`) are the committed
 half of the same story: they avoid the blocked Go-SDK and tool-source mirrors.
 
+Machine-specific build flags, resource-pressure workarounds, and harness gotchas for
+this particular dev box live in the untracked `CLAUDE.local.md`.
+
 ## Background reading
 
 The README links external papers worth skimming: *GoogleSQL: A SQL Language as a

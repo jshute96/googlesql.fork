@@ -43,6 +43,7 @@
 using testing::ContainsRegex;
 using testing::Eq;
 using testing::HasSubstr;
+using testing::Not;
 using testing::StartsWith;
 
 namespace googlesql {
@@ -60,11 +61,22 @@ class FakeQueryWebTemplates : public QueryWebTemplates {
   const std::string& GetWebPageContents() const override { return contents_; }
   const std::string& GetWebPageCSS() const override { return css_; }
   const std::string& GetWebPageBody() const override { return body_; }
+  const std::string& GetVisualizeContent() const override {
+    return viz_content_.empty() ? QueryWebTemplates::GetVisualizeContent()
+                                : viz_content_;
+  }
+
+  // Overrides the /visualize content fragment template (defaults to the real
+  // embedded one).
+  void SetVisualizeContent(std::string content) {
+    viz_content_ = std::move(content);
+  }
 
  private:
   std::string contents_;
   std::string css_;
   std::string body_;
+  std::string viz_content_;
 };
 
 bool HandleRequest(const ExecuteQueryWebRequest& request,
@@ -74,6 +86,17 @@ bool HandleRequest(const ExecuteQueryWebRequest& request,
     result = s;
     return true;
   });
+}
+
+bool HandleVisualizeContent(const ExecuteQueryWebRequest& request,
+                            const QueryWebTemplates& templates,
+                            std::string& result) {
+  ExecuteQueryWebHandler handler(templates);
+  return handler.HandleVisualizeContent(request,
+                                        [&result](absl::string_view s) {
+                                          result = s;
+                                          return true;
+                                        });
 }
 
 }  // namespace
@@ -204,6 +227,332 @@ TEST(ExecuteQueryWebHandlerTest, TestQueryResultPresent) {
                             "{{/statements}}"),
       result));
   EXPECT_THAT(result, Eq("true-"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeCrossRefs) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "FROM (SELECT 1 AS x) |> WHERE x > 0 |> SELECT x", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "[AST]{{{viz_resolved_ast_html}}}"
+                            "[IN]{{{viz_input_sql_html}}}"
+                            "[SB]{{{viz_sqlbuilder_sql_html}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // The Resolved AST pane emits one box per scan, each with a stable id.
+  EXPECT_THAT(result, HasSubstr("class=\"rscan "));
+  EXPECT_THAT(result, HasSubstr("data-node-id=\"r0\""));
+  // The input pane carries hidden `.ni-ref` markers cross-referencing its boxes
+  // to the scans they produced (input SQL <-> Resolved AST correspondence).
+  EXPECT_THAT(result, HasSubstr("ni-ref"));
+  EXPECT_THAT(result, HasSubstr("data-corresp=\"r"));
+  // The SQLBuilder pane is laid out by the same box formatter as the input pane
+  // (so both panes format identically), carrying hidden `.ni-ref` markers that
+  // cross-reference each regenerated operator to the scan that produced it.
+  EXPECT_THAT(result, HasSubstr("[SB]"));
+  std::string sb = result.substr(result.find("[SB]"));
+  EXPECT_THAT(sb, HasSubstr("class=\"ast ast-"));
+  EXPECT_THAT(sb, HasSubstr("data-node-id=\"s"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r"));
+  EXPECT_THAT(sb, HasSubstr("|&gt; WHERE"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeJoinPipeCorrespondence) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kPipe,
+          "FROM (SELECT 1 AS a), (SELECT 2 AS b), (SELECT 3 AS c) "
+          "|> WHERE a > 0 "
+          "|> AGGREGATE sum(b) AS s GROUP BY c "
+          "|> ORDER BY s "
+          "|> SELECT c, s",
+          "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "[SB]{{{viz_sqlbuilder_sql_html}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  std::string sb = result.substr(result.find("[SB]"));
+  // The SQLBuilder pane is laid out by the box formatter (like the input pane);
+  // each regenerated pipe operator carries a `.ni-ref` cross-referencing the
+  // single scan it came from.  Correspondence is per operator: the user's own
+  // pipe operators map 1:1 to FilterScan r8, AggregateScan r9, OrderByScan r10
+  // and the final ProjectScan r11 -- NOT to a random nested join scan (the bug
+  // this guards against).  The `.ni-title` is the operator's "|> KEYWORD" head.
+  EXPECT_THAT(sb, HasSubstr("class=\"ast ast-"));
+  EXPECT_THAT(
+      sb,
+      HasSubstr("data-corresp=\"r8\"></span><div class=\"ni-title\">|&gt; WHERE"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r9\"></span><div "
+                           "class=\"ni-title\">|&gt; AGGREGATE"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r10\"></span><div "
+                           "class=\"ni-title\">|&gt; ORDER BY"));
+  EXPECT_THAT(sb, HasSubstr("data-corresp=\"r11\"></span><div "
+                           "class=\"ni-title\">|&gt; SELECT"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeNonQueryStatement) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "CREATE TABLE t AS SELECT 1 AS x", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "[V]{{{viz_resolved_ast_html}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // A non-query (DDL) statement is visualized just like a query: the resolved
+  // CREATE-statement block contains the query's scan boxes.
+  EXPECT_THAT(result, HasSubstr("[V]"));
+  EXPECT_THAT(result, HasSubstr("class=\"rscan "));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeScript) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kScript,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "SELECT 111 AS aaa; SELECT 222 AS bbb;", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "[V]{{{viz_input_sql_html}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // Each top-level statement of the script is visualized as its own block,
+  // scoped to its OWN text: the first block's Input SQL pane shows aaa/111 and
+  // not the second statement's bbb/222, and vice versa (not the whole script).
+  std::vector<std::string> blocks = absl::StrSplit(result, "[V]");
+  ASSERT_EQ(blocks.size(), 3u);  // leading "" + one block per statement
+  EXPECT_THAT(blocks[1], HasSubstr("aaa"));
+  EXPECT_EQ(blocks[1].find("bbb"), std::string::npos);
+  EXPECT_THAT(blocks[2], HasSubstr("bbb"));
+  EXPECT_EQ(blocks[2].find("aaa"), std::string::npos);
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeShell) {
+  std::string result;
+  ExecuteQueryWebHandler handler(QueryWebTemplates::Default());
+  EXPECT_TRUE(handler.HandleVisualizeShell([&result](absl::string_view s) {
+    result = s;
+    return true;
+  }));
+  // The shell is a full-window page carrying the visualize chrome and the
+  // client scripts that fetch and inject the content.
+  EXPECT_THAT(result, HasSubstr("data-visualize-page"));
+  EXPECT_THAT(result, HasSubstr("GoogleSQL Execute Query - Visualize"));
+  EXPECT_THAT(result, HasSubstr("id=\"visualize-root\""));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentMultiStatement) {
+  std::string result;
+  // Uses the real content template + viz_block partial.
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"},
+                             ExecuteQueryConfig::SqlMode::kScript,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT 111 AS aaa; SELECT 222 AS bbb;", "none",
+                             "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // Two statements -> a statement dropdown and two statement blocks numbered by
+  // their position in the script.
+  EXPECT_THAT(result, HasSubstr("id=\"visualize-stmt-select\""));
+  EXPECT_THAT(result, HasSubstr("Statement 1"));
+  EXPECT_THAT(result, HasSubstr("Statement 2"));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"1\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"2\""));
+  // Each renders the three-pane viz block.
+  EXPECT_THAT(result, HasSubstr("class=\"viz\" data-viz"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentRewriteToggle) {
+  std::string result;
+  // TYPEOF is expanded by a rewriter, so the post-rewrite tree differs and a
+  // second (post) viz block is produced.
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT TYPEOF(1) AS t", "none", "MAXIMUM",
+                             "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  EXPECT_THAT(result, HasSubstr("data-has-post=\"1\""));
+  EXPECT_THAT(result, HasSubstr("class=\"visualize-block\" data-rewrite=\"pre\""));
+  EXPECT_THAT(result,
+              HasSubstr("class=\"visualize-block\" data-rewrite=\"post\""));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentMarkers) {
+  std::string result;
+  // A custom content template exercises the data exposed to it: the statement
+  // index, the per-block rewrite key, and the multiple/has_viz flags.
+  FakeQueryWebTemplates templates("", "", "");
+  templates.SetVisualizeContent(
+      "has_viz={{#has_viz}}1{{/has_viz}} multiple={{#multiple}}1{{/multiple}} "
+      "{{#viz_statements}}[stmt {{index}} post={{#has_post_rewrite}}1{{/"
+      "has_post_rewrite}}{{^has_post_rewrite}}0{{/has_post_rewrite}}"
+      "{{#viz_blocks}}<{{rewrite_key}}>{{/viz_blocks}}]{{/viz_statements}}");
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT 1 AS x", "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      templates, result));
+  EXPECT_THAT(result, HasSubstr("has_viz=1"));
+  EXPECT_THAT(result, HasSubstr("multiple="));  // single statement -> no "1"
+  EXPECT_THAT(result, Not(HasSubstr("multiple=1")));
+  EXPECT_THAT(result, HasSubstr("[stmt 1 post=0<pre>]"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentAnalysisError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT * FROM no_such_table_xyz", "none",
+                             "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // Analysis failed: the panes are still produced. The Input SQL pane shows the
+  // parse-tree box (no NameList), and the analysis error is shown in the
+  // Resolved AST pane rather than leaving it blank.
+  EXPECT_THAT(result, HasSubstr("class=\"viz\" data-viz"));
+  EXPECT_THAT(result, HasSubstr("viz-pane-error"));
+  EXPECT_THAT(result, HasSubstr("Analysis error"));
+  EXPECT_THAT(result, HasSubstr("no_such_table_xyz"));
+  // The Input SQL pane still box-formats the parse tree.
+  EXPECT_THAT(result, HasSubstr("class=\"ast ast-"));
+  // Because panes were produced, the top-level error block is suppressed.
+  EXPECT_THAT(result, Not(HasSubstr("id=\"error\"")));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeContentParseError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest({"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+                             SQLBuilder::TargetSyntaxMode::kStandard,
+                             "SELECT FROM WHERE", "none", "MAXIMUM",
+                             "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // A parse failure still produces panes, with the parse error in the Input SQL
+  // pane and "unavailable" notes in the downstream panes.
+  EXPECT_THAT(result, HasSubstr("class=\"viz\" data-viz"));
+  EXPECT_THAT(result, HasSubstr("Parse error"));
+  EXPECT_THAT(result, HasSubstr("did not parse"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeStatementNumberingWithError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "SELECT 1 AS a; SELECT 2 AS b; SELECT FROM; SELECT 4 AS d;", "none",
+          "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // The third statement is a parse error but is still numbered 3, and the
+  // statements keep contiguous numbers -- an errored statement must not cause
+  // the count to skip a number.
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"1\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"2\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"3\""));
+  EXPECT_THAT(result, HasSubstr("data-stmt-index=\"4\""));
+  EXPECT_THAT(result, Not(HasSubstr("data-stmt-index=\"5\"")));
+  EXPECT_THAT(result, HasSubstr("Parse error"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizePostRewriteSqlBuilderError) {
+  std::string result;
+  EXPECT_TRUE(HandleVisualizeContent(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "FROM (SELECT 1 AS x) |> TEE (|> WHERE x > 0) |> SELECT x", "none",
+          "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("", "", ""), result));
+  // |> TEE rewrites into a generalized (multi-)statement that SQLBuilder cannot
+  // yet regenerate. The post-rewrite SQLBuilder pane shows that error instead of
+  // being left blank.
+  EXPECT_THAT(result, HasSubstr("data-has-post=\"1\""));
+  EXPECT_THAT(result, HasSubstr("SQLBuilder error"));
+  EXPECT_THAT(result, HasSubstr("generalized statements not supported"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeNestedPipeSegmentation) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "SELECT (SELECT 1) AS a, x FROM (SELECT 1 AS x) UNION ALL SELECT 2, 3",
+          "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "[SB]{{{viz_sqlbuilder_sql_html}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // The regenerated SQL is a UNION of two parenthesized inputs whose pipe
+  // operators are all nested.  Laid out by the box formatter, the nested
+  // operators are present and carry correspondence ids.
+  std::string sb = result.substr(result.find("[SB]"));
+  EXPECT_THAT(sb, HasSubstr("|&gt;"));  // nested pipe operators are present.
+  EXPECT_THAT(sb, HasSubstr("class=\"ast ast-"));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizeGraphJson) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard,
+          "FROM (SELECT 1 AS x) |> WHERE x > 0 |> SELECT x", "none", "MAXIMUM",
+          "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "[G]{{{viz_resolved_graph_json}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // The structured QueryGraph model is embedded as JSON, with the same scan
+  // ids (r0..) the Resolved AST pane uses and a pipe-edge spine.
+  std::string g = result.substr(result.find("[G]"));
+  EXPECT_THAT(g, HasSubstr("\"nodes\":["));
+  EXPECT_THAT(g, HasSubstr("\"edges\":["));
+  EXPECT_THAT(g, HasSubstr("\"containers\":["));
+  EXPECT_THAT(g, HasSubstr("\"id\":\"r0\""));
+  EXPECT_THAT(g, HasSubstr("\"kind\":\"pipe\""));
+}
+
+TEST(ExecuteQueryWebHandlerTest, TestVisualizePostRewriteSection) {
+  std::string result;
+  EXPECT_TRUE(HandleRequest(
+      ExecuteQueryWebRequest(
+          {"visualize"}, ExecuteQueryConfig::SqlMode::kQuery,
+          SQLBuilder::TargetSyntaxMode::kStandard, "SELECT TYPEOF(1) AS t",
+          "none", "MAXIMUM", "ALL_MINUS_DEV"),
+      FakeQueryWebTemplates("{{> body}}", "",
+                            "{{#statements}}{{#result_visualized}}{{#viz_blocks}}"
+                            "{{^viz_title}}[AST]{{/viz_title}}"
+                            "{{#viz_title}}[POST]{{/viz_title}}"
+                            "{{{viz_resolved_ast_html}}}"
+                            "{{/viz_blocks}}{{/result_visualized}}{{/statements}}"),
+      result));
+  // The rewriter expands typeof() into an if(...$is_null...) form, so the
+  // pre-rewrite pane keeps typeof() and a separate post-rewrite section appears
+  // with the rewritten form.
+  EXPECT_THAT(result, HasSubstr("[POST]"));
+  const size_t post_pos = result.find("[POST]");
+  EXPECT_THAT(result.substr(0, post_pos), HasSubstr("typeof"));
+  const std::string post = result.substr(post_pos);
+  EXPECT_THAT(post, HasSubstr("is_null"));
+  EXPECT_EQ(post.find("typeof"), std::string::npos);
 }
 
 TEST(ExecuteQueryWebHandlerTest, TestQueryExecutedSimpleResult) {
@@ -365,9 +714,16 @@ static void RunFileBasedTest(
       "{{#result_analyzed}}\n"
       "result_analyzed:{{{result_analyzed}}}\n"
       "{{/result_analyzed}}\n"
+      "{{#result_formatted_analyzed}}\n"
+      "result_formatted_analyzed:{{{result_formatted_analyzed}}}\n"
+      "{{/result_formatted_analyzed}}\n"
       "{{#result_parsed}}\n"
       "result_parsed:{{result_parsed}}\n"
       "{{/result_parsed}}\n"
+      "{{#result_formatted_sql}}\n"
+      "result_formatted_sql:{{{result_formatted_sql}}}\n"
+      "result_formatted_sql_boxed:{{{result_formatted_sql_boxed}}}\n"
+      "{{/result_formatted_sql}}\n"
       "{{#result_explained }}\n"
       "result_explained:{{result_explained}}\n"
       "{{/result_explained}}\n"

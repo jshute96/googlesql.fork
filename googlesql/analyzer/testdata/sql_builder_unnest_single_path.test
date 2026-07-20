@@ -18,11 +18,11 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  ArrayTypes.ProtoArray AS a_2
+  ArrayTypes.ProtoArray AS ProtoArray_2
 |> SELECT
-     a_2.int32_val1 AS int32_val1,
-     a_2.int32_val2 AS int32_val2,
-     a_2.str_value AS str_value;
+     ProtoArray_2.int32_val1,
+     ProtoArray_2.int32_val2,
+     ProtoArray_2.str_value;
 ==
 
 # Path expression pattern: table.proto.array
@@ -38,9 +38,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  TestTable.KitchenSink.repeated_int32_val AS a_2
+  TestTable.KitchenSink.repeated_int32_val AS e
 |> SELECT
-     a_2 AS e;
+     e;
 ==
 
 # Path expression pattern:
@@ -57,9 +57,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  StructWithKitchenSinkTable.t.b AS a_2
+  StructWithKitchenSinkTable.t.b AS b
 |> SELECT
-     1 AS a_3;
+     1 AS a_1;
 ==
 
 # Path expression pattern: table.array.json_field
@@ -76,9 +76,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  ArrayTypes.JsonArray.json_field AS a_2
+  ArrayTypes.JsonArray.json_field AS json_field
 |> SELECT
-     a_2 AS json_field;
+     json_field;
 ==
 
 # Path expression pattern:
@@ -100,9 +100,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  ArrayTypes.ProtoArray.has_int32_val1 AS a_2
+  ArrayTypes.ProtoArray.has_int32_val1 AS has_int32_val1
 |> SELECT
-     a_2 AS has_int32_val1;
+     has_int32_val1;
 --
 ALTERNATION GROUP: int32_val1
 --
@@ -116,9 +116,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  ArrayTypes.ProtoArray.int32_val1 AS a_2
+  ArrayTypes.ProtoArray.int32_val1 AS int32_val1
 |> SELECT
-     a_2 AS int32_val1;
+     int32_val1;
 ==
 
 # Path expression pattern:
@@ -137,9 +137,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  TestTable.KitchenSink.repeated_holder.repeated_field.int32_val1 AS a_2
+  TestTable.KitchenSink.repeated_holder.repeated_field.int32_val1 AS value
 |> SELECT
-     a_2 AS value;
+     value;
 ==
 
 # Path expression pattern:
@@ -193,9 +193,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  TestTable.KitchenSink.optional_group.optionalgroupnested.int64_val AS a_2
+  TestTable.KitchenSink.optional_group.optionalgroupnested.int64_val AS int64_val
 |> SELECT
-     a_2 AS int64_val;
+     int64_val;
 ==
 
 # Path expression pattern that is arbitrary long:
@@ -213,9 +213,9 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  RecursivePBTable.RecursivePB.repeated_recursive_pb.repeated_recursive_pb.repeated_recursive_pb.recursive_pb.repeated_recursive_pb.int64_val AS a_2
+  RecursivePBTable.RecursivePB.repeated_recursive_pb.repeated_recursive_pb.repeated_recursive_pb.recursive_pb.repeated_recursive_pb.int64_val AS value
 |> SELECT
-     a_2 AS value;
+     value;
 ==
 
 # Table name array path expression FROM clause nested under a subquery.
@@ -234,9 +234,12 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  TestTable.KitchenSink.repeated_int32_val AS a_2
+  TestTable.KitchenSink.repeated_int32_val AS original_alias
 |> SELECT
-     a_2 AS original_alias;
+     original_alias
+|> AS projectscan_1
+|> SELECT
+     projectscan_1.original_alias;
 ==
 
 # This is to demontrate that this feature does not work with correlated subquery.
@@ -274,20 +277,20 @@ FROM
 FROM
   TestTable
 |> SELECT
-     TestTable.KitchenSink AS a_1
-|> AS projectscan_2
+     TestTable.KitchenSink
+|> AS projectscan_1
 |> SELECT
      (
        FROM
          KeyValue
        |> SELECT
             NULL
-       |> AS keyvalue_4
+       |> AS keyvalue_3
        |> JOIN
-          UNNEST(FLATTEN((projectscan_2.a_1.nested_repeated_value).nested_repeated_int64)) AS a_5
+          UNNEST(FLATTEN((projectscan_1.KitchenSink.nested_repeated_value).nested_repeated_int64)) AS e
        |> SELECT
-            a_5 AS a_5
-     ) AS a_3;
+            e
+     ) AS a_2;
 ==
 
 # This is to demonstrate that this feature does not work with correlated subquery.
@@ -356,14 +359,14 @@ FROM
 |> WHERE
      EXISTS(
        FROM
-         UNNEST(TestTable.KitchenSink.repeated_int32_val) AS a_4
+         UNNEST(TestTable.KitchenSink.repeated_int32_val) AS repeated_int32_val
        |> SELECT
-            1 AS a_5
+            1 AS a_1
      )
 |> SELECT
-     TestTable.key AS key,
-     TestTable.TestEnum AS TestEnum,
-     TestTable.KitchenSink AS KitchenSink;
+     TestTable.key,
+     TestTable.TestEnum,
+     TestTable.KitchenSink;
 ==
 
 # Path expression pattern:
@@ -385,8 +388,7 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  TestTable.KitchenSink.nested_value.nested_repeated_int64 AS a_2
+  TestTable.KitchenSink.nested_value.nested_repeated_int64 AS ri
 |> SELECT
-     a_2 AS ri;
+     ri;
 ==
-

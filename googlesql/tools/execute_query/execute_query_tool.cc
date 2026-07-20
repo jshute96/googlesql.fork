@@ -32,11 +32,16 @@
 
 
 #include "googlesql/common/options_utils.h"
+#include "googlesql/analyzer/name_scope.h"
+#include "googlesql/common/reflection_helper.h"
+#include "googlesql/parser/box_formatter.h"
+#include "googlesql/parser/html_formatter.h"
 #include "googlesql/parser/parse_tree.h"
 #include "googlesql/parser/parser.h"
 #include "googlesql/parser/parser_mode.h"
 #include "googlesql/public/analyzer.h"
 #include "googlesql/public/analyzer_output.h"
+#include "googlesql/public/ast_node_resolved_info.h"
 #include "googlesql/public/builtin_function_options.h"
 #include "googlesql/public/catalog.h"
 #include "googlesql/public/error_helpers.h"
@@ -73,6 +78,7 @@
 #include "googlesql/scripting/script_segment.h"
 #include "googlesql/tools/execute_query/execute_query_proto_writer.h"
 #include "googlesql/tools/execute_query/execute_query_writer.h"
+#include "googlesql/tools/execute_query/query_graph.h"
 #include "googlesql/tools/execute_query/selectable_catalog.h"
 #include "googlesql/tools/execute_query/value_as_table_adapter.h"
 #include "googlesql/base/case.h"
@@ -90,6 +96,7 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
@@ -244,6 +251,15 @@ ABSL_FLAG(
 ABSL_FLAG(bool, use_box_glyphs, true,
           "Use Unicode box glyphs instead of ASCII characters for the resolved "
           "AST and the result tables output.");
+
+ABSL_FLAG(bool, linear_resolved_ast, false,
+          "Print the resolved AST in linear (pipe-style) mode, with scan "
+          "sequences flattened using '|>' operators, instead of as a nested "
+          "tree.");
+
+ABSL_FLAG(bool, linear_and_tree_resolved_ast, false,
+          "Print the resolved AST both as a nested tree and in linear "
+          "(pipe-style) mode, for easy comparison.");
 
 namespace googlesql {
 
@@ -499,6 +515,8 @@ std::optional<ToolMode> ExecuteQueryConfig::parse_tool_mode(
     absl::string_view mode) {
   static const auto* kToolModeMap =
       new absl::flat_hash_map<absl::string_view, ToolMode>({
+          {"visualize", ToolMode::kVisualize},
+          {"visualizer", ToolMode::kVisualize},
           {"parse", ToolMode::kParse},
           {"parser", ToolMode::kParse},
           {"unparse", ToolMode::kUnparse},
@@ -528,6 +546,7 @@ std::optional<ToolMode> ExecuteQueryConfig::parse_tool_mode(
 absl::string_view ExecuteQueryConfig::tool_mode_name(ToolMode tool_mode) {
   static const auto* kToolModeNames =
       new absl::flat_hash_map<ToolMode, absl::string_view>({
+          {ToolMode::kVisualize, "visualize"},
           {ToolMode::kParse, "parse"},
           {ToolMode::kUnparse, "unparse"},
           {ToolMode::kResolve, "analyze"},
@@ -838,8 +857,9 @@ absl::StatusOr<std::unique_ptr<ExecuteQueryWriter>> MakeWriterFromFlags(
   }
 
   if (mode == "box") {
-    return std::make_unique<ExecuteQueryStreamWriter>(output,
-                                                      config.use_box_glyphs());
+    return std::make_unique<ExecuteQueryStreamWriter>(
+        output, config.use_box_glyphs(), config.linear_resolved_ast(),
+        config.linear_and_tree_resolved_ast());
   }
 
   std::function<absl::Status(const google::protobuf::Message& msg, std::ostream&)>
@@ -930,6 +950,9 @@ absl::Status InitializeExecuteQueryConfig(ExecuteQueryConfig& config) {
   config.mutable_analyzer_options().set_prune_unused_columns(
       absl::GetFlag(FLAGS_prune_unused_columns));
   config.set_use_box_glyphs(absl::GetFlag(FLAGS_use_box_glyphs));
+  config.set_linear_resolved_ast(absl::GetFlag(FLAGS_linear_resolved_ast));
+  config.set_linear_and_tree_resolved_ast(
+      absl::GetFlag(FLAGS_linear_and_tree_resolved_ast));
 
   GOOGLESQL_RETURN_IF_ERROR(SetDescriptorPoolFromFlags(config));
   GOOGLESQL_RETURN_IF_ERROR(SetToolModeFromFlags(config));
@@ -1130,12 +1153,23 @@ static absl::StatusOr<const ASTNode*> ParseSql(
 }
 
 static absl::Status WriteParsedAndOrUnparsedAst(
-    const ASTNode* root, const ExecuteQueryConfig& config,
+    const ASTNode* root, absl::string_view sql, const ExecuteQueryConfig& config,
     ExecuteQueryWriter& writer) {
   if (config.has_tool_mode(ToolMode::kParse)) {
     // Note, ASTNode is not public, and therefore cannot be part of the
     // public interface, thus, we can only return the string.
     GOOGLESQL_RETURN_IF_ERROR(writer.parsed(root->DebugString()));
+
+    // Experimental: also emit HTML renderings of the SQL with the parse tree
+    // expressed as nested <div>s -- one preserving the original text, one with
+    // a computed "box" layout. Best-effort -- failures are dropped silently.
+    absl::StatusOr<std::string> html =
+        SqlToHtml(sql, root, config.analyzer_options().language());
+    absl::StatusOr<std::string> boxed =
+        SqlToBoxHtml(sql, root, config.analyzer_options().language());
+    if (html.ok() && boxed.ok()) {
+      GOOGLESQL_RETURN_IF_ERROR(writer.formatted_sql_html(*html, *boxed));
+    }
   }
   if (config.has_tool_mode(ToolMode::kUnparse)) {
     GOOGLESQL_RETURN_IF_ERROR(writer.unparsed(Unparse(root)));
@@ -1149,6 +1183,152 @@ static bool IsAnalysisRequired(const ExecuteQueryConfig& config) {
          config.has_tool_mode(ToolMode::kUnAnalyze) ||
          config.has_tool_mode(ToolMode::kExplain) ||
          config.has_tool_mode(ToolMode::kExecute);
+}
+
+// HTML-escapes text for embedding in the query-viewer hover boxes.
+static std::string EscapeHtmlText(absl::string_view s) {
+  return absl::StrReplaceAll(
+      s, {{"&", "&amp;"}, {"<", "&lt;"}, {">", "&gt;"}, {"\"", "&quot;"}});
+}
+
+// Renders a NameList using the same formatting as `|> DESCRIBE`, as HTML
+// (newlines become <br> so it stays a single token in the box output).
+static std::string DescribeNameListHtml(const NameList& name_list,
+                                        ProductMode product_mode) {
+  std::string text =
+      reflection::FormatResultTable(name_list.Describe(product_mode));
+  return absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}});
+}
+
+// Builds the info HTML for an AST node's resolver info, as a title heading
+// (`ni-title`) followed by a body (`ni-body`).  The client-side viewer script
+// reads these (one per node in the click's ancestor chain) to populate the
+// info panel.  When both an input and output NameList are present (e.g. a pipe
+// operator), the body shows a single merged diff; a pass-through operator like
+// `|> WHERE` then shows no diff markers.  When only one NameList is present
+// (e.g. a query's output or a table scan), it is shown on its own.  For a
+// function call, the body is the chosen concrete signature.
+static std::string ResolvedInfoHoverHtml(const ASTNodeResolvedInfo& info,
+                                         ProductMode product_mode) {
+  std::string body;
+  auto add_single = [&](absl::string_view heading, const NameList& nl) {
+    absl::StrAppend(&body, "<div class=\"hi-h\">", heading,
+                    "</div><div class=\"hi-nl\">",
+                    DescribeNameListHtml(nl, product_mode), "</div>");
+  };
+  if (info.resolved_scan_info.has_value()) {
+    const auto& scan = *info.resolved_scan_info;
+    if (scan.input_name_list != nullptr && scan.output_name_list != nullptr) {
+      absl::StrAppend(
+          &body, "<div class=\"hi-h\">Input / output NameList</div>",
+          "<div class=\"hi-nl\">",
+          reflection::FormatResultTableDiffHtml(
+              scan.input_name_list->Describe(product_mode),
+              scan.output_name_list->Describe(product_mode)),
+          "</div>");
+    } else if (scan.output_name_list != nullptr) {
+      add_single("Output NameList", *scan.output_name_list);
+    } else if (scan.input_name_list != nullptr) {
+      add_single("Input NameList", *scan.input_name_list);
+    }
+  } else if (info.table_scan_info.has_value() &&
+             info.table_scan_info->output_name_list != nullptr) {
+    add_single("Output NameList", *info.table_scan_info->output_name_list);
+  } else if (info.function_call_info.has_value()) {
+    absl::StrAppend(&body, "<div class=\"hi-h\">Signature</div>",
+                    "<div class=\"hi-nl\">",
+                    EscapeHtmlText(info.function_call_info->signature),
+                    "</div>");
+  } else if (info.statement_info.has_value()) {
+    const auto& st = *info.statement_info;
+    if (st.is_value_table) {
+      absl::StrAppend(
+          &body, "<div class=\"hi-h\">Output</div><div class=\"hi-nl\">",
+          EscapeHtmlText(absl::StrCat("Output is a value table with type ",
+                                      st.value_table_type)),
+          "</div>");
+    } else if (!st.output_columns.empty()) {
+      // Aligned "name  type" listing.
+      size_t name_width = 0;
+      for (const auto& col : st.output_columns) {
+        name_width = std::max(name_width, col.first.size());
+      }
+      std::string text;
+      for (const auto& col : st.output_columns) {
+        absl::StrAppend(&text, col.first,
+                        std::string(name_width - col.first.size() + 2, ' '),
+                        col.second, "\n");
+      }
+      absl::StrAppend(
+          &body, "<div class=\"hi-h\">Output columns</div><div class=\"hi-nl\">",
+          absl::StrReplaceAll(EscapeHtmlText(text), {{"\n", "<br>"}}), "</div>");
+    }
+  }
+  return absl::StrCat("<div class=\"ni-title\">",
+                      EscapeHtmlText(info.node_title), "</div>",
+                      "<div class=\"ni-body\">", body, "</div>");
+}
+
+// Renders SQL as box-formatted HTML (parser/box_formatter.h) with each AST
+// node's resolver info (NameLists, etc.) attached as a `.node-info` hover box,
+// using the resolution info captured in `output`'s ASTNodeResolvedInfoMap.
+// Shared by the analyze-mode query viewer and the visualizer panes.
+static absl::StatusOr<std::string> RenderBoxHtmlWithNodeInfo(
+    absl::string_view sql, const ASTNode* ast, const AnalyzerOutput& output,
+    const ExecuteQueryConfig& config,
+    const absl::flat_hash_map<const ResolvedScan*, int>* scan_ids = nullptr) {
+  const ASTNodeResolvedInfoMap& info_map = output.ast_node_resolved_info_map();
+  const ProductMode product_mode =
+      config.analyzer_options().language().product_mode();
+  // Counter for assigning input-pane nodes their own ids (a0, a1, ...).
+  int input_node_counter = 0;
+  BoxAnnotator annotate =
+      [&info_map, product_mode, scan_ids,
+       &input_node_counter](const ASTNode* node) -> std::string {
+    auto it = info_map.find(node);
+    if (it == info_map.end()) return std::string();
+    std::string html = ResolvedInfoHoverHtml(it->second, product_mode);
+    // For the visualizer: give this node its own id (a0, a1, ...) and a
+    // cross-reference to the id of the ResolvedScan it produced (r<id>), so the
+    // panes can be correlated.  Carried in a hidden `.ni-ref` marker inside the
+    // node-info (the box itself is wrapped by the box formatter, so we cannot
+    // set an attribute on it directly).
+    if (scan_ids != nullptr) {
+      const ResolvedScan* scan = nullptr;
+      if (it->second.resolved_scan_info.has_value()) {
+        scan = it->second.resolved_scan_info->scan;
+      } else if (it->second.table_scan_info.has_value()) {
+        scan = it->second.table_scan_info->scan;
+      }
+      if (scan != nullptr) {
+        auto sid = scan_ids->find(scan);
+        if (sid != scan_ids->end()) {
+          html = absl::StrCat("<span class=\"ni-ref\" data-node-id=\"a",
+                              input_node_counter++, "\" data-corresp=\"r",
+                              sid->second, "\"></span>", html);
+        }
+      }
+    }
+    return html;
+  };
+  return SqlToBoxHtml(sql, ast, config.analyzer_options().language(),
+                      /*width=*/80, annotate,
+                      /*break_pipe_operators=*/true);
+}
+
+// Emits the analyze-mode "query viewer": the box-formatted query with each
+// AST node's resolver info (NameLists) attached as a hover box.
+static absl::Status WriteAnalyzedQueryViewer(absl::string_view sql,
+                                             const ASTNode* ast,
+                                             const AnalyzerOutput& output,
+                                             const ExecuteQueryConfig& config,
+                                             ExecuteQueryWriter& writer) {
+  absl::StatusOr<std::string> html =
+      RenderBoxHtmlWithNodeInfo(sql, ast, output, config);
+  if (html.ok()) {
+    GOOGLESQL_RETURN_IF_ERROR(writer.formatted_analyzed_html(*html));
+  }
+  return absl::OkStatus();
 }
 
 static absl::StatusOr<const ResolvedNode*> AnalyzeSql(
@@ -1189,6 +1369,12 @@ static absl::StatusOr<const ResolvedNode*> AnalyzeSql(
                                     /*post_rewrite=*/false));
     pre_rewrite_debug_string =
         (*analyzer_output)->resolved_node()->DebugString();
+    // Query viewer: box-formatted query with resolver info as hover boxes.
+    // (Uses the pre-rewrite output, whose info map is keyed on the parse AST.)
+    if (config.sql_mode() == SqlMode::kQuery) {
+      GOOGLESQL_RETURN_IF_ERROR(WriteAnalyzedQueryViewer(sql, ast, **analyzer_output,
+                                                config, writer));
+    }
   }
 
   // Apply rewrites.
@@ -1230,6 +1416,860 @@ static absl::Status UnanalyzeQuery(const ResolvedNode* resolved_node,
   GOOGLESQL_ASSIGN_OR_RETURN(std::string sql, builder.GetSql());
   GOOGLESQL_ASSIGN_OR_RETURN(std::string formatted_sql, LenientFormatSql(sql));
   return writer.unanalyze(formatted_sql);
+}
+
+// Wraps `text` as an escaped <pre> block for one visualizer pane.  Used as a
+// fallback when richer rendering is unavailable.
+static std::string PreBlockHtml(absl::string_view text) {
+  return absl::StrCat("<pre class=\"viz-pre\">", EscapeHtmlText(text),
+                      "</pre>");
+}
+
+// HTML for a visualizer pane that couldn't be produced: a labeled error block
+// shown in place of the pane's normal content, so a failing step (parse,
+// analysis, SQLBuilder) is visible rather than leaving the pane blank.
+static std::string ErrorPaneHtml(absl::string_view title,
+                                 absl::string_view error) {
+  return absl::StrCat(
+      "<div class=\"viz-pane-error\"><div class=\"viz-pane-error-title\">",
+      EscapeHtmlText(title), "</div><pre class=\"viz-pre\">",
+      EscapeHtmlText(error), "</pre></div>");
+}
+
+// Box-formats the input SQL with no per-node resolver info (NameLists). Used for
+// the Input SQL pane when analysis failed: we still have the parse tree to lay
+// out, just no resolver annotations to attach.
+static absl::StatusOr<std::string> RenderBoxHtmlNoInfo(
+    absl::string_view sql, const ASTNode* ast,
+    const ExecuteQueryConfig& config) {
+  BoxAnnotator annotate = [](const ASTNode*) { return std::string(); };
+  return SqlToBoxHtml(sql, ast, config.analyzer_options().language(),
+                      /*width=*/80, annotate, /*break_pipe_operators=*/true);
+}
+
+// Splits `sql` into top-level pipe-operator segment byte ranges: a segment runs
+// from one depth-0 "|>" (or the start of the string) up to the next.  Splitting
+// is parenthesis/quote-aware -- a "|>" inside parentheses (join subqueries,
+// set-operation inputs, scalar subqueries) or inside a string/identifier literal
+// does not start a new segment, so nested operators stay within their enclosing
+// segment's text rather than becoming bogus top-level segments.
+static std::vector<std::pair<size_t, size_t>> SplitTopLevelPipeSegments(
+    absl::string_view sql) {
+  std::vector<std::pair<size_t, size_t>> ranges;
+  size_t seg_start = 0;
+  int depth = 0;
+  char quote = 0;       // open string/identifier quote char, or 0 if not in one
+  for (size_t i = 0; i < sql.size(); ++i) {
+    const char c = sql[i];
+    if (quote != 0) {
+      if (c == '\\') {
+        ++i;             // skip the escaped character
+      } else if (c == quote) {
+        quote = 0;
+      }
+      continue;
+    }
+    switch (c) {
+      case '\'':
+      case '"':
+      case '`':
+        quote = c;
+        break;
+      case '(':
+        ++depth;
+        break;
+      case ')':
+        if (depth > 0) --depth;
+        break;
+      case '|':
+        if (i + 1 < sql.size() && sql[i + 1] == '>') {
+          if (depth == 0) {
+            ranges.push_back({seg_start, i});
+            seg_start = i;
+          }
+          ++i;           // skip the '>'
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  ranges.push_back({seg_start, sql.size()});
+  return ranges;
+}
+
+// The scans referenced by the inline "/*S<n>*/" markers (see
+// SQLBuilder::pipe_operator_markers()) found within one segment of marked SQL.
+struct SegmentMarkers {
+  int primary = -1;             // marker index of the first depth-0 marker, or -1
+  std::vector<int> members;     // every marker index in the segment (any depth)
+};
+
+// Scans one segment of *marked* SQL for "/*S<n>*/" markers, tracking paren depth
+// (and quotes) so a marker's nesting is known.  The segment's `primary` is the
+// first marker emitted at depth 0 -- the operator that owns the segment -- while
+// `members` collects every marker, including those nested inside parenthesized
+// subqueries (a join RHS, a set-operation input), which belong to the same
+// top-level segment's text.
+static SegmentMarkers ParseSegmentMarkers(absl::string_view seg) {
+  SegmentMarkers out;
+  int depth = 0;
+  char quote = 0;
+  for (size_t i = 0; i < seg.size(); ++i) {
+    const char c = seg[i];
+    if (quote != 0) {
+      if (c == '\\') {
+        ++i;
+      } else if (c == quote) {
+        quote = 0;
+      }
+      continue;
+    }
+    if (c == '\'' || c == '"' || c == '`') {
+      quote = c;
+      continue;
+    }
+    if (c == '(') {
+      ++depth;
+      continue;
+    }
+    if (c == ')') {
+      if (depth > 0) --depth;
+      continue;
+    }
+    // Marker: "/*S" <digits> "*/".
+    if (c == '/' && i + 3 < seg.size() && seg[i + 1] == '*' && seg[i + 2] == 'S' &&
+        absl::ascii_isdigit(seg[i + 3])) {
+      size_t j = i + 3;
+      int value = 0;
+      while (j < seg.size() && absl::ascii_isdigit(seg[j])) {
+        value = value * 10 + (seg[j] - '0');
+        ++j;
+      }
+      if (j + 1 < seg.size() && seg[j] == '*' && seg[j + 1] == '/') {
+        out.members.push_back(value);
+        if (depth == 0 && out.primary < 0) out.primary = value;
+        i = j + 1;        // skip past "*/"
+        continue;
+      }
+    }
+  }
+  return out;
+}
+
+// Removes every "/*S<n>*/" marker comment from `sql`, leaving the clean SQL that
+// is formatted and shown to the user.
+static std::string StripScanMarkers(absl::string_view sql) {
+  std::string out;
+  out.reserve(sql.size());
+  for (size_t i = 0; i < sql.size(); ++i) {
+    if (sql[i] == '/' && i + 3 < sql.size() && sql[i + 1] == '*' &&
+        sql[i + 2] == 'S' && absl::ascii_isdigit(sql[i + 3])) {
+      size_t j = i + 3;
+      while (j < sql.size() && absl::ascii_isdigit(sql[j])) ++j;
+      if (j + 1 < sql.size() && sql[j] == '*' && sql[j + 1] == '/') {
+        i = j + 1;        // skip the marker entirely
+        continue;
+      }
+    }
+    out += sql[i];
+  }
+  return out;
+}
+
+// The [inner_start, inner_end) byte range of one parenthesized pipe-subquery
+// found within a segment: the content *between* the parentheses (inner_end is
+// the index of the ')').
+struct PipeParenGroup {
+  size_t inner_start;
+  size_t inner_end;
+};
+
+// Finds the top-level parenthesized groups within `seg` whose content is itself
+// a pipe chain (contains a depth-0 "|>") -- a scalar subquery in WHERE, a join
+// RHS, a set-operation input.  Parenthesized expressions that are not pipe
+// chains (e.g. "(1 - x)") are skipped.  Quote/paren-aware.  Because the
+// discriminator depends only on parentheses and "|>" -- identical in the marked
+// and display SQL (formatting never adds/removes either) -- the group lists line
+// up by index across the two strings, which is what lets the recursive renderer
+// descend both in lockstep.
+static std::vector<PipeParenGroup> FindPipeParenGroups(absl::string_view seg) {
+  std::vector<PipeParenGroup> out;
+  int depth = 0;
+  char quote = 0;
+  size_t inner_start = 0;
+  for (size_t i = 0; i < seg.size(); ++i) {
+    const char c = seg[i];
+    if (quote != 0) {
+      if (c == '\\') {
+        ++i;
+      } else if (c == quote) {
+        quote = 0;
+      }
+      continue;
+    }
+    if (c == '\'' || c == '"' || c == '`') {
+      quote = c;
+      continue;
+    }
+    if (c == '(') {
+      if (depth == 0) inner_start = i + 1;
+      ++depth;
+      continue;
+    }
+    if (c == ')' && depth > 0) {
+      --depth;
+      if (depth == 0) {
+        absl::string_view inner = seg.substr(inner_start, i - inner_start);
+        if (SplitTopLevelPipeSegments(inner).size() > 1) {
+          out.push_back({inner_start, i});
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// Forward declaration: the renderer is mutually recursive (a pipe chain renders
+// its operators, an operator may contain nested pipe chains).
+static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
+                                absl::string_view display,
+                                const std::vector<int>& marker_to_rid,
+                                int& s_counter, int depth);
+
+// The query-band CSS class for a box: blue/green family alternating by subquery
+// `depth` (depth 0 = blue), darker ("-b") for the initial segment then lighter
+// ("-a"), alternating by `pos` -- matching the Resolved AST and input panes.
+static std::string PipeBandClass(int depth, int pos) {
+  return absl::StrCat("seg-", (depth % 2 == 0) ? "blue" : "green", "-",
+                      (pos % 2 == 0) ? "b" : "a");
+}
+
+// The Resolved-AST scan id ("r<id>") of the operator that owns segment `mseg`:
+// the first marker emitted at paren-depth 0 in the marked segment.  -1 if the
+// operator has no producing ResolvedScan (e.g. the synthesized final SELECT).
+static int FirstTopLevelMarkerRid(absl::string_view mseg,
+                                  const std::vector<int>& marker_to_rid) {
+  const int marker = ParseSegmentMarkers(mseg).primary;
+  return (marker >= 0 && marker < static_cast<int>(marker_to_rid.size()))
+             ? marker_to_rid[marker]
+             : -1;
+}
+
+// Emits the body of one pipe-operator box: the display text of `dseg`, with each
+// nested pipe-subquery (`(... |> ... )`) replaced by a `.rscan-sub` block that
+// recursively renders the subquery's own operator boxes.  `mseg`/`dseg` are the
+// marked/display text of the same operator and share paren structure, so their
+// nested-group lists align by index.
+static void RenderSegmentInline(std::string& html, absl::string_view mseg,
+                                absl::string_view dseg,
+                                const std::vector<int>& marker_to_rid,
+                                int& s_counter, int depth) {
+  std::vector<PipeParenGroup> mgroups = FindPipeParenGroups(mseg);
+  std::vector<PipeParenGroup> dgroups = FindPipeParenGroups(dseg);
+  if (mgroups.size() != dgroups.size()) {
+    // Structure mismatch (should not happen): fall back to flat display text.
+    absl::StrAppend(&html, EscapeHtmlText(dseg));
+    return;
+  }
+  size_t dpos = 0;
+  for (size_t k = 0; k < dgroups.size(); ++k) {
+    // Display text up to and including the '(' that opens this subquery.
+    // LenientFormatSql may have put the '(' on its own indented line (e.g.
+    // "|> WHERE\n    ("); the nested `.rscan-sub` box supplies the indentation,
+    // so collapse the whitespace before '(' to a single space -- it then reads
+    // "|> WHERE (" with the body nested under it, matching the box formatter's
+    // input-pane layout.
+    absl::string_view lead =
+        dseg.substr(dpos, dgroups[k].inner_start - dpos);  // ends with '('
+    absl::string_view before_paren =
+        absl::StripTrailingAsciiWhitespace(lead.substr(0, lead.size() - 1));
+    if (before_paren.empty()) {
+      absl::StrAppend(&html, EscapeHtmlText(lead));
+    } else {
+      absl::StrAppend(&html, EscapeHtmlText(before_paren), " (");
+    }
+    // A subpipeline body (e.g. a `|> FORK` branch) starts directly with a pipe
+    // operator -- there is no FROM/SELECT source -- so it reads as `(|> ...)`.
+    // Tag it so the info-box hierarchy can show a "Subpipeline" step between the
+    // enclosing operator (FORK) and the operators inside it (a genuine subquery,
+    // which starts with FROM/SELECT, is left untagged).
+    absl::string_view dinner =
+        dseg.substr(dgroups[k].inner_start,
+                    dgroups[k].inner_end - dgroups[k].inner_start);
+    const bool is_subpipeline =
+        absl::StartsWith(absl::StripLeadingAsciiWhitespace(dinner), "|>");
+    absl::StrAppend(&html, is_subpipeline
+                               ? "<div class=\"rscan-sub rscan-subpipeline\">"
+                               : "<div class=\"rscan-sub\">");
+    // A nested pipe-subquery is one level deeper -> next colour family.
+    RenderPipeChainHtml(
+        html,
+        mseg.substr(mgroups[k].inner_start,
+                    mgroups[k].inner_end - mgroups[k].inner_start),
+        dseg.substr(dgroups[k].inner_start,
+                    dgroups[k].inner_end - dgroups[k].inner_start),
+        marker_to_rid, s_counter, depth + 1);
+    absl::StrAppend(&html, "</div>");
+    dpos = dgroups[k].inner_end;  // resume at the ')'
+  }
+  absl::StrAppend(&html, EscapeHtmlText(dseg.substr(dpos)));
+}
+
+// Emits one `.rscan` box for a single pipe operator (segment `mseg`/`dseg`),
+// owning exactly its producing scan (`data-corresp="r<id>"`, used both for the
+// cross-pane highlight and for parity shading).  Nested subqueries become nested
+// boxes with their own ids/correspondences -- never folded into this box.
+static void RenderSegmentBox(std::string& html, absl::string_view mseg,
+                             absl::string_view dseg,
+                             const std::vector<int>& marker_to_rid,
+                             int& s_counter, int depth, int pos) {
+  // Trim outer whitespace so each box hugs its operator text (internal newlines
+  // are preserved by the `white-space: pre` styling).
+  mseg = absl::StripAsciiWhitespace(mseg);
+  dseg = absl::StripAsciiWhitespace(dseg);
+  const int rid = FirstTopLevelMarkerRid(mseg, marker_to_rid);
+  const int sid = s_counter++;
+  absl::StrAppend(&html, "<div class=\"rscan ", PipeBandClass(depth, pos),
+                  "\" data-node-id=\"s", sid, "\"");
+  if (rid >= 0) {
+    absl::StrAppend(&html, " data-corresp=\"r", rid, "\"");
+  }
+  absl::StrAppend(&html, ">");
+  RenderSegmentInline(html, mseg, dseg, marker_to_rid, s_counter, depth);
+  absl::StrAppend(&html, "</div>");
+}
+
+// Renders one pipe chain (a leading source segment plus its `|>` operators) as a
+// sequence of `.rscan` boxes.  The marked and display SQL share top-level pipe
+// structure (formatting never adds/removes a "|>"), so their segments align by
+// index; structure (scan ownership, nesting) comes from `marked`, visible text
+// from `display`.
+static void RenderPipeChainHtml(std::string& html, absl::string_view marked,
+                                absl::string_view display,
+                                const std::vector<int>& marker_to_rid,
+                                int& s_counter, int depth) {
+  std::vector<std::pair<size_t, size_t>> msegs =
+      SplitTopLevelPipeSegments(marked);
+  std::vector<std::pair<size_t, size_t>> dsegs =
+      SplitTopLevelPipeSegments(display);
+  // A bare subpipeline (e.g. a `|> FORK` branch body) is a sequence of pipe
+  // operators with no `FROM` source -- it starts directly with `|>`, so its
+  // leading segment is empty (the SubpipelineInputScan produces no operator
+  // text).  Skip that empty leading segment so the first box is the first real
+  // pipe operator; `pos` (the darker/lighter band index) counts only the boxes
+  // actually emitted.
+  int pos = 0;
+  if (msegs.size() != dsegs.size()) {
+    // Structure mismatch (should not happen): render display operators as
+    // unlinked boxes so the text still shows, just without correspondence.
+    for (size_t i = 0; i < dsegs.size(); ++i) {
+      absl::string_view dseg = absl::StripAsciiWhitespace(
+          display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first));
+      if (dseg.empty()) continue;
+      absl::StrAppend(&html, "<div class=\"rscan ", PipeBandClass(depth, pos++),
+                      "\" data-node-id=\"s", s_counter++, "\">",
+                      EscapeHtmlText(dseg), "</div>");
+    }
+    return;
+  }
+  for (size_t i = 0; i < dsegs.size(); ++i) {
+    absl::string_view dseg =
+        display.substr(dsegs[i].first, dsegs[i].second - dsegs[i].first);
+    if (absl::StripAsciiWhitespace(dseg).empty()) continue;
+    RenderSegmentBox(
+        html, marked.substr(msegs[i].first, msegs[i].second - msegs[i].first),
+        dseg, marker_to_rid, s_counter, depth, pos++);
+  }
+}
+
+// Renders the SQLBuilder pane: splits the formatted pipe SQL into `.rscan` boxes
+// (the same markup the Resolved AST pane uses), one per pipe operator -- nested
+// recursively, so a pipe operator inside a subquery (a scalar subquery in WHERE,
+// a join RHS, a set-op input) becomes its own nested box rather than being
+// folded into the enclosing operator.  Each box has its own id (s0, s1, ...) and
+// a `data-corresp` cross-reference to the single ResolvedScan that produced it,
+// so the panes line up and the client-side correspondence highlighting lights up
+// 1:1 across all panes (and works at every nesting level).
+//
+// The mapping is *exact*, not inferred: the SQLBuilder stamped an inline marker
+// at the head of each pipe operator naming its producing ResolvedScan (see
+// SQLBuilder::pipe_operator_markers()).  `marked_sql` is the raw built SQL still
+// carrying those markers; `display_sql` is the same SQL with markers stripped
+// and reformatted (what the user sees).  marker_to_rid maps a marker index to
+// its Resolved-AST scan id ("r<id>"), or -1 if the scan isn't in the pane.
+//
+// A box with no marker maps to nothing (no correspondence): the SQLBuilder emits
+// a few operators with no corresponding ResolvedScan -- notably the statement's
+// final output-renaming `|> SELECT` synthesized to match the output column
+// names.  We deliberately leave those unlinked.
+static std::string SegmentPipeSqlToHtml(absl::string_view marked_sql,
+                                        absl::string_view display_sql,
+                                        const std::vector<int>& marker_to_rid) {
+  std::string html = "<div class=\"rscan-stmt\">";
+  int s_counter = 0;
+  RenderPipeChainHtml(html, marked_sql, display_sql, marker_to_rid, s_counter,
+                      /*depth=*/0);
+  absl::StrAppend(&html, "</div>");
+  return html;
+}
+
+// Like StripScanMarkers, but also records for each marker index the byte offset
+// in the CLEAN output where the marker was removed (= where the marked operator
+// text begins).  `offsets` is indexed by marker index; entries with no marker
+// stay -1.
+static std::string StripScanMarkersWithOffsets(absl::string_view sql,
+                                               std::vector<int>* offsets) {
+  std::string out;
+  out.reserve(sql.size());
+  for (size_t i = 0; i < sql.size(); ++i) {
+    if (sql[i] == '/' && i + 3 < sql.size() && sql[i + 1] == '*' &&
+        sql[i + 2] == 'S' && absl::ascii_isdigit(sql[i + 3])) {
+      size_t j = i + 3;
+      int idx = 0;
+      while (j < sql.size() && absl::ascii_isdigit(sql[j])) {
+        idx = idx * 10 + (sql[j] - '0');
+        ++j;
+      }
+      if (j + 1 < sql.size() && sql[j] == '*' && sql[j + 1] == '/') {
+        if (idx >= static_cast<int>(offsets->size())) {
+          offsets->resize(idx + 1, -1);
+        }
+        (*offsets)[idx] = static_cast<int>(out.size());
+        i = j + 1;  // skip the marker entirely
+        continue;
+      }
+    }
+    out += sql[i];
+  }
+  return out;
+}
+
+// True if `node` is a pipe-operator segment the box formatter annotates -- a
+// real `|>` operator (kind starts with "Pipe"), excluding the internal "Pipe*"
+// sub-nodes that are not standalone operators (e.g. the JOIN LHS placeholder,
+// or a RENAME/SET item), which would otherwise shadow their parent operator.
+static bool IsPipeSegmentNode(const ASTNode* node) {
+  switch (node->node_kind()) {
+    case AST_PIPE_JOIN_LHS_PLACEHOLDER:
+    case AST_PIPE_RENAME_ITEM:
+    case AST_PIPE_SET_ITEM:
+    case AST_PIPE_IF_CASE:
+      return false;
+    default:
+      return absl::StartsWith(node->GetNodeKindString(), "Pipe");
+  }
+}
+
+// Finds the smallest-range pipe-operator (or initial FROM-query) AST node whose
+// byte range contains `offset`.  Each inline marker sits at such an operator's
+// head, so this resolves a marker position to the operator node the box
+// formatter will annotate.
+static const ASTNode* FindSmallestSegmentNode(const ASTNode* node, int offset) {
+  if (node == nullptr) return nullptr;
+  const int start = node->start_location().GetByteOffset();
+  const int end = node->end_location().GetByteOffset();
+  if (offset < start || offset >= end) return nullptr;
+  const ASTNode* best =
+      (IsPipeSegmentNode(node) || node->node_kind() == AST_FROM_QUERY)
+          ? node
+          : nullptr;
+  for (int i = 0; i < node->num_children(); ++i) {
+    const ASTNode* found = FindSmallestSegmentNode(node->child(i), offset);
+    if (found != nullptr) best = found;  // deeper child = smaller range
+  }
+  return best;
+}
+
+// The "|> KEYWORD" title for a pipe operator node, for the SQLBuilder pane's
+// info-box hierarchy.  Mirrors PipeOperatorName/PipeOperatorTitle in
+// analyzer/resolver_query.cc (the input pane's titles); keep the two in sync.
+static std::string SqlBuilderPipeTitle(const ASTNode* node) {
+  switch (node->node_kind()) {
+    case AST_PIPE_JOIN: return "|> JOIN";
+    case AST_PIPE_CALL: return "|> CALL";
+    case AST_PIPE_SELECT: return "|> SELECT";
+    case AST_PIPE_AGGREGATE: return "|> AGGREGATE";
+    case AST_PIPE_DROP: return "|> DROP";
+    case AST_PIPE_SET: return "|> SET";
+    case AST_PIPE_WHERE: return "|> WHERE";
+    case AST_PIPE_LIMIT_OFFSET: return "|> LIMIT";
+    case AST_PIPE_ORDER_BY: return "|> ORDER BY";
+    case AST_PIPE_TABLESAMPLE: return "|> TABLESAMPLE";
+    case AST_PIPE_STATIC_DESCRIBE: return "|> STATIC_DESCRIBE";
+    case AST_PIPE_ASSERT: return "|> ASSERT";
+    case AST_PIPE_EXTEND: return "|> EXTEND";
+    case AST_PIPE_AS: return "|> AS";
+    case AST_PIPE_DISTINCT: return "|> DISTINCT";
+    case AST_PIPE_WINDOW: return "|> WINDOW";
+    case AST_PIPE_RENAME: return "|> RENAME";
+    case AST_PIPE_SET_OPERATION: return "|> (set operation)";
+    case AST_PIPE_FORK: return "|> FORK";
+    case AST_PIPE_TEE: return "|> TEE";
+    case AST_PIPE_IF: return "|> IF";
+    case AST_PIPE_MATCH_RECOGNIZE: return "|> MATCH_RECOGNIZE";
+    case AST_PIPE_LOG: return "|> LOG";
+    case AST_PIPE_DESCRIBE: return "|> DESCRIBE";
+    case AST_PIPE_PIVOT: return "|> PIVOT";
+    case AST_PIPE_UNPIVOT: return "|> UNPIVOT";
+    case AST_PIPE_WITH: return "|> WITH";
+    case AST_PIPE_EXPORT_DATA: return "|> EXPORT DATA";
+    case AST_PIPE_CREATE_TABLE: return "|> CREATE TABLE";
+    case AST_PIPE_INSERT: return "|> INSERT";
+    default: return absl::StrCat("|> ", node->GetNodeKindString());
+  }
+}
+
+// Renders the SQLBuilder pane the SAME way as the input SQL pane: by re-parsing
+// the regenerated (clean) SQL and laying it out with the box formatter, so both
+// panes format identically.  Correspondence comes from the inline "/*S<n>*/"
+// markers -- each sits at a pipe operator's head, so the smallest operator node
+// containing it maps to that operator's ResolvedScan ("r<id>").  Returns an
+// error if the generated SQL doesn't re-parse, so the caller can fall back.
+static absl::StatusOr<std::string> RenderSqlBuilderBoxHtml(
+    absl::string_view marked_sql, const std::vector<int>& marker_to_rid,
+    const LanguageOptions& language_options) {
+  std::vector<int> marker_offsets;
+  std::string clean_sql = StripScanMarkersWithOffsets(marked_sql,
+                                                      &marker_offsets);
+
+  std::unique_ptr<ParserOutput> parser_output;
+  GOOGLESQL_RETURN_IF_ERROR(ParseStatement(
+      clean_sql, ParserOptions(language_options), &parser_output));
+  const ASTNode* root = parser_output->statement();
+
+  // Map each marked operator node to its Resolved-AST scan id.
+  absl::flat_hash_map<const ASTNode*, int> node_to_rid;
+  for (size_t k = 0; k < marker_offsets.size(); ++k) {
+    if (marker_offsets[k] < 0 || k >= marker_to_rid.size() ||
+        marker_to_rid[k] < 0) {
+      continue;
+    }
+    const ASTNode* node = FindSmallestSegmentNode(root, marker_offsets[k]);
+    if (node != nullptr) node_to_rid[node] = marker_to_rid[k];
+  }
+
+  // Annotate each segment (a pipe operator, the initial FROM query, or a
+  // subpipeline) with a title for the info-box hierarchy -- mirroring the input
+  // pane -- plus, where the operator maps to a ResolvedScan, a hidden `.ni-ref`
+  // carrying its own id ("s<n>") and a cross-reference ("r<id>") for the
+  // cross-pane highlight (the box formatter wraps the box, so we can't set an
+  // attribute on it directly).
+  int s_counter = 0;
+  BoxAnnotator annotate = [&node_to_rid, &s_counter,
+                           clean_sql](const ASTNode* node) -> std::string {
+    const absl::string_view kind = node->GetNodeKindString();
+    const bool is_pipe = IsPipeSegmentNode(node);
+    const bool is_from = node->node_kind() == AST_FROM_QUERY;
+    const bool is_subpipeline = (kind == "Subpipeline");
+    // The box formatter annotates the Query node both for the top-level query
+    // (its q-whole region) and for each subquery (its parenthesised body), so a
+    // Query node gives the "Query"/"... subquery" hierarchy layer like the input
+    // pane.
+    const bool is_query = node->node_kind() == AST_QUERY;
+    // The statement is the outermost hierarchy layer (e.g. "QueryStatement").
+    const bool is_stmt = absl::EndsWith(kind, "Statement");
+    if (!is_pipe && !is_from && !is_subpipeline && !is_query && !is_stmt) {
+      return std::string();
+    }
+
+    // Correspondence id: an operator carries its own marker; a query/subpipeline
+    // layer carries no marker, so it borrows its result operator's id (its last
+    // pipe operator, or the FROM source) -- the same ResolvedScan the input and
+    // AST panes use for that layer, so the subquery box cross-links.
+    int rid = -1;
+    if (auto it = node_to_rid.find(node); it != node_to_rid.end()) {
+      rid = it->second;
+    } else if (is_query || is_subpipeline) {
+      const ASTNode* result = nullptr;
+      if (const ASTQuery* q = node->GetAsOrNull<ASTQuery>(); q != nullptr) {
+        result = q->pipe_operator_list().empty()
+                     ? static_cast<const ASTNode*>(q->query_expr())
+                     : static_cast<const ASTNode*>(q->pipe_operator_list().back());
+      } else if (const ASTSubpipeline* sp =
+                     node->GetAsOrNull<ASTSubpipeline>();
+                 sp != nullptr && !sp->pipe_operator_list().empty()) {
+        result = sp->pipe_operator_list().back();
+      }
+      if (result != nullptr) {
+        if (auto it = node_to_rid.find(result); it != node_to_rid.end()) {
+          rid = it->second;
+        }
+      }
+    }
+    std::string ref;
+    if (rid >= 0) {
+      ref = absl::StrCat("<span class=\"ni-ref\" data-node-id=\"s", s_counter++,
+                         "\" data-corresp=\"r", rid, "\"></span>");
+    }
+
+    std::string title;
+    if (is_stmt) {
+      title = std::string(kind);
+    } else if (is_subpipeline) {
+      title = "Subpipeline";
+    } else if (is_query) {
+      // A subquery (its parent is a (table) subquery) vs. the top-level query.
+      const ASTNode* p = node->parent();
+      if (p != nullptr && p->node_kind() == AST_EXPRESSION_SUBQUERY) {
+        title = "Expression subquery";
+      } else if (p != nullptr && p->node_kind() == AST_TABLE_SUBQUERY) {
+        title = "Table subquery";
+      } else {
+        title = "Query with pipe operators";
+      }
+    } else if (is_pipe) {
+      title = SqlBuilderPipeTitle(node);
+    } else {
+      // FROM query: its first line ("FROM <table>").
+      const int start = node->start_location().GetByteOffset();
+      const int end = node->end_location().GetByteOffset();
+      absl::string_view t =
+          absl::string_view(clean_sql).substr(start, end - start);
+      title = std::string(
+          absl::StripAsciiWhitespace(t.substr(0, t.find('\n'))));
+      if (title.size() > 60) title = absl::StrCat(title.substr(0, 57), "...");
+    }
+    return absl::StrCat(ref, "<div class=\"ni-title\">", EscapeHtmlText(title),
+                        "</div><div class=\"ni-body\"></div>");
+  };
+  return SqlToBoxHtml(clean_sql, root, language_options, /*width=*/80, annotate,
+                      /*break_pipe_operators=*/true);
+}
+
+// Builds the "visualize" output: the input SQL, the Resolved AST (linear pipe
+// form), and the SQLBuilder-regenerated SQL (pipe syntax).  Analyzes the query
+// itself (rewriters disabled, parse locations recorded) so the Resolved AST
+// stays close to the input pipe structure, runs the SQLBuilder in pipe mode,
+// then re-analyzes the regenerated SQL so its NameLists can be shown too.
+// Emits a visualizer block for a statement that failed to parse: the parse
+// error goes in the Input SQL pane (parsing is the step that failed), and the
+// downstream panes note that they are unavailable, rather than showing nothing.
+static absl::Status VisualizeParseError(absl::string_view sql,
+                                        const absl::Status& parse_status,
+                                        ExecuteQueryWriter& writer) {
+  VisualizationData data;
+  data.input_sql = std::string(sql);
+  data.input_sql_html = ErrorPaneHtml("Parse error", parse_status.message());
+  data.resolved_ast_text =
+      absl::StrCat("Parse error: ", parse_status.message());
+  data.resolved_ast_html = ErrorPaneHtml(
+      "Unavailable",
+      "Resolved AST is unavailable because the query did not parse.");
+  data.sqlbuilder_sql_html = ErrorPaneHtml(
+      "Unavailable",
+      "SQLBuilder is unavailable because the query did not parse.");
+  return writer.visualized(data);
+}
+
+static absl::Status VisualizeQuery(absl::string_view sql, const ASTNode* ast,
+                                   ExecuteQueryConfig& config,
+                                   ExecuteQueryWriter& writer) {
+  // Visualize any statement (SELECT, DML, DDL, ...).  Skip non-statement roots
+  // such as bare expressions (expression mode), which don't fit the query-pane
+  // model.  Scripts reach this per top-level statement via their own path.
+  if (!ast->IsStatement()) {
+    return absl::OkStatus();
+  }
+
+  // Analyze with rewrites disabled and parse locations recorded.  This keeps
+  // the Resolved AST close to the input pipe structure and lets us correlate
+  // ResolvedScans back to input-SQL byte ranges.
+  AnalyzerOptions viz_options = config.analyzer_options();
+  viz_options.set_enabled_rewrites({});
+  viz_options.set_parse_location_record_type(
+      PARSE_LOCATION_RECORD_FULL_NODE_SCOPE);
+  VisualizationData data;
+  data.input_sql = std::string(sql);
+
+  std::unique_ptr<const AnalyzerOutput> analyzer_output;
+  if (absl::Status analyze_status = AnalyzeStatementFromParserAST(
+          *ast->GetAsOrDie<ASTStatement>(), viz_options, sql, config.catalog(),
+          config.type_factory(), &analyzer_output);
+      !analyze_status.ok()) {
+    // Analysis failed: still show the parse tree in the Input SQL pane (without
+    // resolver NameList info), and surface the analysis error in the other two
+    // panes instead of leaving them blank.
+    if (absl::StatusOr<std::string> h = RenderBoxHtmlNoInfo(sql, ast, config);
+        h.ok()) {
+      data.input_sql_html = *std::move(h);
+    } else {
+      data.input_sql_html = PreBlockHtml(sql);
+    }
+    data.resolved_ast_text =
+        absl::StrCat("Analysis error: ", analyze_status.message());
+    data.resolved_ast_html =
+        ErrorPaneHtml("Analysis error", analyze_status.message());
+    data.sqlbuilder_sql_html = ErrorPaneHtml(
+        "Unavailable",
+        "SQLBuilder cannot run because analysis failed (see Resolved AST).");
+    return writer.visualized(data);
+  }
+  const ResolvedNode* resolved = analyzer_output->resolved_node();
+  GOOGLESQL_RET_CHECK_NE(resolved, nullptr);
+
+  // --- Resolved AST pane: structured linear emitter (one box per
+  // ResolvedScan, alternating colors, nested query blocks, data-scan-id).  Also
+  // collect the scans in scan-id order so we can tag the other panes. ---
+  ResolvedNode::DebugStringConfig debug_config;
+  debug_config.linear_mode = true;
+  data.resolved_ast_text = resolved->DebugString(debug_config);
+  std::vector<const ResolvedScan*> scan_order;
+  data.resolved_ast_html = resolved->DebugStringHtml(&scan_order);
+  absl::flat_hash_map<const ResolvedScan*, int> scan_ids;
+  for (int i = 0; i < static_cast<int>(scan_order.size()); ++i) {
+    scan_ids[scan_order[i]] = i;
+  }
+
+  // Structured graph model of the same Resolved AST (node ids reuse the scan-id
+  // order above, so the graph view lines up with the textual panes).
+  data.resolved_graph_json =
+      BuildResolvedAstQueryGraph(resolved, scan_ids).ToJson();
+
+  // --- Input SQL pane: box HTML with node info, tagged with scan-ids. ---
+  absl::StatusOr<std::string> input_html =
+      RenderBoxHtmlWithNodeInfo(sql, ast, *analyzer_output, config, &scan_ids);
+  if (input_html.ok()) {
+    data.input_sql_html = *input_html;
+  }
+
+  // --- SQLBuilder pane: regenerate SQL in pipe syntax. ---
+  // Record inline "/*S<n>*/" markers so each emitted pipe operator can be tied
+  // back exactly to its producing ResolvedScan (see pipe_operator_markers()).
+  SQLBuilder::SQLBuilderOptions sql_builder_options;
+  sql_builder_options.language_options = config.analyzer_options().language();
+  sql_builder_options.catalog = config.catalog();
+  sql_builder_options.target_syntax_mode = SQLBuilder::TargetSyntaxMode::kPipe;
+  sql_builder_options.record_pipe_operator_markers = true;
+  SQLBuilder builder(sql_builder_options);
+  absl::Status sqlbuilder_status = builder.Process(*resolved);
+  std::string marked_sql;
+  if (sqlbuilder_status.ok()) {
+    absl::StatusOr<std::string> sql = builder.GetSql();
+    if (sql.ok()) {
+      marked_sql = *std::move(sql);
+    } else {
+      sqlbuilder_status = sql.status();
+    }
+  }
+  if (!sqlbuilder_status.ok()) {
+    // SQLBuilder failed to regenerate SQL from the Resolved AST: show the error
+    // in the SQLBuilder pane rather than leaving it blank. The Input SQL and
+    // Resolved AST panes above are unaffected.
+    data.sqlbuilder_sql_html =
+        ErrorPaneHtml("SQLBuilder error", sqlbuilder_status.message());
+  } else {
+    // Translate marker indices to Resolved-AST scan ids ("r<id>"), then strip
+    // the markers and format the clean SQL for display.
+    std::vector<int> marker_to_rid(builder.pipe_operator_markers().size(), -1);
+    for (size_t i = 0; i < builder.pipe_operator_markers().size(); ++i) {
+      auto it = scan_ids.find(builder.pipe_operator_markers()[i]);
+      if (it != scan_ids.end()) marker_to_rid[i] = it->second;
+    }
+    std::string clean_sql = StripScanMarkers(marked_sql);
+    std::string display_sql = clean_sql;
+    if (absl::StatusOr<std::string> f = LenientFormatSql(clean_sql); f.ok()) {
+      display_sql = *f;
+    }
+    data.sqlbuilder_sql = display_sql;
+    // Lay out the regenerated SQL with the same box formatter as the input pane
+    // so the two panes format identically; fall back to text-based segmentation
+    // if the generated SQL doesn't re-parse.
+    if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
+            marked_sql, marker_to_rid, config.analyzer_options().language());
+        h.ok()) {
+      data.sqlbuilder_sql_html = *std::move(h);
+    } else {
+      data.sqlbuilder_sql_html =
+          SegmentPipeSqlToHtml(marked_sql, display_sql, marker_to_rid);
+    }
+  }
+
+  if (data.input_sql_html.empty()) {
+    data.input_sql_html = PreBlockHtml(sql);
+  }
+
+  // Also compute the post-rewrite state.  When the configured rewriters change
+  // the tree, show it as a *second* full visualizer UI (same input SQL, the
+  // post-rewrite Resolved AST, and a SQLBuilder regeneration of it).  Build the
+  // input box now, before rewriting, while the pre-rewrite analyzer info is
+  // valid; it carries no scan-id correspondence (scan_ids = nullptr) because the
+  // input<->scan mapping does not survive rewrites.  All pre-rewrite panes above
+  // are already built, so rewriting the output in place here is safe.
+  std::string post_input_html;
+  if (absl::StatusOr<std::string> h = RenderBoxHtmlWithNodeInfo(
+          sql, ast, *analyzer_output, config, /*scan_ids=*/nullptr);
+      h.ok()) {
+    post_input_html = *h;
+  }
+  if (RewriteResolvedAst(config.analyzer_options(), sql, config.catalog(),
+                         config.type_factory(),
+                         const_cast<AnalyzerOutput&>(*analyzer_output))
+          .ok()) {
+    const ResolvedNode* post = analyzer_output->resolved_node();
+    // Compare in the same linear form `data.resolved_ast_text` already holds.
+    std::string post_text =
+        post != nullptr ? post->DebugString(debug_config) : "";
+    if (post != nullptr && post_text != data.resolved_ast_text) {
+      data.post_rewrite_ast_text = std::move(post_text);
+      data.post_rewrite_input_sql_html = std::move(post_input_html);
+
+      std::vector<const ResolvedScan*> scan_order2;
+      data.post_rewrite_ast_html = post->DebugStringHtml(&scan_order2);
+      absl::flat_hash_map<const ResolvedScan*, int> scan_ids2;
+      for (int i = 0; i < static_cast<int>(scan_order2.size()); ++i) {
+        scan_ids2[scan_order2[i]] = i;
+      }
+      data.post_rewrite_resolved_graph_json =
+          BuildResolvedAstQueryGraph(post, scan_ids2).ToJson();
+
+      // SQLBuilder on the post-rewrite tree.  Its inline markers tie each
+      // emitted operator back to a post-rewrite scan, so the AST<->SQLBuilder
+      // correspondence within this second UI is exact, just like the first.
+      // Some rewritten trees (e.g. |> TEE becomes a generalized statement) are
+      // not yet supported by SQLBuilder; show that error in the pane rather than
+      // leaving it blank.
+      SQLBuilder post_builder(sql_builder_options);
+      absl::Status post_sb_status = post_builder.Process(*post);
+      std::string marked2;
+      if (post_sb_status.ok()) {
+        absl::StatusOr<std::string> s = post_builder.GetSql();
+        if (s.ok()) {
+          marked2 = *std::move(s);
+        } else {
+          post_sb_status = s.status();
+        }
+      }
+      if (!post_sb_status.ok()) {
+        data.post_rewrite_sqlbuilder_sql_html =
+            ErrorPaneHtml("SQLBuilder error", post_sb_status.message());
+      } else {
+        std::vector<int> marker_to_rid2(
+            post_builder.pipe_operator_markers().size(), -1);
+        for (size_t i = 0; i < post_builder.pipe_operator_markers().size();
+             ++i) {
+          auto it = scan_ids2.find(post_builder.pipe_operator_markers()[i]);
+          if (it != scan_ids2.end()) marker_to_rid2[i] = it->second;
+        }
+        std::string display2 = StripScanMarkers(marked2);
+        if (absl::StatusOr<std::string> f = LenientFormatSql(display2);
+            f.ok()) {
+          display2 = *f;
+        }
+        data.post_rewrite_sqlbuilder_sql = display2;
+        if (absl::StatusOr<std::string> h = RenderSqlBuilderBoxHtml(
+                marked2, marker_to_rid2, config.analyzer_options().language());
+            h.ok()) {
+          data.post_rewrite_sqlbuilder_sql_html = *std::move(h);
+        } else {
+          data.post_rewrite_sqlbuilder_sql_html =
+              SegmentPipeSqlToHtml(marked2, display2, marker_to_rid2);
+        }
+      }
+    }
+  }
+
+  return writer.visualized(data);
 }
 
 static bool IsDdlStatement(const ResolvedNode* node) {
@@ -2251,7 +3291,46 @@ static absl::Status ExecuteScript(absl::string_view script,
 
   if (config.has_tool_mode(ToolMode::kParse) ||
       config.has_tool_mode(ToolMode::kUnparse)) {
-    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, config, writer));
+    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, script, config, writer));
+  }
+  if (config.has_tool_mode(ToolMode::kVisualize)) {
+    // Visualize each top-level statement of the script independently, framing
+    // each as its own statement block (StartStatement flushes the previous; the
+    // caller flushes the last).  A script statement may not analyze standalone
+    // (e.g. it references a script variable whose type is only known at run
+    // time); such statements are skipped rather than aborting the whole script.
+    // Full-fidelity script visualization would require integrating with the
+    // script executor so each statement is analyzed in its run-time context.
+    if (const ASTScript* script_node = (*ast)->GetAsOrNull<ASTScript>()) {
+      bool is_first = true;
+      for (const ASTStatement* stmt : script_node->statement_list()) {
+        GOOGLESQL_RETURN_IF_ERROR(writer.StartStatement(is_first));
+        is_first = false;
+        // Visualize each statement against its OWN source text so its panes
+        // show just that statement, not the whole script.  The statement AST
+        // carries byte offsets into the whole script, so re-parse the
+        // statement's text standalone to get an AST whose locations line up
+        // with the per-statement input pane.  If it can't be isolated on its
+        // own (e.g. it uses a macro defined earlier in the script), fall back
+        // to visualizing against the full script text.
+        const auto& range = stmt->location();
+        const absl::string_view stmt_sql = script.substr(
+            range.start().GetByteOffset(),
+            range.end().GetByteOffset() - range.start().GetByteOffset());
+        std::unique_ptr<ParserOutput> stmt_output;
+        if (ParseStatement(
+                stmt_sql,
+                ParserOptions(config.analyzer_options().language(),
+                              kMacroExpansionMode, &config.macro_catalog()),
+                &stmt_output)
+                .ok()) {
+          VisualizeQuery(stmt_sql, stmt_output->statement(), config, writer)
+              .IgnoreError();
+          continue;
+        }
+        VisualizeQuery(script, stmt, config, writer).IgnoreError();
+      }
+    }
   }
   if (config.has_tool_mode(ToolMode::kExecute)) {
     GOOGLESQL_RETURN_IF_ERROR(ExplainAndOrExecuteSql(nullptr, config, writer, script));
@@ -2301,16 +3380,22 @@ static absl::Status ExecuteOneQuery(absl::string_view script,
   absl::StatusOr<const ASTNode*> ast = ParseSql(
       script, config, &start_location, at_end_of_input, &parser_output);
   if (!ast.ok()) {
-    return MaybeUpdateErrorFromPayload(
+    absl::Status parse_status = MaybeUpdateErrorFromPayload(
         ErrorMessageOptions{
             .mode = ErrorMessageMode::ERROR_MESSAGE_MULTI_LINE_WITH_CARET,
             .attach_error_location_payload = false},
         script, ast.status());
+    // In visualize mode, show the parse error in the panes (the top-level error
+    // block is suppressed when panes are produced) rather than nothing.
+    if (config.has_tool_mode(ToolMode::kVisualize)) {
+      VisualizeParseError(script, parse_status, writer).IgnoreError();
+    }
+    return parse_status;
   }
 
   if (config.has_tool_mode(ToolMode::kParse) ||
       config.has_tool_mode(ToolMode::kUnparse)) {
-    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, config, writer));
+    GOOGLESQL_RETURN_IF_ERROR(WriteParsedAndOrUnparsedAst(*ast, script, config, writer));
   }
 
   // Macro support is enabled by intercepting `DEFINE MACRO` statements in the
@@ -2326,6 +3411,10 @@ static absl::Status ExecuteOneQuery(absl::string_view script,
     if (macro_registered) {
       return absl::OkStatus();
     }
+  }
+
+  if (config.has_tool_mode(ToolMode::kVisualize)) {
+    GOOGLESQL_RETURN_IF_ERROR(VisualizeQuery(script, *ast, config, writer));
   }
 
   if (!IsAnalysisRequired(config)) {

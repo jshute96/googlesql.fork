@@ -43,6 +43,7 @@ namespace googlesql {
 // Using forward declarations here to avoid circular includes.
 class ResolvedASTVisitor;
 class ResolvedColumn;
+class ResolvedScan;
 
 // This is the base class for the resolved AST.
 // Subclasses are in the generated file resolved_ast.h.
@@ -183,6 +184,22 @@ class ResolvedNode {
     // If set to true, the debug string will use box glyphs like "├─",  instead
     // of ASCII characters like "+-".
     bool use_box_glyphs = false;
+
+    // If set to true, sequences of scans are rendered linearly, like pipe
+    // syntax, instead of as a nested tree. Each scan's "pipe input" (see
+    // ResolvedScan::GetPipeInputScan) is printed first, then the scan itself
+    // is stacked below it at the same indent level with a "|> " prefix.
+    bool linear_mode = false;
+
+    // Only relevant in linear_mode. If true (the default), the scan field that
+    // was consumed as the pipe input is omitted from the operator's fields. If
+    // false, it is shown inline as e.g. "input_scan=<pipe_input>".
+    bool omit_pipe_input_scan_field = true;
+
+    // If true, the "parse_location" field is omitted from every node. The
+    // visual (HTML) renderer records parse locations for cross-pane
+    // correspondence but does not want them cluttering the displayed tree.
+    bool omit_parse_location = false;
   };
 
   // Returns a string representation of this tree and all descendants, for
@@ -193,6 +210,21 @@ class ResolvedNode {
 
   std::string DebugString(const DebugStringConfig& config) const;
   std::string DebugString() const { return DebugString(DebugStringConfig{}); }
+
+  // Renders this node in linear (pipe-style) form as HTML for the execute_query
+  // visualizer's Resolved AST pane.  Emits one `<div class="rscan ...">` box per
+  // ResolvedScan, with alternating "scan-a"/"scan-b" shading for the operators
+  // of a pipe chain, nested query blocks (`rscan-query`) for scans that begin a
+  // new query (a non-pipe-input scan field, e.g. a subquery or set-operation
+  // input), and an enclosing `rscan-stmt` box for the statement.  Each scan box
+  // carries `data-node-id` so client-side code can correlate it with the SQL
+  // panes.  Per-node fields are rendered as escaped text inside their box.
+  //
+  // If `scan_order` is non-null, it is filled with the scans in scan-id order
+  // (i.e. `scan_order[i]` is the scan whose box has `data-node-id="i"`), so the
+  // caller can build a scan->id map to correlate the other panes.
+  std::string DebugStringHtml(
+      std::vector<const ResolvedScan*>* scan_order = nullptr) const;
 
   // Check if any semantically meaningful fields have not been accessed in
   // this node or its children. If so, return a descriptive error indicating
@@ -439,14 +471,68 @@ class ResolvedNode {
   // annotations specifies additional annotations to display for specific nodes
   // prefix1 is the indentation to attach to child nodes.
   // prefix2 is the indentation to attach to the root of this tree.
+  // `pipe_input_to_elide`, when non-null (used in linear_mode), is a descendant
+  // scan that is the current scan's pipe input; wherever it would be printed as
+  // a child node it is instead rendered inline as "<pipe_input>".
   static void DebugStringImpl(const ResolvedNode* node,
                               const DebugStringConfig& config,
                               absl::string_view prefix1,
-                              absl::string_view prefix2, std::string* output);
+                              absl::string_view prefix2, std::string* output,
+                              const ResolvedNode* pipe_input_to_elide = nullptr);
+
+  // Renders a single node's name line and fields. `name_prefix` is printed
+  // before the node name; `field_prefix` is the base indentation for the node's
+  // fields/child nodes. In non-linear mode these are prefix2/prefix1; in
+  // linear_mode they are computed by DebugStringImpl to lay out the "|>" pipe
+  // chain. `pipe_input_to_elide` behaves as in DebugStringImpl.
+  static void DebugStringBody(const ResolvedNode* node,
+                              const DebugStringConfig& config,
+                              absl::string_view name_prefix,
+                              absl::string_view field_prefix,
+                              std::string* output,
+                              const ResolvedNode* pipe_input_to_elide);
 
   static void AppendAnnotations(const ResolvedNode* node,
                                 absl::Span<const NodeAnnotation> annotations,
                                 std::string* output);
+
+  // Helpers for DebugStringHtml().  `scan_counter` numbers scan boxes (for the
+  // data-scan-id attribute and alternating colors).  `EmitNodeHtml` renders an
+  // arbitrary node as a block (used for the statement and for query roots);
+  // `EmitScanChainHtml` flattens a scan's pipe spine into a column of boxes.
+  // `depth` is the subquery nesting depth (0 at the top level, +1 per nested
+   // query block), used to colour each query/subquery by family (blue/green
+   // alternating) to match the input-SQL and SQLBuilder panes.
+  static void EmitNodeHtml(const ResolvedNode* node,
+                           const DebugStringConfig& config, int* scan_counter,
+                           std::vector<const ResolvedScan*>* scan_order,
+                           std::string* output, int depth);
+  static void EmitScanChainHtml(const ResolvedScan* scan,
+                                const DebugStringConfig& config,
+                                int* scan_counter,
+                                std::vector<const ResolvedScan*>* scan_order,
+                                std::string* output, int depth);
+  // Renders a single scan box's own fields: scalar fields and non-scan child
+  // nodes become escaped text; scan child nodes become nested query boxes.
+  // `elide` is the pipe-input scan to skip (already shown as the box above).
+  // `top_level` is set only for the enclosing statement node, whose query is the
+  // depth-0 query (the statement is transparent and does not add a nesting
+  // level); for any scan, its scan-child fields are genuine subqueries one level
+  // deeper.
+  static void EmitScanFieldsHtml(const ResolvedNode* scan,
+                                 const DebugStringConfig& config,
+                                 const ResolvedNode* elide, int* scan_counter,
+                                 std::vector<const ResolvedScan*>* scan_order,
+                                 std::string* output, int depth,
+                                 bool top_level = false);
+  // Appends one field's box-glyph tree text (matching the textual DebugString:
+  // connector, name/value, multi-line values, and non-scan child subtrees) to
+  // `text`. `is_last` selects the "last child" connector/indent so a caller can
+  // lay out a field's position within the full sibling list. Scan-child fields
+  // are handled by EmitScanFieldsHtml (rendered as nested boxes), not here.
+  static void AppendFieldTreeText(const DebugStringField& field, bool is_last,
+                                  const DebugStringConfig& config,
+                                  std::string* text);
 
   // DebugString on these call protected methods.
   friend class ResolvedComputedColumn;

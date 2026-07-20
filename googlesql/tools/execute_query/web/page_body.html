@@ -14,6 +14,12 @@
               <fieldset>
                 <legend>Mode</legend>
                 <span class="mode-option">
+                  <input type="checkbox" name="mode" value="visualize" id="mode-visualize"
+                    {{#mode_visualize}}checked{{/mode_visualize}}>
+                  <label for="mode-visualize">Visualize</label>
+                </span>
+
+                <span class="mode-option">
                   <input type="checkbox" name="mode" value="execute" id="mode-execute"
                     {{#mode_execute}}checked{{/mode_execute}}>
                   <label for="mode-execute">Execute</label>
@@ -113,7 +119,11 @@
 
             </div>
 
-            <input type="submit" id="submit" value="Submit">
+            <span class="submit-buttons">
+              <input type="submit" id="submit" value="Submit">
+              <button type="button" id="visualize-btn"
+                title="Open a full-window visualization of this query in a new tab">Visualize</button>
+            </span>
           </div>
         </form>
       </div>
@@ -133,6 +143,13 @@
             <p>
           {{/error}}
           {{#result}}
+            {{#result_visualized}}
+            <h3>Visualize</h3>
+            {{#viz_blocks}}
+            {{> viz_block}}
+            {{/viz_blocks}}
+            {{/result_visualized}}
+
             {{#result_executed}}
             <h3>Execute</h3>
               {{#result_executed_tables}}
@@ -172,10 +189,28 @@
             {{/result_analyzed_post_rewrite}}
             {{/result_analyzed}}
 
+            {{#result_formatted_analyzed}}
+            <h3>Query viewer</h3>
+            <div class="output">{{{result_formatted_analyzed}}}</div>
+            {{/result_formatted_analyzed}}
+
             {{#result_parsed}}
             <h3>Parse</h3>
             <pre class="output parsed"><code class="language-less">{{{result_parsed}}}</code></pre>
             {{/result_parsed}}
+
+            {{#result_formatted_sql}}
+            <h3>Formatted SQL</h3>
+            <div class="formatted-sql-tabs" role="tablist">
+              <button type="button" class="fmt-tab active" data-format="default">Default</button>
+              <button type="button" class="fmt-tab" data-format="simple-box">Simple box</button>
+              <button type="button" class="fmt-tab" data-format="full-box">Full box</button>
+            </div>
+            <div class="output formatted-sql-output">
+              <div class="fmt-pane fmt-pane-default">{{{result_formatted_sql}}}</div>
+              <div class="fmt-pane fmt-pane-boxed">{{{result_formatted_sql_boxed}}}</div>
+            </div>
+            {{/result_formatted_sql}}
 
             {{#result_explained }}
             <h3>Explain</h3>

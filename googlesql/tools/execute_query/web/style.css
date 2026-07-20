@@ -193,22 +193,23 @@ input[type='checkbox'] {
   vertical-align: bottom;
 }
 
-input[type='submit'] {
-  background-color: #0f73b5;;
+input[type='submit'],
+#visualize-btn {
+  background-color: #0f73b5;
   border-radius: 0.5em;
   border: 1px solid #0f73b5;
   color: #fff;
   cursor: pointer;
+  font: inherit;
   font-size: 1.1em;
-  margin-left: 1em;
   margin-top: 0.5em;
   max-height: 2.5em;
-  max-width: 6em;
   min-width: 5em;
   padding: 0.5em;
 }
 
-input[type='submit']:hover {
+input[type='submit']:hover,
+#visualize-btn:hover {
   background-color: #1597ec;
   border-color: #1597ec;
 }
@@ -356,4 +357,800 @@ hr {
 */
 .source-range-highlight {
   background-color: #ff5;
+}
+
+/* ==========================================================================
+   Experimental "Formatted SQL" rendering (parse mode).
+
+   The original SQL text is emitted verbatim, with each AST node's source range
+   wrapped in a nested <div class="ast ast-<NodeKind>"> element and comments in
+   <div class="sql-comment">. All visual formatting is done here in CSS: because
+   the divs form a clean hierarchy matching the parse tree, different
+   stylesheets can render the same HTML in completely different ways.
+
+   The "Formatted SQL" section has a tab bar that selects a format mode by
+   setting data-sql-format on <html> (see page_template.html). Selectors below
+   are scoped by that attribute:
+     - default    : preserve original whitespace, lightly box subqueries/pipes.
+     - simple-box : drop original whitespace; lay out the query with a box model
+                    (pipe operators / main clauses stack vertically, lists flow
+                    and wrap). Focused on pipe operators and standard queries.
+     - full-box   : extend the box model throughout the grammar (visible nested
+                    boxes for expressions, calls, joins, etc).
+   ========================================================================== */
+
+.formatted-sql {
+  font-family: ui-monospace, Menlo, Monaco, Consolas, 'Courier New', monospace;
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+
+/* AST node wrappers are inline so they add no line breaks of their own; the
+   original newlines are preserved by white-space: pre-wrap above. */
+.formatted-sql .ast {
+  display: inline;
+}
+
+.formatted-sql .sql-comment {
+  color: #6a737d;
+  font-style: italic;
+}
+
+/* --- Format-mode tab bar ------------------------------------------------- */
+.formatted-sql-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.fmt-tab {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 2px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px 6px 0 0;
+  background: #f3f3f3;
+  color: #444;
+  cursor: pointer;
+}
+.fmt-tab:hover {
+  background: #e8e8e8;
+}
+.fmt-tab.active {
+  background: #fff;
+  color: #000;
+  border-bottom-color: #fff;
+  font-weight: bold;
+}
+
+/* The "default" pane preserves the original text; the "boxed" pane shows the
+   computed box layout. The active tab (data-sql-format on <html>) selects which
+   pane is visible; simple-box and full-box share the boxed pane and differ only
+   in decoration below. */
+.fmt-pane {
+  display: none;
+}
+html[data-sql-format="default"] .fmt-pane-default {
+  display: block;
+}
+html[data-sql-format="simple-box"] .fmt-pane-boxed,
+html[data-sql-format="full-box"] .fmt-pane-boxed {
+  display: block;
+}
+
+/* ==========================================================================
+   default mode: light boxes around subqueries and pipe operators, original
+   whitespace preserved.
+   ========================================================================== */
+html[data-sql-format="default"] .formatted-sql .ast-Query,
+html[data-sql-format="default"] .formatted-sql .ast-ExpressionSubquery,
+html[data-sql-format="default"] .formatted-sql .ast-TableSubquery {
+  outline: 1px solid #888;
+  outline-offset: 1px;
+}
+html[data-sql-format="default"] .formatted-sql .ast[class*=" ast-Pipe"] {
+  outline: 1px dashed #4a90d9;
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   simple-box / full-box modes.
+
+   The "boxed" pane's text layout is computed by the pretty-printer
+   (parser/box_formatter.h). Each query / pipe segment / subquery / table name
+   is wrapped in a "rect" <div> rendered as an inline-block box: it shrink-wraps
+   to its widest line (so the highlight is a real rectangle, not ragged), and
+   its contents are indented relative to it, so nested regions render as nested
+   rectangles. Colours are opaque. Subqueries and table names also get a 1px
+   border (they will be clickable/hoverable).
+   ========================================================================== */
+.formatted-sql.boxed {
+  white-space: pre;
+  line-height: 1.45;
+}
+.formatted-sql.boxed .ast {
+  display: inline;
+}
+.formatted-sql.boxed .rect {
+  display: inline-block;
+  vertical-align: top;
+  white-space: pre;
+  box-sizing: border-box;
+}
+
+/* Query band colours.  Every query / subquery is coloured by one family — blue
+   and green, alternating by nesting depth (depth 0 = blue) — across all three
+   panes (input SQL, Resolved AST, SQLBuilder SQL).  Within a query the initial
+   query and each following pipe operator alternate a darker ("-b", first) then
+   lighter ("-a") shade of the family, so a pipe chain reads as alternating bands
+   of the query's colour.  These classes are element-agnostic so they apply to
+   the input pane's `.rect` segments and the AST / SQLBuilder `.rscan` boxes
+   alike. */
+.viz .seg-blue-a {
+  background: #dbe7fb;
+}
+.viz .seg-blue-b {
+  background: #a9c8f0;
+}
+.viz .seg-green-a {
+  background: #dcf1dc;
+}
+.viz .seg-green-b {
+  background: #a6daa6;
+}
+
+/* A query / subquery wrapper region: a faint family tint + a family-coloured
+   border, so the box boundary reads even where the alternating bands inside
+   don't reach (padding, the leading "("). */
+.rect.q-whole,
+.rect.subq-blue {
+  background: #eef5ff;
+}
+.rect.subq-green {
+  background: #eff8ef;
+}
+.rect.subq-blue {
+  border: 1px solid #9bb8df;
+}
+.rect.subq-green {
+  border: 1px solid #9ac79a;
+}
+.rect.table {
+  background: #ffe4bf;
+  border: 1px solid #e0a24c;
+}
+.rect.func {
+  background: #ece1f7;
+  border: 1px solid #b497d6;
+}
+.rect.stmt {
+  border: 1px solid #8a8a8a;
+}
+
+/* Query-viewer info panel (analyze mode). Regions are clickable: clicking one
+   opens a panel showing the info for that node and its enclosing nodes (see
+   query_viewer.js). The per-node info travels in a hidden .node-info element. */
+.formatted-sql.boxed .rect {
+  position: relative;
+  cursor: pointer;
+}
+.formatted-sql.boxed .node-info {
+  display: none;
+}
+/* The currently selected node in the panel is emphasised in the query text:
+   a brighter fill and a thicker border. */
+.formatted-sql.boxed .rect.np-selected {
+  filter: brightness(1.12) saturate(1.4);
+  border: 2px solid #444 !important;
+}
+
+/* The floating info panel. */
+.node-popup {
+  position: absolute;
+  z-index: 50;
+  min-width: 220px;
+  max-width: 560px;
+  max-height: 70vh;
+  overflow: auto;
+  background: #fff;
+  color: #000;
+  font-family: sans-serif;
+  font-size: 12px;
+  line-height: 1.3;
+  border: 1px solid #888;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  padding: 8px 10px;
+}
+/* Heading stack: the innermost node first, each enclosing node prefixed "in".
+   The selected heading's title is bold; clicking a heading selects it. */
+.node-popup .np-heading {
+  cursor: pointer;
+  white-space: nowrap;
+}
+.node-popup .np-heading .np-in {
+  color: #888;
+}
+.node-popup .np-heading.selected .np-title {
+  font-weight: bold;
+}
+.node-popup .np-hr {
+  border-top: 1px solid #ccc;
+  margin: 6px 0;
+}
+.node-popup .hi-h {
+  font-weight: bold;
+  /* Extra top margin gives a blank line of separation between successive
+     NameList sections (e.g. input vs. output). */
+  margin: 14px 0 2px;
+}
+.node-popup .hi-h:first-child {
+  margin-top: 0;
+}
+.node-popup .hi-nl {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+/* NameList diff markers: removed items struck out on red, added items on
+   green. Inline so they sit within the monospace table layout. */
+.node-popup .nl-del {
+  background: #ffd7d5;
+  color: #82071e;
+  text-decoration: line-through;
+}
+.node-popup .nl-add {
+  background: #d2f8d2;
+  color: #0a5c2b;
+}
+
+/* ==========================================================================
+   Visualize mode.
+
+   When the "Visualize" output is active, execute_query drops the two-column
+   (editor | results) layout and stacks the editor on top so the results use
+   the full window width.  Each statement renders a `.viz` block: a row of up
+   to three resizable columns (Input SQL, Resolved AST, SQLBuilder SQL) above a
+   resizable details box.  Column visibility, column widths and the details-box
+   height are linked across every `.viz` block on the page (managed by JS in
+   query_viewer.js); these rules just provide the structure and styling.
+   ========================================================================== */
+/* These rescope the *main page* into a stacked editor-over-results layout when
+   visualize output is shown.  They must NOT apply to the dedicated full-window
+   /visualize page (which sets data-visualize-page and has its own layout, and
+   whose query_viewer.js also sets data-visualize). */
+html[data-visualize]:not([data-visualize-page]) main {
+  display: block;
+  height: auto;
+}
+html[data-visualize]:not([data-visualize-page]) .right-section {
+  overflow-y: initial;
+  height: auto;
+}
+
+.viz {
+  display: flex;
+  flex-direction: column;
+  /* Cap the whole visualization at the viewport height; panes scroll inside. */
+  max-height: 100vh;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* The columns row. */
+.viz-columns {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+}
+.viz-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Width is controlled by flex-grow via --w (linked across statements). */
+  flex: var(--w, 1) 1 0;
+  overflow: hidden;
+}
+/* A hidden column collapses in place to a narrow, clickable vertical strip
+   (the "+ Label" button) rather than vanishing, so it stays where it lives. */
+.viz-col.collapsed {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.viz-col.collapsed > .viz-tab,
+.viz-col.collapsed > .viz-pane {
+  display: none;
+}
+/* The expand strip: only shown while collapsed; vertical label. */
+.viz-show {
+  display: none;
+}
+.viz-col.collapsed > .viz-show {
+  display: block;
+  flex: 1 1 auto;
+  width: 26px;
+  min-height: 0;
+  padding: 8px 4px;
+  border: none;
+  background: #f3f3f3;
+  color: #555;
+  font: inherit;
+  font-weight: bold;
+  font-size: 0.85em;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  writing-mode: vertical-rl;
+}
+.viz-col.collapsed > .viz-show:hover {
+  background: #e7eef7;
+  color: #1a3c66;
+}
+/* A divider is hidden when either neighbouring column is hidden (handled in
+   JS, which toggles .hidden on the divider too). */
+.viz-divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: #e3e3e3;
+  border-left: 1px solid #ccc;
+  border-right: 1px solid #ccc;
+}
+.viz-divider.hidden {
+  display: none;
+}
+.viz-divider:hover {
+  background: #c7d6ea;
+}
+
+/* Column header tab. */
+.viz-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 8px;
+  background: #f3f3f3;
+  border-bottom: 1px solid #ccc;
+  font-size: 0.85em;
+  font-weight: bold;
+  color: #333;
+  flex: 0 0 auto;
+}
+.viz-hide {
+  font: inherit;
+  font-size: 1.1em;
+  line-height: 1;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+}
+.viz-hide:hover {
+  color: #c0392b;
+}
+
+/* Column body: scrolls both directions if content overflows. */
+.viz-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 8px;
+}
+.viz-pre {
+  margin: 0;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+/* Title above a visualizer block (e.g. "After rewrites" for the second,
+   post-rewrite UI). */
+.viz-block-title {
+  margin: 16px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+/* "(no links)" note in the Input SQL tab of the post-rewrite block, where the
+   input<->Resolved-AST correspondence is unavailable. */
+.viz-tab-note {
+  margin-left: 6px;
+  font-size: 0.8em;
+  font-weight: normal;
+  color: #888;
+}
+
+/* Resolved AST view-mode selector (text vs operator graph). */
+.viz-view {
+  font: inherit;
+  font-size: 0.85em;
+  font-weight: normal;
+  padding: 0 2px;
+}
+
+/* ==========================================================================
+   Full-window /visualize page.
+
+   A dedicated page (opened from the main page's "Visualize" button) that shows
+   a single statement's visualizer using the whole window, with no page scroll:
+   the header bar and a controls bar (statement dropdown + pre/post-rewrite
+   toggle) are fixed, and the three-pane + info-box view fills the rest. Only
+   the panes scroll internally.
+   ========================================================================== */
+/* The Submit and Visualize buttons share one row.  Both are styled by the
+   input[type=submit], #visualize-btn rule above so they look identical. */
+.submit-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75em;
+  margin-left: 1em;
+}
+
+html[data-visualize-page],
+html[data-visualize-page] body {
+  height: 100%;
+  overflow: hidden;
+}
+main.visualize-main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+main.visualize-main > #header {
+  flex: 0 0 auto;
+}
+#visualize-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Controls bar: statement dropdown + pre/post-rewrite toggle. */
+.visualize-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1.5em;
+  padding: 0.4em 1em;
+  background: #eaf3fb;
+  border-bottom: 1px solid #ccc;
+}
+.visualize-bar-item {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: #333;
+}
+.visualize-rewrite-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+.visualize-rewrite-toggle[hidden] {
+  display: none;
+}
+.viz-rewrite-tab {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 2px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #f3f3f3;
+  color: #444;
+  cursor: pointer;
+}
+.viz-rewrite-tab:hover {
+  background: #e8e8e8;
+}
+.viz-rewrite-tab.active {
+  background: #1597ec;
+  border-color: #0f73b5;
+  color: #fff;
+  font-weight: bold;
+}
+
+/* The statements stack: only the selected statement and, within it, the
+   selected rewrite block are shown. */
+#visualize-statements {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+/* min-width:0 is essential: the active statement is a flex item in the
+   horizontal #visualize-statements row, so without it its default min-width:auto
+   lets wide pane content (long SQL lines) push the row past the viewport,
+   leaving only the first column visible. Same reasoning down the chain. */
+.visualize-statement {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+.visualize-statement.active {
+  display: flex;
+  flex-direction: column;
+}
+.visualize-block {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+.visualize-block.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* On the full-window page the .viz fills its container (instead of capping at
+   100vh) and drops its own border/title -- the page chrome provides those. */
+html[data-visualize-page] .visualize-block .viz {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+}
+html[data-visualize-page] .viz-block-title {
+  display: none;
+}
+.visualize-placeholder {
+  padding: 1.5em;
+  color: #555;
+}
+
+/* A visualizer pane whose step (parse / analysis / SQLBuilder) failed: shown in
+   place of that pane's normal content. */
+.viz-pane-error {
+  padding: 4px 2px;
+}
+.viz-pane-error-title {
+  font-weight: bold;
+  color: #c0392b;
+  margin-bottom: 4px;
+}
+.viz-pane-error .viz-pre {
+  white-space: pre-wrap;
+  color: #333;
+}
+.visualize-error {
+  padding: 1em;
+}
+
+/* Graph view (operator mode): an absolutely-positioned node-link canvas that
+   replaces the text rendering in the Resolved AST pane. */
+.viz-col.graph-mode .viz-pane > .rscan-stmt {
+  display: none;
+}
+.viz-graph {
+  position: relative;
+  font-size: 0.85em;
+}
+.viz-graph-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.viz-graph-edges .viz-edge {
+  fill: none;
+  stroke: #888;
+  stroke-width: 1.5;
+}
+.viz-graph-edges .viz-edge-input {
+  stroke-dasharray: 4 3;
+}
+.viz-graph-edges #viz-arrow path {
+  fill: #888;
+}
+.viz-gnode {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  border: 1px solid #999;
+  border-radius: 4px;
+  background: #eef3fb;
+  cursor: pointer;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+/* When a (collapsed query) node stacks several operators, separate them. */
+.viz-gnode-op + .viz-gnode-op {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px dashed #b9c4d4;
+}
+.viz-gnode:hover {
+  border-color: #4a6fa5;
+}
+.viz-gnode.viz-selected {
+  outline: 2px solid #c0392b;
+}
+.viz-gnode.viz-corresp {
+  outline: 2px solid #2980b9;
+}
+
+/* Details box resizer (drag to change the details box height). */
+.viz-info-resizer {
+  flex: 0 0 6px;
+  cursor: row-resize;
+  background: #e3e3e3;
+  border-top: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+}
+.viz-info-resizer:hover {
+  background: #c7d6ea;
+}
+
+/* Details box: shows info for the selected node. Height linked across
+   statements; min one line, default ~10 lines, max half the viewport. */
+.viz-info {
+  flex: 0 0 auto;
+  height: var(--info-h, 15em);
+  min-height: 1.4em;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 6px 10px;
+  font-family: sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  background: #fafafa;
+  border-top: 1px solid #ccc;
+}
+.viz-info-placeholder {
+  color: #999;
+  font-style: italic;
+}
+/* The details box reuses the popup's inner markup (heading stack + NameList
+   bodies); these mirror the .node-popup rules, scoped to .viz-info. */
+.viz-info .np-heading {
+  white-space: nowrap;
+}
+.viz-info .np-heading .np-in {
+  color: #888;
+}
+.viz-info .np-heading.selected .np-title {
+  font-weight: bold;
+}
+/* Ancestor headings re-select their node on click. */
+.viz-info .np-heading.np-clickable {
+  cursor: pointer;
+}
+.viz-info .np-heading.np-clickable:hover .np-title {
+  text-decoration: underline;
+  color: #1a73e8;
+}
+.viz-info .np-hr {
+  border-top: 1px solid #ccc;
+  margin: 6px 0;
+}
+.viz-info .hi-h {
+  font-weight: bold;
+  margin: 14px 0 2px;
+}
+.viz-info .hi-h:first-child {
+  margin-top: 0;
+}
+.viz-info .hi-nl {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.viz-info .nl-del {
+  background: #ffd7d5;
+  color: #82071e;
+  text-decoration: line-through;
+}
+.viz-info .nl-add {
+  background: #d2f8d2;
+  color: #0a5c2b;
+}
+
+/* Cross-pane correspondence highlighting (filled in by JS in Milestone 4).
+   `.viz-selected` is the directly selected item; `.viz-corresp` are the
+   corresponding items in the other panes. */
+.viz .rect.viz-corresp,
+.viz .rscan.viz-corresp,
+.viz .rscan-query.viz-corresp,
+.viz .rscan-stmt.viz-corresp {
+  outline: 2px solid #f0a93b;
+  outline-offset: 0;
+  /* Lift above adjacent siblings so the (outside-the-box) outline isn't
+     overpainted by the next inline-block segment -- which otherwise clips the
+     bottom edge in the Input SQL pane. */
+  position: relative;
+  z-index: 1;
+}
+.viz .rect.viz-selected,
+.viz .rscan.viz-selected,
+.viz .rscan-query.viz-selected,
+.viz .rscan-stmt.viz-selected {
+  outline: 2px solid #d35400;
+  outline-offset: 0;
+  filter: brightness(1.1) saturate(1.3);
+  position: relative;
+  z-index: 2;
+}
+
+/* Resolved AST pane: one box per ResolvedScan, alternating shades, rendered by
+   the structured linear emitter (ResolvedNode::DebugStringHtml). */
+.viz-pane .rscan-stmt {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.rscan {
+  display: block;
+  /* Text is never wrapped/truncated, so grow the box to its content width (seen
+     by scrolling horizontally) while still filling the pane when content is
+     narrow -- otherwise the fill/border would stop at the pane edge and the
+     overflowing text would sit outside the box. */
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  border: 1px solid #cfd6df;
+  border-radius: 3px;
+  margin: 2px 0;
+  padding: 2px 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+  cursor: pointer;
+}
+/* Each `.rscan` box's background is a query-band colour (`.seg-<family>-<a|b>`,
+   above); boxes that map to no scan stay unfilled. */
+.rscan-head {
+  font-weight: bold;
+}
+.rscan-field {
+  color: #333;
+}
+/* A box-glyph tree of a scan's leaf fields (matching the textual DebugString).
+   Inherits white-space: pre from .rscan so the connector lines line up. */
+.rscan-tree {
+  color: #333;
+}
+/* An operator box is headed by "|> <Scan>"; indent its field tree by the width
+   of the "|> " prefix so the connector lines start under the scan name,
+   matching the textual linear DebugString. */
+.rscan-op > .rscan-tree {
+  margin-left: 3ch;
+}
+/* The scan field's name is shown as a tree node ("|-name=") in the tree above;
+   indent its box under that name (past the 2-char connector). For an operator
+   box the whole tree is already shifted by the 3ch "|> " prefix. */
+.rscan-op > .rscan-children {
+  margin-left: 5ch;
+}
+.rscan-field-name {
+  color: #555;
+  font-weight: bold;
+}
+/* Nested query block: a scan field that begins a new query/subquery. Indented
+   under its tree-node field name (past the 2-char box-glyph connector). */
+.rscan-children {
+  margin-left: 2ch;
+}
+.rscan-query {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  /* A neutral wrapper border; the family colour is carried by the bands inside
+     (a nested scan is a subquery, so its bands switch family). */
+  border: 1px solid #cfd6df;
+  border-radius: 3px;
+  margin: 2px 0;
+  padding: 2px 4px;
+}
+/* SQLBuilder pane: a nested pipe-subquery (scalar subquery, join RHS, set-op
+   input) rendered as its own indented stack of operator boxes inside the
+   enclosing operator's box. */
+.rscan-sub {
+  /* A visible nested box (like the Resolved AST pane's .rscan-query) so a nested
+     subquery in the SQLBuilder pane reads as a box-within-a-box rather than a
+     run of indented lines. */
+  display: block;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  border: 1px solid #cfd6df;
+  border-radius: 3px;
+  margin: 2px 0 2px 1.2em;
+  padding: 2px 4px;
 }

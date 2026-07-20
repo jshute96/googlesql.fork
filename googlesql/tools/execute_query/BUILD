@@ -377,6 +377,40 @@ cc_test(
 )
 
 cc_library(
+    name = "query_graph",
+    srcs = ["query_graph.cc"],
+    hdrs = ["query_graph.h"],
+    deps = [
+        "//googlesql/resolved_ast",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+cc_test(
+    name = "query_graph_test",
+    srcs = ["query_graph_test.cc"],
+    deps = [
+        ":query_graph",
+        "//googlesql/base:status",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "//googlesql/base/testing:status_matchers",
+        "//googlesql/public:analyzer",
+        "//googlesql/public:analyzer_options",
+        "//googlesql/public:analyzer_output",
+        "//googlesql/public:builtin_function_options",
+        "//googlesql/public:simple_catalog",
+        "//googlesql/public:type",
+        "//googlesql/resolved_ast",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_library(
     name = "execute_query_tool",
     srcs = [
         "execute_query_internal_binproto.cc",
@@ -389,6 +423,7 @@ cc_library(
     deps = [
         ":execute_query_proto_writer",
         ":execute_query_writer",
+        ":query_graph",
         ":selectable_catalog",
         ":simple_proto_evaluator_table_iterator",
         ":string_error_collector",
@@ -400,8 +435,13 @@ cc_library(
         "//googlesql/base:ret_check",
         "//googlesql/base:status",
         "//googlesql/base:strings",
+        "//googlesql/analyzer:name_scope",
         "//googlesql/common:options_utils",
+        "//googlesql/common:reflection_helper",
+        "//googlesql/parser:box_formatter",
+        "//googlesql/parser:html_formatter",
         "//googlesql/parser:parse_tree",
+        "//googlesql/public:ast_node_resolved_info",
         "//googlesql/parser:parse_tree_serializer",
         "//googlesql/parser:parser_mode",
         "//googlesql/parser/macros:macro_catalog",

@@ -135,7 +135,9 @@ bool ExecuteQueryWebHandler::HandleRequest(
   }
 
   mstch::map template_params = {{"query", request.query()},
-                                {"css", templates_.GetWebPageCSS()}};
+                                {"css", templates_.GetWebPageCSS()},
+                                {"js", templates_.GetWebPageJS()},
+                                {"visualize_js", templates_.GetVisualizeJS()}};
 
   // Determine selected values for UI from request, with fallback to config
   std::string selected_catalog = request.catalog();
@@ -246,7 +248,8 @@ bool ExecuteQueryWebHandler::HandleRequest(
   std::string rendered =
       mstch::render(templates_.GetWebPageContents(), template_params,
                     {{"body", templates_.GetWebPageBody()},
-                     {"table", templates_.GetTable()}});
+                     {"table", templates_.GetTable()},
+                     {"viz_block", templates_.GetVizBlock()}});
 
   if (writer(rendered) <= 0) {
     ABSL_LOG(WARNING) << "Error writing rendered HTML.";
@@ -258,11 +261,15 @@ bool ExecuteQueryWebHandler::HandleRequest(
 
 absl::Status ExecuteQueryWebHandler::ExecuteQueryImpl(
     const ExecuteQueryWebRequest& request, ExecuteQueryConfig& config,
-    ExecuteQueryWriter& exec_query_writer) {
+    ExecuteQueryWriter& exec_query_writer, bool force_visualize_only) {
   // Config is passed in, pre-initialized from flags.
   // Apply overrides from the request.
 
-  config.set_tool_modes(request.modes());
+  if (force_visualize_only) {
+    config.set_tool_modes({ExecuteQueryConfig::ToolMode::kVisualize});
+  } else {
+    config.set_tool_modes(request.modes());
+  }
   if (request.sql_mode().has_value()) {
     config.set_sql_mode(*request.sql_mode());
   }
@@ -316,12 +323,76 @@ absl::Status ExecuteQueryWebHandler::ExecuteQueryImpl(
 
 bool ExecuteQueryWebHandler::ExecuteQuery(
     const ExecuteQueryWebRequest& request, ExecuteQueryConfig& config,
-    std::string& error_msg, ExecuteQueryWriter& exec_query_writer) {
-  absl::Status st = ExecuteQueryImpl(request, config, exec_query_writer);
+    std::string& error_msg, ExecuteQueryWriter& exec_query_writer,
+    bool force_visualize_only) {
+  absl::Status st =
+      ExecuteQueryImpl(request, config, exec_query_writer, force_visualize_only);
   if (!st.ok()) {
     error_msg = st.message();
   }
   return st.ok();
+}
+
+bool ExecuteQueryWebHandler::HandleVisualizeShell(const Writer &writer) {
+  mstch::map template_params = {
+      {"css", templates_.GetWebPageCSS()},
+      {"js", templates_.GetWebPageJS()},
+      {"visualize_js", templates_.GetVisualizeJS()}};
+  std::string rendered =
+      mstch::render(templates_.GetVisualizePage(), template_params);
+  if (writer(rendered) <= 0) {
+    ABSL_LOG(WARNING) << "Error writing rendered visualize shell.";
+    return false;
+  }
+  return true;
+}
+
+bool ExecuteQueryWebHandler::HandleVisualizeContent(
+    const ExecuteQueryWebRequest &request, const Writer &writer) {
+  mstch::map template_params;
+
+  // Initialize config from flags (config is now threaded in by the caller).
+  ExecuteQueryConfig config;
+  absl::Status config_status = googlesql::InitializeExecuteQueryConfig(config);
+  if (!config_status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to initialize ExecuteQueryConfig: "
+                    << config_status;
+    writer("Failed to initialize ExecuteQueryConfig");
+    return false;
+  }
+
+  std::string error_msg;
+  ExecuteQueryWebWriter params_writer(template_params);
+  if (!request.query().empty()) {
+    ExecuteQuery(request, config, error_msg, params_writer,
+                 /*force_visualize_only=*/true);
+    params_writer.FlushStatement(/*at_end=*/true, error_msg);
+  }
+
+  mstch::array viz_statements = params_writer.viz_statements();
+  const bool has_viz = !viz_statements.empty();
+  template_params["multiple"] = viz_statements.size() > 1;
+  template_params["has_viz"] = has_viz;
+  template_params["viz_statements"] = std::move(viz_statements);
+  // In query mode, per-statement analysis errors are delivered to the writer
+  // rather than via ExecuteQuery's return status, so consult both. Only show the
+  // top-level error block when no panes were produced: when the visualizer did
+  // render panes, the failing step's error is already shown in its own pane.
+  if (error_msg.empty()) {
+    error_msg = params_writer.viz_error();
+  }
+  if (!error_msg.empty() && !has_viz) {
+    template_params["error"] = error_msg;
+  }
+
+  std::string rendered =
+      mstch::render(templates_.GetVisualizeContent(), template_params,
+                    {{"viz_block", templates_.GetVizBlock()}});
+  if (writer(rendered) <= 0) {
+    ABSL_LOG(WARNING) << "Error writing rendered visualize content.";
+    return false;
+  }
+  return true;
 }
 
 }  // namespace googlesql

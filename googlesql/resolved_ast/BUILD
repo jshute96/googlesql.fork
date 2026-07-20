@@ -390,6 +390,7 @@ cc_library(
         "//googlesql/common:graph_element_utils",
         "//googlesql/common:measure_utils",
         "//googlesql/common:thread_stack",
+        "//googlesql/common:utf_util",
         "//googlesql/parser:parse_tree",
         "//googlesql/public:analyzer",
         "//googlesql/public:analyzer_options",

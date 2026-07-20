@@ -61,6 +61,22 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
 
   absl::Status parsed(absl::string_view parse_debug_string) override;
 
+  absl::Status formatted_sql_html(absl::string_view original_html,
+                                  absl::string_view boxed_html) override {
+    current_statement_params_["result_formatted_sql"] =
+        std::string(original_html);
+    current_statement_params_["result_formatted_sql_boxed"] =
+        std::string(boxed_html);
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
+  absl::Status formatted_analyzed_html(absl::string_view html) override {
+    current_statement_params_["result_formatted_analyzed"] = std::string(html);
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
   absl::Status unparsed(absl::string_view unparse_string) override {
     current_statement_params_["result_unparsed"] = std::string(unparse_string);
     got_results_ = true;
@@ -75,6 +91,59 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
     got_results_ = true;
     return absl::OkStatus();
   }
+
+  absl::Status visualized(const VisualizationData& data) override {
+    current_statement_params_["result_visualized"] = true;
+    // One or two full visualizer UIs ("viz blocks"): the pre-rewrite state, plus
+    // the post-rewrite state when the rewriters changed the tree. `rewrite_key`
+    // ("pre"/"post") is used by the full-window /visualize page to toggle
+    // between the two with a button instead of stacking them.
+    auto make_block = [](absl::string_view title, absl::string_view rewrite_key,
+                         bool no_input_links, const std::string& input_html,
+                         const std::string& ast_html,
+                         const std::string& sqlbuilder_html,
+                         const std::string& graph_json) {
+      mstch::map block;
+      if (!title.empty()) block["viz_title"] = std::string(title);
+      block["rewrite_key"] = std::string(rewrite_key);
+      if (no_input_links) block["viz_no_input_links"] = true;
+      block["viz_input_sql_html"] = input_html;
+      block["viz_resolved_ast_html"] = ast_html;
+      block["viz_sqlbuilder_sql_html"] = sqlbuilder_html;
+      if (!graph_json.empty()) block["viz_resolved_graph_json"] = graph_json;
+      return block;
+    };
+    mstch::array viz_blocks;
+    viz_blocks.push_back(make_block(/*title=*/"", /*rewrite_key=*/"pre",
+                                    /*no_input_links=*/false,
+                                    data.input_sql_html, data.resolved_ast_html,
+                                    data.sqlbuilder_sql_html,
+                                    data.resolved_graph_json));
+    if (!data.post_rewrite_ast_html.empty()) {
+      viz_blocks.push_back(make_block(
+          "After rewrites", /*rewrite_key=*/"post", /*no_input_links=*/true,
+          data.post_rewrite_input_sql_html, data.post_rewrite_ast_html,
+          data.post_rewrite_sqlbuilder_sql_html,
+          data.post_rewrite_resolved_graph_json));
+    }
+    current_statement_params_["viz_blocks"] = viz_blocks;
+    current_viz_blocks_ = viz_blocks;
+    current_has_post_rewrite_ = !data.post_rewrite_ast_html.empty();
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
+  // The per-statement visualizer blocks, one entry per statement that produced
+  // visualizer output, in script order. Each entry carries `index` (1-based
+  // statement number), `viz_blocks`, and `has_post_rewrite`. Used to render the
+  // full-window /visualize page.
+  const mstch::array& viz_statements() const {
+    return viz_statement_params_array_;
+  }
+
+  // Any per-statement error messages collected while running (newline-joined),
+  // for the full-window /visualize page.
+  const std::string& viz_error() const { return viz_error_; }
 
   absl::Status explained(const ResolvedNode &ast,
                          absl::string_view explain) override {
@@ -105,6 +174,11 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
     if (!is_first) {
       FlushStatement(/*at_end=*/false);
     }
+    // Number statements here (once per statement, in script order) rather than
+    // in FlushStatement: an errored statement is flushed both explicitly (with
+    // its error) and again by the next StartStatement's empty no-op flush, so
+    // counting in FlushStatement would skip a number after every error.
+    ++statement_index_;
     return absl::OkStatus();
   }
 
@@ -117,6 +191,13 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
   mstch::map &template_params_;
   mstch::map current_statement_params_;
   mstch::array statement_params_array_;
+  // Accumulates one entry per statement that produced visualizer output, for
+  // the full-window /visualize page.
+  mstch::array viz_statement_params_array_;
+  mstch::array current_viz_blocks_;
+  bool current_has_post_rewrite_{false};
+  int statement_index_{0};
+  std::string viz_error_;
   std::string log_messages_;
   bool got_results_{false};
 };

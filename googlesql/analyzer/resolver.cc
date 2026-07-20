@@ -169,6 +169,7 @@ void Resolver::Reset(absl::string_view sql) {
   graph_context_stack_ = {};
   referenced_property_graphs_ = {};
   lock_mode_stack_ = {};
+  ast_node_resolved_info_map_.clear();
 
   if (analyzer_options_.column_id_sequence_number() != nullptr) {
     column_factory_ = std::make_unique<ColumnFactory>(

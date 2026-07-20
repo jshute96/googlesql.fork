@@ -311,7 +311,8 @@ static absl::Status AnalyzeStatementHelper(
             options->error_message_options(), sql,
             resolver->deprecation_warnings()),
         *type_assignments, resolver->undeclared_positional_parameters(),
-        resolver->max_column_id(), resolver->has_graph_references());
+        resolver->max_column_id(), resolver->has_graph_references(),
+        resolver->ast_node_resolved_info_map());
     AnalyzerOutputMutator(*output).TakeOwnership(
         resolver->release_generated_functions());
     GOOGLESQL_RETURN_IF_ERROR(
@@ -757,7 +758,8 @@ absl::StatusOr<std::unique_ptr<const AnalyzerOutput>> RewriteForAnonymization(
         /*parser_output=*/nullptr, analyzer_output.deprecation_warnings(),
         analyzer_output.undeclared_parameters(),
         analyzer_output.undeclared_positional_parameters(),
-        column_factory.max_column_id(), analyzer_output.has_graph_references());
+        column_factory.max_column_id(), analyzer_output.has_graph_references(),
+        analyzer_output.ast_node_resolved_info_map());
     if (analyzer_options.fields_accessed_mode() ==
         AnalyzerOptions::FieldsAccessedMode::CLEAR_FIELDS) {
       AnalyzerOutputMutator(ret).resolved_node()->ClearFieldsAccessed();

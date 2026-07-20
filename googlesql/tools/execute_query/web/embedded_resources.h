@@ -31,10 +31,16 @@ class QueryWebTemplates {
 
   virtual const std::string& GetWebPageContents() const;
   virtual const std::string& GetWebPageCSS() const;
+  virtual const std::string& GetWebPageJS() const;
   virtual const std::string& GetWebPageBody() const;
   virtual const std::string& GetTable() const;
+  virtual const std::string& GetVizBlock() const;
+  virtual const std::string& GetVisualizeJS() const;
+  virtual const std::string& GetVisualizePage() const;
+  virtual const std::string& GetVisualizeContent() const;
 
-  std::string page_template_, style_css_, page_body_, table_;
+  std::string page_template_, style_css_, query_viewer_js_, page_body_, table_,
+      viz_block_, visualize_js_, page_visualize_, page_visualize_content_;
 };
 
 }  // namespace googlesql

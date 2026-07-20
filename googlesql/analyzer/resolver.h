@@ -44,6 +44,7 @@
 #include "googlesql/parser/parse_tree.h"
 #include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/analyzer_output_properties.h"
+#include "googlesql/public/ast_node_resolved_info.h"
 #include "googlesql/public/catalog.h"
 #include "googlesql/public/coercer.h"
 #include "googlesql/public/deprecation_warning.pb.h"
@@ -146,6 +147,12 @@ struct ResolveQueryOptions {
   // ResolvedGeneralizedQueryStmt is enabled in SupportedStatementKinds, and
   // then it will be turned off for nested queries.
   bool allow_terminal = false;
+
+  // An optional human-readable title recorded for this query node in
+  // `ast_node_resolved_info_map_`, used by query visualizer tooling as a
+  // heading. If empty, a title is derived from the query's role (outer query,
+  // expression subquery, or a generic query fragment).
+  std::string node_title_hint;
 };
 
 // This class contains most of the implementation of GoogleSQL analysis.
@@ -427,6 +434,13 @@ class Resolver {
 
   const AnalyzerOutputProperties& analyzer_output_properties() const {
     return analyzer_output_properties_;
+  }
+
+  // Returns extra information learned about particular AST nodes during
+  // resolution, beyond what is captured in the resolved AST.  This is intended
+  // for query visualizer and similar tooling.  See ast_node_resolved_info.h.
+  const ASTNodeResolvedInfoMap& ast_node_resolved_info_map() const {
+    return ast_node_resolved_info_map_;
   }
 
   // Returns the highest column id that has been allocated.
@@ -728,6 +742,12 @@ class Resolver {
   bool needs_terminal_query_stmt_ = false;
 
   AnalyzerOutputProperties& analyzer_output_properties_;
+
+  // Extra information learned about particular AST nodes during resolution,
+  // beyond what is captured in the resolved AST.  Populated as resolution
+  // proceeds (e.g. when resolving table scans and pipe operators) and surfaced
+  // for query visualizer and similar tooling.  See ast_node_resolved_info.h.
+  ASTNodeResolvedInfoMap ast_node_resolved_info_map_;
 
   // Store list of named subqueries currently visible.
   // This is updated as we traverse the query to implement scoping of

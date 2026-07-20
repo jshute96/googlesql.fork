@@ -907,3 +907,89 @@ cc_test(
         "@com_google_absl//absl/strings:string_view",
     ],
 )
+
+cc_library(
+    name = "rewritable_string",
+    srcs = ["rewritable_string.cc"],
+    hdrs = ["rewritable_string.h"],
+    deps = [
+        "//googlesql/base:ret_check",
+        "//googlesql/base:status",
+        "@com_google_absl//absl/container:btree",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "rewritable_string_test",
+    srcs = ["rewritable_string_test.cc"],
+    deps = [
+        ":rewritable_string",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "//googlesql/base/testing:status_matchers",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "html_formatter",
+    srcs = ["html_formatter.cc"],
+    hdrs = ["html_formatter.h"],
+    deps = [
+        ":parser",
+        ":rewritable_string",
+        "//googlesql/base:ret_check",
+        "//googlesql/base:status",
+        "//googlesql/public:language_options",
+        "//googlesql/public:parse_helpers",
+        "//googlesql/public:parse_location",
+        "//googlesql/public:parse_resume_location",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "html_formatter_test",
+    srcs = ["html_formatter_test.cc"],
+    deps = [
+        ":html_formatter",
+        ":parser",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "//googlesql/base/testing:status_matchers",
+        "//googlesql/public:language_options",
+        "//googlesql/public:options_cc_proto",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "box_formatter",
+    srcs = ["box_formatter.cc"],
+    hdrs = ["box_formatter.h"],
+    deps = [
+        ":parser",
+        "//googlesql/base:ret_check",
+        "//googlesql/public:language_options",
+        "//googlesql/public:parse_location",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "box_formatter_test",
+    srcs = ["box_formatter_test.cc"],
+    deps = [
+        ":box_formatter",
+        ":parser",
+        "//googlesql/base/testing:googlesql_gtest_main",
+        "//googlesql/base/testing:status_matchers",
+        "//googlesql/public:language_options",
+        "//googlesql/public:options_cc_proto",
+        "@com_google_absl//absl/strings",
+    ],
+)
