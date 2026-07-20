@@ -128,7 +128,9 @@ absl::Status PrintResults(std::unique_ptr<EvaluatorTableIterator> iter,
 // stream.
 class ExecuteQueryStreamWriter : public ExecuteQueryWriter {
  public:
-  explicit ExecuteQueryStreamWriter(std::ostream&, bool use_box_glyphs = false);
+  explicit ExecuteQueryStreamWriter(std::ostream&, bool use_box_glyphs = false,
+                                    bool linear_resolved_ast = false,
+                                    bool linear_and_tree_resolved_ast = false);
   ExecuteQueryStreamWriter(const ExecuteQueryStreamWriter&) = delete;
   ExecuteQueryStreamWriter& operator=(const ExecuteQueryStreamWriter&) = delete;
 
@@ -158,6 +160,8 @@ class ExecuteQueryStreamWriter : public ExecuteQueryWriter {
  private:
   std::ostream& stream_;
   bool use_box_glyphs_;
+  bool linear_resolved_ast_;
+  bool linear_and_tree_resolved_ast_;
 };
 
 }  // namespace googlesql
