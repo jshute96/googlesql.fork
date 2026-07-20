@@ -47,6 +47,7 @@
 #include "absl/base/macros.h"
 #include "absl/flags/declare.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
@@ -59,7 +60,6 @@
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_builder.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -165,6 +165,11 @@ class TestTableOptions {
     column_annotations_ = std::move(column_annotations);
   }
 
+  const std::vector<bool>& pseudo_columns() const { return pseudo_columns_; }
+  void set_pseudo_columns(std::vector<bool> pseudo_columns) {
+    pseudo_columns_ = std::move(pseudo_columns);
+  }
+
  private:
   // LINT.IfChange
   // Defines expected table size after populating it with random data. The
@@ -196,6 +201,13 @@ class TestTableOptions {
   // the table. May have nullptr to indicate the corresponding table column
   // doesn't have annotation.
   std::vector<const AnnotationMap*> column_annotations_;
+
+  // Pseudo-columns for each column of the table. <pseudo_columns_> is either
+  // empty or has the same number of elements as the number of the columns in
+  // the table.
+  //
+  // Pseudo-columns can be selected explicitly but do not show up in SELECT *.
+  std::vector<bool> pseudo_columns_;
 };
 
 // This describes a table that should be present in the created database.
@@ -484,7 +496,7 @@ class TestDriver {
 
   // Similar to ExecuteStatement(), but executes 'sql' as a script, rather than
   // an individual statement.
-  virtual absl::StatusOr<ScriptResult> ExecuteScript(
+  virtual absl::StatusOr<MultiStmtResult> ExecuteScript(
       const std::string& sql, const std::map<std::string, Value>& parameters,
       TypeFactory* type_factory) {
     return absl::UnimplementedError("Scripts are not supported");

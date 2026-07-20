@@ -24,6 +24,7 @@
 #include "googlesql/parser/parse_tree_errors.h"
 #include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/annotation/collation.h"
+#include "googlesql/public/annotation/is_versioned.h"
 #include "googlesql/public/function.h"
 #include "googlesql/public/options.pb.h"
 #include "googlesql/public/sql_function.h"
@@ -36,8 +37,8 @@
 #include "googlesql/resolved_ast/resolved_node_kind.pb.h"
 #include "googlesql/base/check.h"
 #include "absl/status/status.h"
-#include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
+#include "googlesql/base/ret_check.h"
 
 namespace googlesql {
 
@@ -57,6 +58,12 @@ void AnnotationPropagator::InitializeAnnotationSpecs(
   if (analyzer_options.language().LanguageFeatureEnabled(
           FEATURE_COLLATION_SUPPORT)) {
     owned_annotation_specs_.push_back(std::make_unique<CollationAnnotation>());
+  }
+
+  if (analyzer_options.language().LanguageFeatureEnabled(
+          FEATURE_VERSION_AWARE_DML)) {
+    owned_annotation_specs_.push_back(
+        std::make_unique<IsVersionedAnnotation>());
   }
 
   // Copy GoogleSQL annotation specs to combined_annotation_specs_
@@ -91,6 +98,12 @@ static absl::Status CheckAndPropagateAnnotationsImpl(
         auto* make_struct = resolved_node->GetAs<ResolvedMakeStruct>();
         GOOGLESQL_RETURN_IF_ERROR(annotation_spec->CheckAndPropagateForMakeStruct(
             *make_struct, annotation_map->AsStructMap()));
+      } break;
+      case RESOLVED_MAKE_MAP: {
+        GOOGLESQL_RET_CHECK(annotation_map->IsStructMap());
+        auto* make_map = resolved_node->GetAs<ResolvedMakeMap>();
+        GOOGLESQL_RETURN_IF_ERROR(annotation_spec->CheckAndPropagateForMakeMap(
+            *make_map, annotation_map->AsStructMap()));
       } break;
       case RESOLVED_FUNCTION_CALL: {
         auto* function_call = resolved_node->GetAs<ResolvedFunctionCall>();

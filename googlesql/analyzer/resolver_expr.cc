@@ -35,12 +35,12 @@
 #include <utility>
 #include <vector>
 
-#include "googlesql/base/logging.h"
 #include "googlesql/base/varsetter.h"
 
 #include "google/protobuf/descriptor.pb.h"
 #include "googlesql/analyzer/analytic_function_resolver.h"
 #include "googlesql/analyzer/column_cycle_detector.h"
+#include "googlesql/analyzer/conflicting_field_paths_validator.h"
 #include "googlesql/analyzer/constant_resolver_helper.h"
 #include "googlesql/analyzer/expr_matching_helpers.h"
 #include "googlesql/analyzer/expr_resolver_helper.h"
@@ -82,12 +82,15 @@
 #include "googlesql/public/function.h"
 #include "googlesql/public/function.pb.h"
 #include "googlesql/public/function_signature.h"
+#include "googlesql/public/functions/cast_date_time.h"
 #include "googlesql/public/functions/convert_string.h"
+#include "googlesql/public/functions/convert_string_with_format.h"
 #include "googlesql/public/functions/date_time_util.h"
 #include "googlesql/public/functions/datetime.pb.h"
 #include "googlesql/public/functions/normalize_mode.pb.h"
 #include "googlesql/public/functions/range.h"
 #include "googlesql/public/functions/regexp.h"
+#include "googlesql/public/functions/string.h"
 #include "googlesql/public/id_string.h"
 #include "googlesql/public/input_argument_type.h"
 #include "googlesql/public/interval_value.h"
@@ -109,6 +112,7 @@
 #include "googlesql/public/timestamp_picos_value.h"
 #include "googlesql/public/type.h"
 #include "googlesql/public/type.pb.h"
+#include "googlesql/public/type_parameters.pb.h"
 #include "googlesql/public/types/annotation.h"
 #include "googlesql/public/types/array_type.h"
 #include "googlesql/public/types/collation.h"
@@ -117,12 +121,14 @@
 #include "googlesql/public/types/simple_value.h"
 #include "googlesql/public/types/struct_type.h"
 #include "googlesql/public/types/type_factory.h"
+#include "googlesql/public/types/type_modifiers.h"
 #include "googlesql/public/types/type_parameters.h"
 #include "googlesql/public/value.h"
 #include "googlesql/public/with_modifier_mode.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "googlesql/resolved_ast/resolved_ast_builder.h"
 #include "googlesql/resolved_ast/resolved_ast_deep_copy_visitor.h"
+#include "googlesql/resolved_ast/resolved_ast_enums.pb.h"
 #include "googlesql/resolved_ast/resolved_column.h"
 #include "googlesql/resolved_ast/resolved_node.h"
 #include "googlesql/resolved_ast/resolved_node_kind.pb.h"
@@ -131,6 +137,7 @@
 #include "googlesql/base/string_numbers.h"  
 #include "absl/algorithm/container.h"
 #include "absl/base/attributes.h"
+#include "absl/base/nullability.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -138,6 +145,7 @@
 #include "absl/functional/any_invocable.h"
 #include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -151,10 +159,8 @@
 #include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "google/protobuf/descriptor.h"
-#include "googlesql/base/general_trie.h"
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 // We are making a change to behavior that is already potentially live --
 // the behavior of bare array access on proto maps. We think it's unlikely
@@ -186,6 +192,98 @@ STATIC_IDSTRING(kHorizontalAggregateId, "$horizontal_aggregate");
 
 namespace {
 
+// Returns true if `path_expr` represents a single unquoted identifier
+// that matches `name` (case-insensitively).
+bool IsSingleUnquotedIdentifier(const ASTPathExpression* path_expr,
+                                absl::string_view name) {
+  return path_expr != nullptr && path_expr->num_names() == 1 &&
+         !path_expr->first_name()->is_quoted() &&
+         googlesql_base::CaseEqual(path_expr->first_name()->GetAsStringView(),
+                                name);
+}
+
+static absl::Status ValidateFormatStringToDate(absl::string_view format) {
+  return functions::ValidateFormatStringForParsing(
+      format, googlesql::TypeKind::TYPE_DATE);
+}
+
+static absl::Status ValidateFormatStringToDatetime(absl::string_view format) {
+  return functions::ValidateFormatStringForParsing(
+      format, googlesql::TypeKind::TYPE_DATETIME);
+}
+
+static absl::Status ValidateFormatStringToTime(absl::string_view format) {
+  return functions::ValidateFormatStringForParsing(
+      format, googlesql::TypeKind::TYPE_TIME);
+}
+
+static absl::Status ValidateFormatStringToTimestamp(absl::string_view format) {
+  return functions::ValidateFormatStringForParsing(
+      format, googlesql::TypeKind::TYPE_TIMESTAMP);
+}
+
+static absl::Status ValidateFormatStringFromDate(absl::string_view format) {
+  return functions::ValidateFormatStringForFormatting(format, TYPE_DATE);
+}
+
+static absl::Status ValidateFormatStringFromTime(absl::string_view format) {
+  return functions::ValidateFormatStringForFormatting(format, TYPE_TIME);
+}
+
+static absl::Status ValidateFormatStringFromDateTime(absl::string_view format) {
+  return functions::ValidateFormatStringForFormatting(format, TYPE_DATETIME);
+}
+
+static absl::Status ValidateFormatStringFromTimestamp(
+    absl::string_view format) {
+  return functions::ValidateFormatStringForFormatting(format, TYPE_TIMESTAMP);
+}
+
+const CastFormatMap& GetCastFormatMap() {
+  static const CastFormatMap* cast_format_map = nullptr;
+  if (cast_format_map == nullptr) {
+    CastFormatMap* map = new CastFormatMap();
+    map->insert({{TYPE_STRING, TYPE_BYTES}, functions::ValidateFormat});
+    map->insert({{TYPE_BYTES, TYPE_STRING}, functions::ValidateFormat});
+
+    // String to Date/DateTime/Time/Timestamp
+    map->insert({{TYPE_STRING, TYPE_DATE}, ValidateFormatStringToDate});
+    map->insert({{TYPE_STRING, TYPE_DATETIME}, ValidateFormatStringToDatetime});
+    map->insert({{TYPE_STRING, TYPE_TIME}, ValidateFormatStringToTime});
+    map->insert(
+        {{TYPE_STRING, TYPE_TIMESTAMP}, ValidateFormatStringToTimestamp});
+
+    // Date/DateTime/Time/Timestamp to String
+    map->insert({{TYPE_DATE, TYPE_STRING}, ValidateFormatStringFromDate});
+    map->insert({{TYPE_TIME, TYPE_STRING}, ValidateFormatStringFromTime});
+    map->insert(
+        {{TYPE_DATETIME, TYPE_STRING}, ValidateFormatStringFromDateTime});
+    map->insert(
+        {{TYPE_TIMESTAMP, TYPE_STRING}, ValidateFormatStringFromTimestamp});
+
+    // Numerical types to String
+    map->insert({{TYPE_INT32, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+    map->insert({{TYPE_UINT32, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+    map->insert({{TYPE_INT64, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+    map->insert({{TYPE_UINT64, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+    map->insert({{TYPE_FLOAT, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+    map->insert({{TYPE_DOUBLE, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+    map->insert({{TYPE_NUMERIC, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+    map->insert({{TYPE_BIGNUMERIC, TYPE_STRING},
+                 googlesql::functions::ValidateNumericalToStringFormat});
+
+    cast_format_map = map;
+  }
+  return *cast_format_map;
+}
+
 // Verifies that 'field_descriptor' is an extension corresponding to the same
 // message as descriptor, and then returns 'field_descriptor'.
 absl::StatusOr<const google::protobuf::FieldDescriptor*> VerifyFieldExtendsMessage(
@@ -211,15 +309,15 @@ absl::StatusOr<const google::protobuf::FieldDescriptor*> VerifyFieldExtendsMessa
 // returns `annotated_type`.
 static AnnotatedType ElementAnnotatedTypeWithFallbackToSelf(
     AnnotatedType annotated_type) {
-  const auto& [type, annotation_map] = annotated_type;
-  if (!type->IsArray()) {
-    return annotated_type;
+  while (annotated_type.type->IsArray()) {
+    const AnnotationMap* annotation_map = annotated_type.annotation_map;
+    const AnnotationMap* element_annotation_map =
+        annotation_map == nullptr ? nullptr
+                                  : annotation_map->AsStructMap()->field(0);
+    annotated_type = {annotated_type.type->AsArray()->element_type(),
+                      element_annotation_map};
   }
-
-  const AnnotationMap* element_annotation_map =
-      annotation_map == nullptr ? nullptr
-                                : annotation_map->AsStructMap()->field(0);
-  return {type->AsArray()->element_type(), element_annotation_map};
+  return annotated_type;
 }
 
 static std::unique_ptr<ResolvedFlattenedArg> MakeResolvedFlattenedArg(
@@ -229,17 +327,33 @@ static std::unique_ptr<ResolvedFlattenedArg> MakeResolvedFlattenedArg(
   return arg;
 }
 
+static bool ShouldWrapFlattenedElementTypeInArray(
+    const ResolvedExpr* expr, const LanguageOptions& language_options) {
+  if (!language_options.LanguageFeatureEnabled(FEATURE_ARRAY_OF_ARRAY)) {
+    // No nested arrays allowed, so if we're already an array, don't wrap it.
+    // We'll be fully flattening it anyway.
+    return !expr->type()->IsArrayLike();
+  }
+
+  // Nested arrays are enabled, so even if the element type is ARRAY<>,
+  // we still want to wrap it in another ARRAY<> to avoid flattening into the
+  // elements.
+  return true;
+}
+
 // Adds 'expr' to the get_field_list for the passed in flatten node.
 // Updates the flatten result type accordingly.
-absl::Status AddGetFieldToFlatten(std::unique_ptr<const ResolvedExpr> expr,
-                                  TypeFactory* type_factory,
-                                  ResolvedFlatten* flatten) {
+static absl::Status AddGetFieldToFlatten(
+    std::unique_ptr<const ResolvedExpr> expr, TypeFactory* type_factory,
+    ResolvedFlatten* flatten, const LanguageOptions& language_options) {
   const Type* type = expr->type();
   // For join-column ROW types, leave the output as a ROW rather than
   // wrapping it in an ARRAY.
   const AnnotationMap* annotation_map = expr->type_annotation_map();
-  if (!type->IsArrayLike()) {
-    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeArrayType(expr->type(), &type));
+
+  if (ShouldWrapFlattenedElementTypeInArray(expr.get(), language_options)) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        type, type_factory->MakeArrayType(expr->type(), language_options));
     if (annotation_map != nullptr) {
       auto array_annotation_map = AnnotationMap::Create(type);
       GOOGLESQL_RETURN_IF_ERROR(array_annotation_map->AsStructMap()->CloneIntoField(
@@ -1038,8 +1152,8 @@ absl::Status Resolver::ResolveExpr(
              << "Dot-star is only supported in SELECT expression";
 
     case AST_PATH_EXPRESSION:
-      expr_resolution_info->flatten_state.SetParent(
-          &parent_expr_resolution_info->flatten_state);
+      GOOGLESQL_RETURN_IF_ERROR(expr_resolution_info->flatten_state.SetParent(
+          &parent_expr_resolution_info->flatten_state));
       GOOGLESQL_RETURN_IF_ERROR(ResolvePathExpressionAsExpression(
           PathExpressionSpan(*ast_expr->GetAsOrDie<ASTPathExpression>()),
           expr_resolution_info.get(), ResolvedStatement::READ,
@@ -1052,16 +1166,16 @@ absl::Status Resolver::ResolveExpr(
       break;
 
     case AST_DOT_IDENTIFIER:
-      expr_resolution_info->flatten_state.SetParent(
-          &parent_expr_resolution_info->flatten_state);
+      GOOGLESQL_RETURN_IF_ERROR(expr_resolution_info->flatten_state.SetParent(
+          &parent_expr_resolution_info->flatten_state));
       GOOGLESQL_RETURN_IF_ERROR(
           ResolveDotIdentifier(ast_expr->GetAsOrDie<ASTDotIdentifier>(),
                                expr_resolution_info.get(), resolved_expr_out));
       break;
 
     case AST_DOT_GENERALIZED_FIELD:
-      expr_resolution_info->flatten_state.SetParent(
-          &parent_expr_resolution_info->flatten_state);
+      GOOGLESQL_RETURN_IF_ERROR(expr_resolution_info->flatten_state.SetParent(
+          &parent_expr_resolution_info->flatten_state));
       GOOGLESQL_RETURN_IF_ERROR(ResolveDotGeneralizedField(
           ast_expr->GetAsOrDie<ASTDotGeneralizedField>(),
           expr_resolution_info.get(), resolved_expr_out));
@@ -1121,6 +1235,12 @@ absl::Status Resolver::ResolveExpr(
                                     resolved_expr_out));
       break;
 
+    case AST_CONCAT_EXPR:
+      GOOGLESQL_RETURN_IF_ERROR(ResolveConcatExpr(ast_expr->GetAsOrDie<ASTConcatExpr>(),
+                                        expr_resolution_info.get(),
+                                        resolved_expr_out));
+      break;
+
     case AST_FUNCTION_CALL:
       GOOGLESQL_RETURN_IF_ERROR(
           ResolveFunctionCall(ast_expr->GetAsOrDie<ASTFunctionCall>(),
@@ -1134,8 +1254,8 @@ absl::Status Resolver::ResolveExpr(
       break;
 
     case AST_ARRAY_ELEMENT:
-      expr_resolution_info->flatten_state.SetParent(
-          &parent_expr_resolution_info->flatten_state);
+      GOOGLESQL_RETURN_IF_ERROR(expr_resolution_info->flatten_state.SetParent(
+          &parent_expr_resolution_info->flatten_state));
       GOOGLESQL_RETURN_IF_ERROR(
           ResolveArrayElement(ast_expr->GetAsOrDie<ASTArrayElement>(),
                               expr_resolution_info.get(), resolved_expr_out));
@@ -1180,6 +1300,12 @@ absl::Status Resolver::ResolveExpr(
     case AST_STRUCT_BRACED_CONSTRUCTOR:
       GOOGLESQL_RETURN_IF_ERROR(ResolveStructBracedConstructor(
           ast_expr->GetAsOrDie<ASTStructBracedConstructor>(), inferred_type,
+          expr_resolution_info.get(), resolved_expr_out));
+      break;
+
+    case AST_TYPED_BRACED_CONSTRUCTOR:
+      GOOGLESQL_RETURN_IF_ERROR(ResolveTypedBracedConstructor(
+          ast_expr->GetAsOrDie<ASTTypedBracedConstructor>(),
           expr_resolution_info.get(), resolved_expr_out));
       break;
 
@@ -1287,7 +1413,21 @@ absl::Status Resolver::ResolveExpr(
           ast_expr->GetAsOrDie<ASTGraphIsLabeledPredicate>(),
           expr_resolution_info.get(), resolved_expr_out));
       break;
-
+    case AST_BRACED_CONSTRUCTOR_EXTENDED_EXPR: {
+      const auto* extended_expr =
+          ast_expr->GetAsOrDie<ASTBracedConstructorExtendedExpr>();
+      const auto* path_expr =
+          extended_expr->expr()->GetAsOrNull<ASTPathExpression>();
+      if (IsSingleUnquotedIdentifier(path_expr, "MAP")) {
+        GOOGLESQL_RETURN_IF_ERROR(ResolveMapBracedConstructor(
+            extended_expr, extended_expr->braced_constructor(),
+            /*expected_type=*/nullptr, TypeModifiers(),
+            expr_resolution_info.get(), resolved_expr_out));
+        break;
+      }
+      return MakeSqlErrorAt(extended_expr->braced_constructor())
+             << "Syntax error: Unexpected braced constructor";
+    }
     default:
       return MakeSqlErrorAt(ast_expr)
              << "Unhandled select-list expression for node kind "
@@ -1295,7 +1435,12 @@ absl::Status Resolver::ResolveExpr(
              << ast_expr->DebugString();
   }
 
-  GOOGLESQL_RET_CHECK(resolved_expr_out->get() != nullptr);
+  if (*resolved_expr_out == nullptr) {
+    // This can happen for function-typed arguments.
+    GOOGLESQL_RET_CHECK(ast_expr->Is<ASTPathExpression>());
+    return absl::OkStatus();
+  }
+
   if (resolved_expr_out->get()->GetParseLocationOrNULL() == nullptr) {
     MaybeRecordParseLocation(
         ast_expr, const_cast<ResolvedExpr*>(resolved_expr_out->get()));
@@ -1312,6 +1457,7 @@ absl::Status Resolver::ResolveExpr(
           FEATURE_SQL_GRAPH_EXPOSE_GRAPH_ELEMENT)) {
     return CheckGraphElementExpr(language(), ast_expr);
   }
+
   return absl::OkStatus();
 }
 
@@ -1700,6 +1846,15 @@ absl::Status Resolver::MaybeResolvePathExpressionAsFunctionArgumentRef(
   // that could mean engine code is using an API incorrectly.
   GOOGLESQL_RET_CHECK(!arg_details->arg_type.IsTemplated())
       << "Function bodies cannot be resolved with templated argument types";
+
+  if (arg_details->arg_type.IsLambda()) {
+    // We cannot represent a lambda as a ResolvedExpr. Returning nullptr
+    // here allows ResolveExpressionArguments to handle it specially.
+    *resolved_expr_out = nullptr;
+    (*num_parts_consumed)++;
+    return absl::OkStatus();
+  }
+
   auto resolved_argument_ref = MakeResolvedArgumentRef(
       arg_details->arg_type.type(), arg_details->name.ToString(),
       arg_details->arg_kind.value());
@@ -1970,14 +2125,42 @@ absl::Status Resolver::ResolvePathExpressionAsExpression(
         }
 
         if (expr_resolution_info->is_graph_measure_expression) {
+          const auto* found_prop = googlesql_base::FindOrNull(
+              analyzer_options_.graph_properties(), lowercase_name);
+          bool exists_as_property = found_prop != nullptr;
+          bool is_same_name_column_as_property =
+              found_prop != nullptr && found_prop->is_same_name_column_def;
+
+          if (exists_as_property) {
+            if (is_same_name_column_as_property) {
+              // Breaks out of the switch statement to defer to case 5 for
+              // resolving name as a graph property.
+              num_names_consumed = 0;
+              break;
+            } else {
+              return MakeSqlErrorAtPoint(path_parse_location.start())
+                     << "Name " << path_expr.ToIdentifierPathString()
+                     << " is ambiguous because it exists as both a column and "
+                        "a "
+                        "graph property";
+            }
+          }
+
+          if (!language().LanguageFeatureEnabled(
+                  FEATURE_SQL_GRAPH_MEASURE_ALLOW_COLUMNS)) {
+            return MakeSqlErrorAtPoint(path_parse_location.start())
+                   << "Columns are not supported in graph measure property "
+                      "expressions";
+          }
+
           // For graph measure property expressions, columns are resolved to
           // ResolvedCatalogColumnRef.
+          const Column* catalog_column =
+              googlesql_base::FindPtrOrNull(resolved_columns_from_table_scans_,
+                                 resolved_column_ref->column());
           std::unique_ptr<ResolvedCatalogColumnRef>
-              resolved_catalog_column_ref =
-                  MakeResolvedCatalogColumnRef(resolved_column_ref->type(),
-                                               /*column=*/nullptr);
-          resolved_catalog_column_ref->set_name(
-              resolved_column_ref->column().name());
+              resolved_catalog_column_ref = MakeResolvedCatalogColumnRef(
+                  catalog_column->GetType(), catalog_column);
           resolved_expr = std::move(resolved_catalog_column_ref);
         } else {
           resolved_expr = std::move(resolved_column_ref);
@@ -2130,13 +2313,15 @@ absl::Status Resolver::ResolvePathExpressionAsExpression(
       expr_resolution_info->is_graph_measure_expression) {
     // (5) We still haven't found a matching name. See if we can find it in an
     // graph property (for graph measure expression only).
-    const Type* property_type = googlesql_base::FindPtrOrNull(
-        analyzer_options_.graph_properties(), lowercase_name);
+    const auto* found_prop =
+        googlesql_base::FindOrNull(analyzer_options_.graph_properties(), lowercase_name);
+    const Type* property_type =
+        found_prop != nullptr ? found_prop->type : nullptr;
     if (property_type != nullptr) {
       std::unique_ptr<ResolvedCatalogColumnRef> resolved_catalog_column_ref =
           MakeResolvedCatalogColumnRef(property_type,
                                        /*column=*/nullptr);
-      resolved_catalog_column_ref->set_name(lowercase_name);
+      resolved_catalog_column_ref->set_name(first_name.ToString());
       resolved_expr = std::move(resolved_catalog_column_ref);
       num_names_consumed = 1;
     }
@@ -2173,6 +2358,10 @@ absl::Status Resolver::ResolvePathExpressionAsExpression(
       // that the resolver tries to resolve 'b' next.
       unresolved_column_name_in_generated_column_ = first_name;
     }
+    if (expr_resolution_info != nullptr &&
+        expr_resolution_info->is_graph_measure_expression) {
+      unrecognized_graph_measure_name_ = first_name;
+    }
     return GetUnrecognizedNameError(path_expr.GetParseLocationRange().start(),
                                     path_expr.ToIdentifierVector(),
                                     expr_resolution_info != nullptr
@@ -2180,7 +2369,17 @@ absl::Status Resolver::ResolvePathExpressionAsExpression(
                                         : nullptr,
                                     /*is_system_variable=*/false);
   }
-  GOOGLESQL_RET_CHECK(resolved_expr != nullptr);
+
+  if (resolved_expr == nullptr) {
+    // This can happen if the path resolved to a function-typed argument.
+    // Ensure that it was indeed a function-typed argument.
+    GOOGLESQL_RET_CHECK(function_argument_info_ != nullptr);
+    const FunctionArgumentInfo::ArgumentDetails* arg_details =
+        function_argument_info_->FindScalarArg(first_name);
+    GOOGLESQL_RET_CHECK(arg_details != nullptr && arg_details->arg_type.IsLambda());
+    *resolved_expr_out = nullptr;
+    return absl::OkStatus();
+  }
 
   // Resolve any further identifiers in <path_expr> as field accesses.
   for (; num_names_consumed < path_expr.num_names(); ++num_names_consumed) {
@@ -2417,15 +2616,6 @@ absl::Status Resolver::MaybeResolveProtoFieldAccess(
              << " is not allowed";
     }
 
-    // Note that proto3 does not allow TYPE_GROUP.
-    if (!field->has_presence() &&
-        language().LanguageFeatureEnabled(
-            FEATURE_DEPRECATED_DISALLOW_PROTO3_HAS_SCALAR_FIELD)) {
-      return MakeSqlErrorAt(identifier)
-             << "Checking the presence of scalar field " << field->full_name()
-             << " is not supported";
-    }
-
     // When reading has_<field>, none of the modifiers are relevant because
     // we are checking for existence of the proto field, not checking if
     // we get a NULL after unwrapping.
@@ -2556,29 +2746,30 @@ absl::Status Resolver::ResolveGetRowField(
     std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
   *resolved_expr_out = nullptr;
 
-  GOOGLESQL_RET_CHECK(resolved_lhs->type()->IsRow());
-  const RowType* row_type = resolved_lhs->type()->AsRow();
+  GOOGLESQL_RET_CHECK(resolved_lhs->type()->IsRowOrTable());
+  const RowOrTableType* row_type = resolved_lhs->type()->AsRowOrTable();
   const Table* table = row_type->table();
 
   std::string multi_row_error;
-  if (row_type->IsMultiRow() &&
+  if (row_type->IsMultiRowTable() &&
       (flatten_state == nullptr || !flatten_state->can_flatten())) {
     return MakeSqlErrorAt(identifier)
            << "Cannot access fields on an expression with type "
            << row_type->ShortTypeName(product_mode())
-           << "; Fields of MULTIROW columns can be read in JOIN, UNNEST, "
+           << "; Fields of TABLE-typed columns can be read in JOIN, UNNEST, "
               "and FLATTEN";
   }
 
   CycleDetector cycle_detector;
   Catalog::FindOptions find_options(&cycle_detector);
 
-  // The context object is shared across all column lookups for this ROW type,
-  // which corresponds uniquely to one table scan.
+  // The context object is shared across all column lookups for the same ROW
+  // type, which corresponds uniquely to one table scan.
   // This allows the Table to add implementation-defined behavior at table
   // level that has effects across multiple columns.
   // TODO Add test cases that make use of this.
-  Table::LazyColumnsTableScanContext* context = row_type->GetTableScanContext();
+  GOOGLESQL_ASSIGN_OR_RETURN(Table::LazyColumnsTableScanContext * context,
+                   row_type->GetTableScanContext());
 
   absl::StatusOr<const Column*> result =
       table->FindLazyColumn(identifier->GetAsString(), context, find_options);
@@ -2764,7 +2955,7 @@ absl::Status Resolver::ResolveFieldAccess(
   std::unique_ptr<ResolvedFlatten> resolved_flatten;
   if (lhs_type.type->IsArrayLike() && flatten_state != nullptr &&
       flatten_state->can_flatten()) {
-    if (lhs_type.type->IsRow()) {
+    if (lhs_type.type->IsRowOrTable()) {
       GOOGLESQL_ASSIGN_OR_RETURN(const Type* element_type,
                        lhs_type.type->GetElementType());
       const AnnotationMap* annotation_map = nullptr;
@@ -2777,6 +2968,10 @@ absl::Status Resolver::ResolveFieldAccess(
     } else {
       lhs_type = ElementAnnotatedTypeWithFallbackToSelf(
           resolved_lhs->annotated_type());
+      if (lhs_type.type->IsArray()) {
+        return MakeSqlErrorAt(identifier)
+               << "Flattening of array of arrays is not supported";
+      }
     }
     if (resolved_lhs->Is<ResolvedFlatten>() &&
         flatten_state->active_flatten() != nullptr) {
@@ -2784,9 +2979,9 @@ absl::Status Resolver::ResolveFieldAccess(
           resolved_lhs.release()->GetAs<ResolvedFlatten>()));
       GOOGLESQL_RET_CHECK_EQ(flatten_state->active_flatten(), resolved_flatten.get());
     } else {
-      resolved_flatten =
-          MakeResolvedFlatten(/*type=*/nullptr, std::move(resolved_lhs), {});
-      GOOGLESQL_RET_CHECK_EQ(nullptr, flatten_state->active_flatten());
+      resolved_flatten = MakeResolvedFlatten(
+          /*type=*/nullptr, std::move(resolved_lhs), /*get_field_list=*/{},
+          /*depth=*/nullptr);
       flatten_state->set_active_flatten(resolved_flatten.get());
     }
     resolved_lhs = MakeResolvedFlattenedArg(lhs_type);
@@ -2804,7 +2999,7 @@ absl::Status Resolver::ResolveFieldAccess(
   } else if (lhs_type.type->IsJson()) {
     GOOGLESQL_RETURN_IF_ERROR(ResolveJsonFieldAccess(identifier, std::move(resolved_lhs),
                                            resolved_expr_out));
-  } else if (lhs_type.type->IsRow()) {
+  } else if (lhs_type.type->IsRowOrTable()) {
     GOOGLESQL_RETURN_IF_ERROR(ResolveGetRowField(
         identifier, flatten_state, std::move(resolved_lhs), resolved_expr_out));
   } else if (lhs_type.type->IsGraphElement()) {
@@ -2837,8 +3032,9 @@ absl::Status Resolver::ResolveFieldAccess(
 
   GOOGLESQL_RET_CHECK(*resolved_expr_out != nullptr);
   if (resolved_flatten != nullptr) {
-    GOOGLESQL_RETURN_IF_ERROR(AddGetFieldToFlatten(
-        std::move(*resolved_expr_out), type_factory_, resolved_flatten.get()));
+    GOOGLESQL_RETURN_IF_ERROR(AddGetFieldToFlatten(std::move(*resolved_expr_out),
+                                         type_factory_, resolved_flatten.get(),
+                                         language()));
     *resolved_expr_out = std::move(resolved_flatten);
   }
   return absl::OkStatus();
@@ -2854,14 +3050,19 @@ absl::Status Resolver::ResolveExtensionFieldAccess(
       flatten_state->can_flatten()) {
     AnnotatedType lhs_type =
         ElementAnnotatedTypeWithFallbackToSelf(resolved_lhs->annotated_type());
+    if (lhs_type.type->IsArray()) {
+      return MakeSqlErrorAt(ast_path_expr)
+             << "Flattening of array of arrays is not supported";
+    }
     if (resolved_lhs->Is<ResolvedFlatten>() &&
         flatten_state->active_flatten() != nullptr) {
       resolved_flatten.reset(const_cast<ResolvedFlatten*>(
           resolved_lhs.release()->GetAs<ResolvedFlatten>()));
       GOOGLESQL_RET_CHECK_EQ(flatten_state->active_flatten(), resolved_flatten.get());
     } else {
-      resolved_flatten =
-          MakeResolvedFlatten(/*type=*/nullptr, std::move(resolved_lhs), {});
+      resolved_flatten = MakeResolvedFlatten(
+          /*type=*/nullptr, std::move(resolved_lhs), /*get_field_list=*/{},
+          /*depth=*/nullptr);
       GOOGLESQL_RET_CHECK_EQ(nullptr, flatten_state->active_flatten());
       flatten_state->set_active_flatten(resolved_flatten.get());
     }
@@ -2943,8 +3144,9 @@ absl::Status Resolver::ResolveExtensionFieldAccess(
   MaybeRecordParseLocation(ast_path_expr, resolved_get_proto_field.get());
   *resolved_expr_out = std::move(resolved_get_proto_field);
   if (resolved_flatten != nullptr) {
-    GOOGLESQL_RETURN_IF_ERROR(AddGetFieldToFlatten(
-        std::move(*resolved_expr_out), type_factory_, resolved_flatten.get()));
+    GOOGLESQL_RETURN_IF_ERROR(AddGetFieldToFlatten(std::move(*resolved_expr_out),
+                                         type_factory_, resolved_flatten.get(),
+                                         language()));
     *resolved_expr_out = std::move(resolved_flatten);
   }
   return absl::OkStatus();
@@ -3082,10 +3284,19 @@ absl::StatusOr<Resolver::FindFieldsOutput>
 Resolver::FindFieldsFromPathExpression(
     absl::string_view function_name,
     const ASTGeneralizedPathExpression* generalized_path, const Type* root_type,
-    bool can_traverse_array_fields) {
+    bool can_traverse_array_fields, bool lhs_maybe_extension) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
   GOOGLESQL_RET_CHECK(generalized_path != nullptr);
   GOOGLESQL_RET_CHECK(root_type->IsStructOrProto());
+
+  if (lhs_maybe_extension && generalized_path->parenthesized() &&
+      generalized_path->node_kind() != AST_PATH_EXPRESSION) {
+    return MakeSqlErrorAt(generalized_path) << absl::Substitute(
+               "Path expressions in $0 cannot use parenthesized prefixes "
+               "unless they are proto extension accesses",
+               function_name);
+  }
+
   Resolver::FindFieldsOutput output;
   switch (generalized_path->node_kind()) {
     case AST_PATH_EXPRESSION: {
@@ -3128,9 +3339,10 @@ Resolver::FindFieldsFromPathExpression(
       auto generalized_path_expr =
           dot_generalized_ast->expr()
               ->GetAsOrNull<ASTGeneralizedPathExpression>();
-      GOOGLESQL_ASSIGN_OR_RETURN(output, FindFieldsFromPathExpression(
-                                   function_name, generalized_path_expr,
-                                   root_type, can_traverse_array_fields));
+      GOOGLESQL_ASSIGN_OR_RETURN(output,
+                       FindFieldsFromPathExpression(
+                           function_name, generalized_path_expr, root_type,
+                           can_traverse_array_fields, lhs_maybe_extension));
 
       // The extension should be extracted from the last seen field in the path,
       // which must be of proto type.
@@ -3164,9 +3376,10 @@ Resolver::FindFieldsFromPathExpression(
       auto generalized_path_expr =
           dot_identifier_ast->expr()
               ->GetAsOrNull<ASTGeneralizedPathExpression>();
-      GOOGLESQL_ASSIGN_OR_RETURN(output, FindFieldsFromPathExpression(
-                                   function_name, generalized_path_expr,
-                                   root_type, can_traverse_array_fields));
+      GOOGLESQL_ASSIGN_OR_RETURN(output,
+                       FindFieldsFromPathExpression(
+                           function_name, generalized_path_expr, root_type,
+                           can_traverse_array_fields, lhs_maybe_extension));
 
       // The field should be extracted from the last seen field in the path,
       // which must be of proto type.
@@ -3182,44 +3395,11 @@ Resolver::FindFieldsFromPathExpression(
             dot_identifier_ast->name(),
             dot_identifier_ast->name()->GetAsString(),
             last_seen_type->ShortTypeName(product_mode()),
-            /*is_extension=*/false);
+            /*is_extension=*/lhs_maybe_extension);
       }
       GOOGLESQL_RETURN_IF_ERROR(FindFieldDescriptors({dot_identifier_ast->name()},
                                            last_seen_type->AsProto(),
                                            &output.field_descriptor_path));
-      break;
-    }
-    case AST_EXTENDED_PATH_EXPRESSION: {
-      auto extended_path_ast =
-          generalized_path->GetAsOrDie<ASTExtendedPathExpression>();
-      auto parenthesized_path = extended_path_ast->parenthesized_path();
-      GOOGLESQL_ASSIGN_OR_RETURN(output, FindFieldsFromPathExpression(
-                                   function_name, parenthesized_path, root_type,
-                                   can_traverse_array_fields));
-
-      // The extension should be extracted from the last seen field in the path,
-      // which must be of proto type.
-      const Type* last_seen_type;
-      GOOGLESQL_RETURN_IF_ERROR(GetLastSeenFieldType(output,
-                                           GetTypeCatalogNamePath(root_type),
-                                           type_factory_, &last_seen_type));
-      if (can_traverse_array_fields && last_seen_type->IsArray()) {
-        last_seen_type = last_seen_type->AsArray()->element_type();
-      }
-      if (!last_seen_type->IsProto()) {
-        return MakeCannotAccessFieldError(
-            extended_path_ast->generalized_path_expression(),
-            extended_path_ast->generalized_path_expression()->DebugString(),
-            last_seen_type->ShortTypeName(product_mode()),
-            /*is_extension=*/true);
-      }
-      Resolver::FindFieldsOutput rhs_output;
-      GOOGLESQL_ASSIGN_OR_RETURN(
-          rhs_output,
-          FindFieldsFromPathExpression(
-              function_name, extended_path_ast->generalized_path_expression(),
-              last_seen_type, can_traverse_array_fields));
-      AppendFindFieldsOutput(rhs_output, &output);
       break;
     }
     case AST_ARRAY_ELEMENT: {
@@ -3234,87 +3414,6 @@ Resolver::FindFieldsFromPathExpression(
   }
 
   return output;
-}
-
-absl::Status Resolver::AddToFieldPathTrie(
-    const LanguageOptions& language_options, const ASTNode* path_location,
-    absl::Span<const FindFieldsOutput::StructFieldInfo> struct_path_prefix,
-    const std::vector<const google::protobuf::FieldDescriptor*>& proto_field_path_suffix,
-    absl::flat_hash_map<std::string, std::string>* oneof_path_to_full_path,
-    googlesql_base::GeneralTrie<const ASTNode*, nullptr>* field_path_trie) {
-  std::string path_string;
-  bool overlapping_oneof = false;
-  std::string shortest_oneof_path;
-  for (const FindFieldsOutput::StructFieldInfo& struct_field :
-       struct_path_prefix) {
-    if (!path_string.empty()) {
-      absl::StrAppend(&path_string, ".");
-    }
-    absl::StrAppend(&path_string, struct_field.field->name);
-  }
-  for (const google::protobuf::FieldDescriptor* field : proto_field_path_suffix) {
-    if (field->real_containing_oneof() != nullptr &&
-        shortest_oneof_path.empty()) {
-      shortest_oneof_path =
-          absl::StrCat(path_string, field->real_containing_oneof()->name());
-      if (oneof_path_to_full_path->contains(shortest_oneof_path)) {
-        overlapping_oneof = true;
-      }
-    }
-    if (!path_string.empty()) {
-      absl::StrAppend(&path_string, ".");
-    }
-    if (field->is_extension()) {
-      absl::StrAppend(&path_string, "(");
-    }
-    absl::StrAppend(&path_string,
-                    field->is_extension() ? field->full_name() : field->name());
-    if (field->is_extension()) {
-      absl::StrAppend(&path_string, ")");
-    }
-  }
-  if (overlapping_oneof && !language_options.LanguageFeatureEnabled(
-                               FEATURE_REPLACE_FIELDS_ALLOW_MULTI_ONEOF)) {
-    return MakeSqlErrorAt(path_location) << absl::StrCat(
-               "Modifying multiple fields from the same OneOf is unsupported "
-               "by REPLACE_FIELDS(). Field path ",
-               path_string, " overlaps with field path ",
-               googlesql_base::FindOrDie(*oneof_path_to_full_path, shortest_oneof_path));
-  }
-  if (!overlapping_oneof && !shortest_oneof_path.empty()) {
-    GOOGLESQL_RET_CHECK(googlesql_base::InsertIfNotPresent(oneof_path_to_full_path,
-                                      shortest_oneof_path, path_string));
-  }
-
-  // Determine if a prefix of 'path_string' is already present in the trie.
-  int match_length = 0;
-  const ASTNode* prefix_location = field_path_trie->GetDataForMaximalPrefix(
-      path_string, match_length, /*is_terminator=*/{});
-  std::vector<std::pair<std::string, const ASTNode*>> matching_paths;
-  bool prefix_exists = false;
-  if (prefix_location != nullptr) {
-    // If the max prefix is equal to 'path_string' or if the next character of
-    // 'path_string' after the max prefix is a "." then an overlapping path is
-    // already present in the trie.
-    prefix_exists =
-        path_string.size() == match_length
-            ? true
-            : (std::strncmp(&path_string.at(match_length), ".", 1) == 0);
-  } else {
-    // Determine if 'path_string' is the prefix of a path already in the trie.
-    field_path_trie->GetAllMatchingStrings(absl::StrCat(path_string, "."),
-                                           &matching_paths);
-  }
-  if (prefix_exists || !matching_paths.empty()) {
-    return MakeSqlErrorAt(path_location)
-           << absl::StrCat("REPLACE_FIELDS() field path ",
-                           prefix_exists ? path_string.substr(0, match_length)
-                                         : matching_paths.at(0).first,
-                           " overlaps with field path ", path_string);
-  }
-  field_path_trie->Insert(path_string, path_location);
-
-  return absl::OkStatus();
 }
 
 absl::Status Resolver::FindStructFieldPrefix(
@@ -3535,7 +3634,8 @@ absl::Status Resolver::ResolveFilterFieldsFunctionCall(
                      FindFieldsFromPathExpression(
                          "FILTER_FIELDS", generalized_path_expression,
                          proto_to_modify->type(),
-                         /*can_traverse_array_fields=*/true));
+                         /*can_traverse_array_fields=*/true,
+                         /*lhs_maybe_extension=*/false));
     if (absl::Status status =
             validator.ValidateFieldPath(include, output.field_descriptor_path);
         !status.ok()) {
@@ -3587,15 +3687,9 @@ absl::Status Resolver::ResolveReplaceFieldsExpression(
   std::vector<std::unique_ptr<const ResolvedReplaceFieldItem>>
       resolved_modify_items;
 
-  // This trie keeps track of the path expressions that are modified by
+  // This validator keeps track of conflicting field paths that are modified by
   // this REPLACE_FIELDS expression.
-  googlesql_base::GeneralTrie<const ASTNode*, nullptr> field_path_trie;
-  // This map keeps track of the OneOf fields that are modified. Modifying
-  // multiple fields from the same OneOf is unsupported when the language
-  // feature FEATURE_REPLACE_FIELDS_ALLOW_MULTI_ONEOF is not enabled. This
-  // is not tracked in 'field_path_trie' because field path expressions do not
-  // contain the OneOf name of modified OneOf fields.
-  absl::flat_hash_map<std::string, std::string> oneof_path_to_full_path;
+  ConflictingFieldPathsValidator path_validator;
   for (const ASTReplaceFieldsArg* replace_arg :
        ast_replace_fields->arguments()) {
     // Get the field descriptors for the field to be modified.
@@ -3603,14 +3697,28 @@ absl::Status Resolver::ResolveReplaceFieldsExpression(
         Resolver::FindFieldsOutput output,
         FindFieldsFromPathExpression(
             "REPLACE_FIELDS", replace_arg->path_expression(),
-            expr_to_modify->type(), /*can_traverse_array_fields=*/false));
-    GOOGLESQL_RETURN_IF_ERROR(
-        AddToFieldPathTrie(language(), replace_arg->path_expression(),
-                           output.struct_path, output.field_descriptor_path,
-                           &oneof_path_to_full_path, &field_path_trie));
-
-    // Add a cast to the modified value if it needs to be coerced to the type
-    // of the field.
+            expr_to_modify->type(), /*can_traverse_array_fields=*/false,
+            /*lhs_maybe_extension=*/false));
+    ConflictingFieldPathsValidator::ConflictInfo conflict;
+    if (absl::Status status = path_validator.AddFieldPath(
+            replace_arg->path_expression(), output, &conflict);
+        !status.ok()) {
+      if (absl::IsInvalidArgument(status) && !conflict.path.empty()) {
+        if (!conflict.is_oneof_conflict) {
+          return MakeSqlErrorAt(replace_arg->path_expression())
+                 << "REPLACE_FIELDS() field path " << conflict.conflicting_path
+                 << " overlaps with field path " << conflict.path;
+        }
+        if (!language().LanguageFeatureEnabled(
+                FEATURE_REPLACE_FIELDS_ALLOW_MULTI_ONEOF)) {
+          return MakeSqlErrorAt(replace_arg->path_expression())
+                 << "Modifying multiple fields from the same OneOf is "
+                    "unsupported by REPLACE_FIELDS(). Field path "
+                 << conflict.path << " overlaps with field path "
+                 << conflict.conflicting_path;
+        }
+      }
+    }
     const Type* field_type;
     if (output.field_descriptor_path.empty()) {
       field_type = output.struct_path.back().field->type;
@@ -3625,7 +3733,8 @@ absl::Status Resolver::ResolveReplaceFieldsExpression(
                                 &replaced_field_expr, field_type));
 
     GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
-        replace_arg->expression(), field_type, kImplicitAssignment,
+        replace_arg->expression(), field_type, TypeModifiers(),
+        kImplicitAssignment,
         "Cannot replace field of type $0 with value of type $1",
         &replaced_field_expr));
     std::vector<int> struct_index_path;
@@ -3757,9 +3866,9 @@ absl::Status Resolver::ResolveUnaryExpr(
             : "Operand of IS NOT UNKNOWN must be coercible to $0, but has type "
               "$1";
 
-    GOOGLESQL_RETURN_IF_ERROR(
-        CoerceExprToType(unary_expr->operand(), type_factory_->get_bool(),
-                         kImplicitCoercion, coerce_msg, &resolved_operand));
+    GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
+        unary_expr->operand(), type_factory_->get_bool(), TypeModifiers(),
+        kImplicitCoercion, coerce_msg, &resolved_operand));
 
     std::vector<std::unique_ptr<const ResolvedExpr>> resolved_arguments;
     resolved_arguments.push_back(std::move(resolved_operand));
@@ -3838,9 +3947,10 @@ absl::Status Resolver::ResolveBinaryExpr(
         binary_expr, function_name, {binary_expr->lhs()},
         *kEmptyArgumentOptionMap, expr_resolution_info, &resolved_binary_expr));
   } else {
-    absl::string_view function_name =
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        absl::string_view function_name,
         FunctionResolver::BinaryOperatorToFunctionName(
-            binary_expr->op(), binary_expr->is_not(), &not_handled);
+            binary_expr->op(), binary_expr->is_not(), &not_handled));
     GOOGLESQL_RETURN_IF_ERROR(ResolveFunctionCallByNameWithoutAggregatePropertyCheck(
         binary_expr, function_name, {binary_expr->lhs(), binary_expr->rhs()},
         *kEmptyArgumentOptionMap, expr_resolution_info, &resolved_binary_expr));
@@ -3884,6 +3994,36 @@ absl::Status Resolver::ResolveBitwiseShiftExpr(
   return absl::OkStatus();
 }
 
+absl::StatusOr<std::unique_ptr<const ResolvedExpr>>
+Resolver::WrapUnnestArgInFlattenIfNestedArray(
+    const ASTUnnestExpression* ast_unnest,
+    std::unique_ptr<const ResolvedExpr> expr, FlattenState& flatten_state) {
+  GOOGLESQL_RET_CHECK_EQ(ast_unnest->expressions().size(), 1);
+
+  if (!expr->type()->IsArray() ||
+      !expr->type()->AsArray()->element_type()->IsArray()) {
+    return expr;
+  }
+
+  GOOGLESQL_RET_CHECK(language().LanguageFeatureEnabled(FEATURE_ARRAY_OF_ARRAY));
+
+  // If we have nested arrays, we need to set the target depth:
+  // 1. `t.arr_col` needs to use "0", to avoid further unnesting into the
+  //     elements which themselves happen to be arrays.
+  // 2. `t.arr_col.field..` (with some path) needs to use "1" for backward
+  //     compatibility.
+  bool does_implicit_flatten = (expr.get() == flatten_state.active_flatten());
+
+  int depth = does_implicit_flatten ? 1 : 0;
+
+  auto depth_expr = MakeResolvedLiteral(
+      /*ast_location=*/nullptr, Value::Int64(depth),
+      /*set_has_explicit_type=*/true, /*preserve_in_literal_remover=*/true);
+
+  return FinalizeFlatten(ast_unnest, std::move(expr), std::move(depth_expr),
+                         /*ast_depth_expr=*/nullptr, flatten_state);
+}
+
 // TODO: The noinline attribute is to prevent the stack usage
 // being added to its caller "Resolver::ResolveExpr" which is a recursive
 // function. Now the attribute has to be added for all callees. Hopefully
@@ -3912,6 +4052,7 @@ absl::Status Resolver::ResolveInExpr(
     const ASTUnnestExpression* unnest_expr = in_expr->unnest_expr();
     GOOGLESQL_RET_CHECK(unnest_expr != nullptr);
     GOOGLESQL_RETURN_IF_ERROR(ValidateUnnestSingleExpression(unnest_expr, "IN operator"));
+    GOOGLESQL_RET_CHECK_EQ(unnest_expr->expressions().size(), 1);
 
     std::vector<std::unique_ptr<const ResolvedExpr>> args;
     GOOGLESQL_RETURN_IF_ERROR(
@@ -3924,6 +4065,11 @@ absl::Status Resolver::ResolveInExpr(
       GOOGLESQL_RETURN_IF_ERROR(ResolveExpressionArgument(
           in_expr->unnest_expr()->expressions()[0]->expression(),
           expr_resolution_info, &args));
+
+      GOOGLESQL_RET_CHECK_EQ(args.size(), 2);
+      GOOGLESQL_ASSIGN_OR_RETURN(args[1], WrapUnnestArgInFlattenIfNestedArray(
+                                    in_expr->unnest_expr(), std::move(args[1]),
+                                    expr_resolution_info->flatten_state));
     }
 
     GOOGLESQL_RETURN_IF_ERROR(ResolveFunctionCallWithResolvedArguments(
@@ -3948,105 +4094,69 @@ absl::Status Resolver::ResolveInExpr(
   return absl::OkStatus();
 }
 
-absl::Status Resolver::ResolveInSubquery(
-    const ASTInExpression* in_subquery_expr,
+bool Resolver::CheckAndResolveGroupRowsSubquery(
     ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<ResolvedSubqueryExpr>& resolved_expr,
     std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
-  std::unique_ptr<const ResolvedExpr> resolved_in_expr;
-
-  const ASTExpression* in_expr = in_subquery_expr->lhs();
-  const ASTQuery* in_subquery = in_subquery_expr->query();
-
-  GOOGLESQL_RET_CHECK(in_expr != nullptr);
-  GOOGLESQL_RETURN_IF_ERROR(
-      ResolveExpr(in_expr, expr_resolution_info, &resolved_in_expr));
-
-  CorrelatedColumnsSet correlated_columns_set;
-  std::unique_ptr<const NameScope> subquery_scope(
-      new NameScope(expr_resolution_info->name_scope, &correlated_columns_set));
-  std::unique_ptr<const ResolvedScan> resolved_in_subquery;
-  std::shared_ptr<const NameList> resolved_name_list;
-  GOOGLESQL_RET_CHECK(in_subquery != nullptr);
-  GOOGLESQL_RETURN_IF_ERROR(
-      ResolveQuery(in_subquery, subquery_scope.get(), kExprSubqueryId,
-                   &resolved_in_subquery, &resolved_name_list,
-                   {.inferred_type_for_query = resolved_in_expr->type(),
-                    .is_expr_subquery = true}));
-
-  // Order preservation is not relevant for IN subqueries.
-  const_cast<ResolvedScan*>(resolved_in_subquery.get())->set_is_ordered(false);
-
-  if (resolved_name_list->num_columns() > 1) {
-    return MakeSqlErrorAt(in_subquery)
-           << "Subquery of type IN must have only one output column";
+  // Ensure we see group rows and we're in second-pass resolution.
+  if (!expr_resolution_info->findings.has_group_rows ||
+      !expr_resolution_info->use_post_grouping_columns) {
+    return false;
   }
 
-  // If the subquery output included pseudo-columns, prune them, because
-  // the Resolved AST requires the query to produce exactly one column.
-  GOOGLESQL_RETURN_IF_ERROR(MaybeAddProjectForColumnPruning(*resolved_name_list,
-                                                  &resolved_in_subquery));
-  GOOGLESQL_RET_CHECK_EQ(resolved_in_subquery->column_list().size(), 1);
-  // Don't let the subquery output column get pruned.
-  RecordColumnAccess(resolved_in_subquery->column_list());
+  // Since we are in second pass resolution, we just resolved this subquery with
+  // post-grouping namescope. This means the group rows subquery is correctly
+  // accessing grouped-by correlated columns, so we can add it as an aggregate
+  // column here.
+  ResolvedColumn computed_col(AllocateColumnId(), kExprSubqueryId,
+                              MakeIdString("$group_rows_subquery"),
+                              resolved_expr->annotated_type());
+  expr_resolution_info->query_resolution_info->AddAggregateComputedColumn(
+      /*ast_function_call=*/nullptr,
+      MakeResolvedComputedColumn(computed_col, std::move(resolved_expr)));
+  *resolved_expr_out = MakeColumnRef(computed_col);
 
-  const Type* in_expr_type = resolved_in_expr->type();
-  const Type* in_subquery_type = resolved_name_list->column(0).column().type();
+  return true;
+}
 
-  // TODO: Non-equivalent STRUCTs should still be comparable
-  // as long as their related field types are comparable.  Add support for
-  // this.
-  if (!in_expr_type->SupportsEquality(language()) ||
-      !in_subquery_type->SupportsEquality(language()) ||
-      (!in_expr_type->Equivalent(in_subquery_type) &&
-       (!in_expr_type->IsNumerical() || !in_subquery_type->IsNumerical()))) {
-    return MakeSqlErrorAt(in_expr)
-           << "Cannot execute IN subquery with uncomparable types "
-           << in_expr_type->ShortTypeName(product_mode()) << " and "
-           << in_subquery_type->ShortTypeName(product_mode());
-  }
+absl::Status Resolver::AddCoercionForSubqueryComparison(
+    const ASTNode* lhs_location, const ASTNode* subquery_location,
+    absl::string_view comparison_description,
+    const std::shared_ptr<const NameList>& name_list,
+    std::unique_ptr<const ResolvedExpr>* resolved_lhs,
+    std::unique_ptr<const ResolvedScan>* resolved_scan) {
+  const Type* lhs_type = (*resolved_lhs)->type();
+  const Type* subquery_type = name_list->column(0).column().type();
 
-  // The check above ensures that the two types support equality and they
-  // can be compared.  If the types are Equals then they can be compared
-  // directly without any coercion.  Otherwise we try to find a common
-  // supertype between the two types and coerce the two expressions to the
-  // common supertype before the comparison.
-  //
-  // TODO:  For non-Equals but Equivalent STRUCTs we are always
-  // adding coercion to a common supertype.  However, sometimes the
-  // supertyping is unnecessary.  In particular, if the only difference
-  // between the STRUCT types is the field names, and all the field types
-  // are Equals, then we do not need to do the coercion.  Optimize this.
-  if (!in_expr_type->Equals(in_subquery_type)) {
+  if (!lhs_type->Equals(subquery_type)) {
     // We must find the common supertype and add cast(s) where necessary.
     // This check is basically an Equals() test, and is not an equivalence
     // test since if we have two equivalent but different field types
     // (such as two enums with the same name) we must coerce one to the other.
     InputArgumentTypeSet type_set;
     GOOGLESQL_ASSIGN_OR_RETURN(
-        InputArgumentType in_expr_arg,
+        InputArgumentType lhs_arg,
         GetInputArgumentTypeForExpr(
-            resolved_in_expr.get(),
+            resolved_lhs->get(),
             /*pick_default_type_for_untyped_expr=*/false, analyzer_options()));
-    type_set.Insert(in_expr_arg);
+    type_set.Insert(lhs_arg);
     // The output column from the subquery column is non-literal, non-parameter.
-    type_set.Insert(InputArgumentType(in_subquery_type));
+    type_set.Insert(InputArgumentType(subquery_type));
     const Type* supertype = nullptr;
     GOOGLESQL_RETURN_IF_ERROR(coercer_.GetCommonSuperType(type_set, &supertype));
-    const Type* in_expr_cast_type = nullptr;
-    const Type* in_subquery_cast_type = nullptr;
+    const Type* lhs_cast_type = nullptr;
+    const Type* subquery_cast_type = nullptr;
     if (supertype != nullptr) {
       // We use Equals(), not Equivalent(), because we want to add the cast
       // in that case.
-      if (!in_expr_type->Equals(supertype)) {
-        in_expr_cast_type = supertype;
+      if (!lhs_type->Equals(supertype)) {
+        lhs_cast_type = supertype;
       }
-      if (!in_subquery_type->Equals(supertype)) {
-        in_subquery_cast_type = supertype;
+      if (!subquery_type->Equals(supertype)) {
+        subquery_cast_type = supertype;
       }
-    } else if ((in_expr_type->IsUint64() &&
-                in_subquery_type->IsSignedInteger()) ||
-               (in_expr_type->IsSignedInteger() &&
-                in_subquery_type->IsUint64())) {
+    } else if ((lhs_type->IsUint64() && subquery_type->IsSignedInteger()) ||
+               (lhs_type->IsSignedInteger() && subquery_type->IsUint64())) {
       // We need to handle the case where one operand is signed integer and
       // the other is UINT64.
       //
@@ -4056,77 +4166,185 @@ absl::Status Resolver::ResolveInSubquery(
       // that one argument is UINT64, so the other is INT64 or INT32.
       // If the signed integer is INT64 then we do not need to do anything.
       // If the signed integer is INT32 then we need to coerce it to INT64.
-      if (in_expr_type->IsInt32()) {
-        in_expr_cast_type = type_factory_->get_int64();
+      if (lhs_type->IsInt32()) {
+        lhs_cast_type = type_factory_->get_int64();
       }
-      if (in_subquery_type->IsInt32()) {
-        in_subquery_cast_type = type_factory_->get_int64();
+      if (subquery_type->IsInt32()) {
+        subquery_cast_type = type_factory_->get_int64();
       }
     } else {
       // We did not find a common supertype for the two types, so they
       // are not comparable.
-      return MakeSqlErrorAt(in_expr)
-             << "Cannot execute IN subquery with uncomparable types "
-             << in_expr_type->DebugString() << " and "
-             << in_subquery_type->DebugString();
+      return MakeSqlErrorAt(lhs_location)
+             << "Cannot " << comparison_description
+             << " with uncomparable types "
+             << lhs_type->ShortTypeName(product_mode()) << " and "
+             << subquery_type->ShortTypeName(product_mode());
     }
-    if (in_expr_cast_type != nullptr) {
-      // Add a cast to <in_expr>. Preserve the collation of the original
+    if (lhs_cast_type != nullptr) {
+      // Add a cast to <lhs_expr>. Preserve the collation of the original
       // expression.
-      GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
-          in_expr,
-          AnnotatedType(in_expr_cast_type,
-                        resolved_in_expr->type_annotation_map()),
-          kExplicitCoercion, &resolved_in_expr));
+      GOOGLESQL_ASSIGN_OR_RETURN(TypeModifiers type_modifiers,
+                       TypeModifiers::MakeTypeModifiers(
+                           (*resolved_lhs)->type_annotation_map()));
+      GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(lhs_location, lhs_cast_type,
+                                       std::move(type_modifiers),
+                                       kExplicitCoercion, resolved_lhs));
     }
-    if (in_subquery_cast_type != nullptr) {
+    if (subquery_cast_type != nullptr) {
       // Add a project on top of the subquery scan that casts its (only)
       // column to the supertype.
       ResolvedColumnList target_columns;
-      GOOGLESQL_RET_CHECK_EQ(1, resolved_name_list->num_columns());
+      GOOGLESQL_RET_CHECK_EQ(1, name_list->num_columns());
 
-      // If the feature is enabled, we keep the original <type_annotation_map>
+      // We keep the original <type_annotation_map>
       // when coercing types of the columns since we may need to process the
       // annotations (e.g. collation) of the original columns at a later
       // stage.
-      const AnnotationMap* subquery_target_annotation_map = nullptr;
-      if (language().LanguageFeatureEnabled(
-              FEATURE_PRESERVE_ANNOTATION_IN_IMPLICIT_CAST_IN_SCAN)) {
-        subquery_target_annotation_map =
-            resolved_name_list->column(0).column().type_annotation_map();
-      }
+      const AnnotationMap* subquery_target_annotation_map =
+          name_list->column(0).column().type_annotation_map();
 
-      target_columns.push_back(
-          ResolvedColumn(AllocateColumnId(), kInSubqueryCastId,
-                         resolved_name_list->column(0).column().name_id(),
-                         AnnotatedType(in_subquery_cast_type,
-                                       subquery_target_annotation_map)));
+      target_columns.push_back(ResolvedColumn(
+          AllocateColumnId(), kInSubqueryCastId,
+          name_list->column(0).column().name_id(),
+          AnnotatedType(subquery_cast_type, subquery_target_annotation_map)));
 
-      ResolvedColumnList current_columns =
-          resolved_name_list->GetResolvedColumns();
+      ResolvedColumnList current_columns = name_list->GetResolvedColumns();
 
       GOOGLESQL_RETURN_IF_ERROR(CreateWrapperScanWithCasts(
-          in_subquery, target_columns, kInSubqueryCastId, &resolved_in_subquery,
+          subquery_location, target_columns, kInSubqueryCastId, resolved_scan,
           &current_columns));
     }
   }
+  return absl::OkStatus();
+}
+
+static absl::Status CheckSubqueryComparisonComparability(
+    const Type* lhs_type, const Type* subquery_expr_type,
+    bool requires_ordering, const ASTNode* ast_location,
+    absl::string_view comparison_description, const LanguageOptions& language,
+    ProductMode product_mode) {
+  // TODO: Non-equivalent STRUCTs should still be comparable
+  // as long as their related field types are comparable.  Add support for
+  // this.
+  std::string unused_type_description;
+  bool capability_supported = false;
+  if (requires_ordering) {
+    capability_supported =
+        lhs_type->SupportsOrdering(language, &unused_type_description) &&
+        subquery_expr_type->SupportsOrdering(language,
+                                             &unused_type_description);
+  } else {
+    capability_supported = lhs_type->SupportsEquality(language) &&
+                           subquery_expr_type->SupportsEquality(language);
+  }
+
+  if (!capability_supported ||
+      (!lhs_type->Equivalent(subquery_expr_type) &&
+       (!lhs_type->IsNumerical() || !subquery_expr_type->IsNumerical()))) {
+    return MakeSqlErrorAt(ast_location)
+           << "Cannot " << comparison_description << " with uncomparable types "
+           << lhs_type->ShortTypeName(product_mode) << " and "
+           << subquery_expr_type->ShortTypeName(product_mode);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Resolver::ResolveSubqueryComparisonInternal(
+    const ASTNode* ast_location, const ASTExpression* lhs_ast,
+    const ASTQuery* subquery_ast, const ASTHint* hint,
+    ResolvedSubqueryExpr::SubqueryType subquery_type, bool requires_ordering,
+    absl::string_view comparison_description,
+    ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
+  std::unique_ptr<const ResolvedExpr> resolved_lhs;
+  GOOGLESQL_RETURN_IF_ERROR(ResolveExpr(lhs_ast, expr_resolution_info, &resolved_lhs));
+
+  // Resolve the subquery into a scan.
+  CorrelatedColumnsSet correlated_columns_set;
+  std::unique_ptr<const NameScope> subquery_scope(
+      new NameScope(expr_resolution_info->name_scope, &correlated_columns_set));
+  std::unique_ptr<const ResolvedScan> resolved_scan;
+  std::shared_ptr<const NameList> name_list;
+  GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(subquery_ast, subquery_scope.get(),
+                               kExprSubqueryId, &resolved_scan, &name_list,
+                               expr_resolution_info,
+                               {.inferred_type_for_query = resolved_lhs->type(),
+                                .is_expr_subquery = true}));
+
+  // Order preservation is not relevant for comparison subqueries.
+  const_cast<ResolvedScan*>(resolved_scan.get())->set_is_ordered(false);
+
+  if (name_list->num_columns() != 1) {
+    return MakeSqlErrorAt(subquery_ast)
+           << "Subquery of type "
+           << ResolvedSubqueryExprEnums::SubqueryType_Name(subquery_type)
+           << " must have only one output column";
+  }
+
+  // If the subquery output included pseudo-columns, prune them, because
+  // the Resolved AST requires the query to produce exactly one column.
+  GOOGLESQL_RETURN_IF_ERROR(MaybeAddProjectForColumnPruning(*name_list, &resolved_scan));
+  GOOGLESQL_RET_CHECK_EQ(resolved_scan->column_list().size(), 1);
+  // Don't let the subquery output column get pruned.
+  RecordColumnAccess(resolved_scan->column_list());
+
+  const Type* lhs_type = resolved_lhs->type();
+  const Type* subquery_expr_type = name_list->column(0).column().type();
+
+  GOOGLESQL_RETURN_IF_ERROR(CheckSubqueryComparisonComparability(
+      lhs_type, subquery_expr_type, requires_ordering, ast_location,
+      comparison_description, language(), product_mode()));
+
+  // The check above ensures that the two types support equality/ordering and
+  // they can be compared. If the types are Equals then they can be compared
+  // directly without any coercion. Otherwise we try to find a common
+  // supertype between the two types and coerce the two expressions to the
+  // common supertype before the comparison.
+  //
+  // TODO:  For non-Equals but Equivalent STRUCTs we are always
+  // adding coercion to a common supertype.  However, sometimes the
+  // supertyping is unnecessary.  In particular, if the only difference
+  // between the STRUCT types is the field names, and all the field types
+  // are Equals, then we do not need to do the coercion.  Optimize this.
+  GOOGLESQL_RETURN_IF_ERROR(AddCoercionForSubqueryComparison(
+      lhs_ast, subquery_ast, comparison_description, name_list, &resolved_lhs,
+      &resolved_scan));
 
   std::vector<std::unique_ptr<const ResolvedColumnRef>> parameters;
   FetchCorrelatedSubqueryParameters(correlated_columns_set, &parameters);
   std::unique_ptr<ResolvedSubqueryExpr> resolved_expr =
       MakeResolvedSubqueryExpr(/*type=*/type_factory_->get_bool(),
-                               ResolvedSubqueryExpr::IN, std::move(parameters),
-                               std::move(resolved_in_expr),
-                               std::move(resolved_in_subquery));
+                               subquery_type, std::move(parameters),
+                               std::move(resolved_lhs),
+                               std::move(resolved_scan));
+
   GOOGLESQL_RETURN_IF_ERROR(CheckAndPropagateAnnotations(
-      /*error_node=*/in_subquery_expr->query(), resolved_expr.get()));
-  MaybeRecordParseLocation(in_subquery_expr->query(), resolved_expr.get());
-  GOOGLESQL_RETURN_IF_ERROR(
-      ResolveHintsForNode(in_subquery_expr->hint(), resolved_expr.get()));
+      /*error_node=*/subquery_ast, resolved_expr.get()));
+  MaybeRecordParseLocation(subquery_ast, resolved_expr.get());
+  GOOGLESQL_RETURN_IF_ERROR(ResolveHintsForNode(hint, resolved_expr.get()));
   GOOGLESQL_RETURN_IF_ERROR(MaybeResolveCollationForSubqueryExpr(
-      /*error_location=*/in_subquery_expr->query(), resolved_expr.get()));
+      /*error_location=*/subquery_ast, resolved_expr.get()));
+
+  // Resolve group rows subquery.
+  if (CheckAndResolveGroupRowsSubquery(expr_resolution_info, resolved_expr,
+                                       resolved_expr_out)) {
+    return absl::OkStatus();
+  }
+
   *resolved_expr_out = std::move(resolved_expr);
   return absl::OkStatus();
+}
+
+absl::Status Resolver::ResolveInSubquery(
+    const ASTInExpression* in_subquery_expr,
+    ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
+  return ResolveSubqueryComparisonInternal(
+      in_subquery_expr->lhs(), in_subquery_expr->lhs(),
+      in_subquery_expr->query(), in_subquery_expr->hint(),
+      ResolvedSubqueryExpr::IN, /*requires_ordering=*/false,
+      "execute IN subquery", expr_resolution_info, resolved_expr_out);
 }
 
 static absl::StatusOr<std::string> GetLikeAnySomeAllOpTypeString(
@@ -4145,7 +4363,7 @@ static absl::StatusOr<std::string> GetLikeAnySomeAllOpTypeString(
   GOOGLESQL_RET_CHECK_FAIL() << "Operation type for LIKE must be either ANY, SOME or ALL";
 }
 
-static absl::StatusOr<std::string> GetLikeAnyAllFunctionName(
+static absl::StatusOr<absl::string_view> GetLikeAnyAllFunctionName(
     const ASTLikeExpression* like_expr, bool is_not) {
   const bool is_list = like_expr->in_list() != nullptr;
   const bool is_array = like_expr->unnest_expr() != nullptr;
@@ -4174,22 +4392,6 @@ static absl::StatusOr<std::string> GetLikeAnyAllFunctionName(
                       "be [NOT] ANY|SOME|ALL.";
 }
 
-absl::Status Resolver::ResolveLikeAnyAllExpressionHelper(
-    const ASTLikeExpression* like_expr,
-    const absl::Span<const ASTExpression* const> arguments,
-    ExprResolutionInfo* expr_resolution_info,
-    std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
-  GOOGLESQL_ASSIGN_OR_RETURN(std::string function_name,
-                   GetLikeAnyAllFunctionName(like_expr, like_expr->is_not()));
-  std::unique_ptr<const ResolvedExpr> resolved_like_expr;
-  GOOGLESQL_RETURN_IF_ERROR(ResolveFunctionCallByNameWithoutAggregatePropertyCheck(
-      like_expr->like_location(), function_name, arguments,
-      *kEmptyArgumentOptionMap, expr_resolution_info, &resolved_like_expr));
-
-  *resolved_expr_out = std::move(resolved_like_expr);
-  return absl::OkStatus();
-}
-
 absl::Status Resolver::ResolveLikeExprArray(
     const ASTLikeExpression* like_expr,
     ExprResolutionInfo* expr_resolution_info,
@@ -4203,13 +4405,31 @@ absl::Status Resolver::ResolveLikeExprArray(
                op_type, " (pattern1, pattern2, ...)?");
   }
 
-  FlattenState::Restorer restorer;
-  expr_resolution_info->flatten_state.set_can_flatten(true, &restorer);
-  return ResolveLikeAnyAllExpressionHelper(
-      like_expr,
-      {like_expr->lhs(),
-       like_expr->unnest_expr()->expressions()[0]->expression()},
-      expr_resolution_info, resolved_expr_out);
+  GOOGLESQL_ASSIGN_OR_RETURN(absl::string_view function_name,
+                   GetLikeAnyAllFunctionName(like_expr, like_expr->is_not()));
+
+  const ASTUnnestExpression* unnest_expr = like_expr->unnest_expr();
+  GOOGLESQL_RET_CHECK(unnest_expr != nullptr);
+  GOOGLESQL_RET_CHECK(!unnest_expr->expressions().empty());
+  const ASTExpression* unnest_arg_expr =
+      unnest_expr->expressions()[0]->expression();
+
+  std::vector<std::unique_ptr<const ResolvedExpr>> args;
+  args.reserve(2);
+  GOOGLESQL_RETURN_IF_ERROR(
+      ResolveExpressionArgument(like_expr->lhs(), expr_resolution_info, &args));
+
+  {
+    FlattenState::Restorer restorer;
+    expr_resolution_info->flatten_state.set_can_flatten(true, &restorer);
+    GOOGLESQL_RETURN_IF_ERROR(ResolveExpressionArgument(unnest_arg_expr,
+                                              expr_resolution_info, &args));
+  }
+
+  return ResolveFunctionCallWithResolvedArguments(
+      like_expr->like_location(), {like_expr->lhs(), unnest_arg_expr},
+      /*match_internal_signatures=*/false, function_name, std::move(args),
+      /*named_arguments=*/{}, expr_resolution_info, resolved_expr_out);
 }
 
 absl::Status Resolver::ResolveLikeExprList(
@@ -4222,8 +4442,12 @@ absl::Status Resolver::ResolveLikeExprList(
   for (const ASTExpression* expr : like_expr->in_list()->list()) {
     like_arguments.push_back(expr);
   }
-  return ResolveLikeAnyAllExpressionHelper(
-      like_expr, like_arguments, expr_resolution_info, resolved_expr_out);
+
+  GOOGLESQL_ASSIGN_OR_RETURN(absl::string_view function_name,
+                   GetLikeAnyAllFunctionName(like_expr, like_expr->is_not()));
+  return ResolveFunctionCallByNameWithoutAggregatePropertyCheck(
+      like_expr->like_location(), function_name, like_arguments,
+      *kEmptyArgumentOptionMap, expr_resolution_info, resolved_expr_out);
 }
 
 // TODO: The noinline attribute is to prevent the stack usage
@@ -4296,7 +4520,7 @@ absl::Status Resolver::ResolveLikeExprSubquery(
   GOOGLESQL_RET_CHECK_NE(like_subquery, nullptr);
   GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(
       like_subquery, subquery_scope.get(), kExprSubqueryId,
-      &resolved_like_subquery, &resolved_name_list,
+      &resolved_like_subquery, &resolved_name_list, expr_resolution_info,
       {.inferred_type_for_query = nullptr, .is_expr_subquery = true}));
   GOOGLESQL_RET_CHECK(resolved_name_list->num_columns() != 0);
   if (resolved_name_list->num_columns() > 1) {
@@ -4308,6 +4532,8 @@ absl::Status Resolver::ResolveLikeExprSubquery(
   GOOGLESQL_RETURN_IF_ERROR(MaybeAddProjectForColumnPruning(*resolved_name_list,
                                                   &resolved_like_subquery));
   GOOGLESQL_RET_CHECK_EQ(resolved_like_subquery->column_list().size(), 1);
+  // Don't let the subquery output column get pruned.
+  RecordColumnAccess(resolved_like_subquery->column_list());
   // Order preservation is not relevant for LIKE subqueries.
   const_cast<ResolvedScan*>(resolved_like_subquery.get())
       ->set_is_ordered(false);
@@ -4363,6 +4589,15 @@ absl::Status Resolver::ResolveLikeExprSubquery(
       /*error_node=*/like_subquery_expr->query(), resolved_expr.get()));
   GOOGLESQL_RETURN_IF_ERROR(
       ResolveHintsForNode(like_subquery_expr->hint(), resolved_expr.get()));
+
+  // Resolve group rows subquery.
+  if (CheckAndResolveGroupRowsSubquery(expr_resolution_info, resolved_expr,
+                                       resolved_expr_out)) {
+    return absl::OkStatus();
+  }
+
+  GOOGLESQL_RETURN_IF_ERROR(MaybeResolveCollationForSubqueryExpr(
+      /*error_location=*/like_subquery_expr->query(), resolved_expr.get()));
   *resolved_expr_out = std::move(resolved_expr);
   return absl::OkStatus();
 }
@@ -4433,6 +4668,7 @@ absl::Status Resolver::ResolveQuantifiedComparisonExprArray(
   // Validate the UNNEST structure.
   GOOGLESQL_RETURN_IF_ERROR(
       ValidateUnnestSingleExpression(unnest_expr, comparison_description));
+  GOOGLESQL_RET_CHECK_EQ(unnest_expr->expressions().size(), 1);
   const ASTExpression* unnest_arg_expr =
       unnest_expr->expressions()[0]->expression();
 
@@ -4448,6 +4684,10 @@ absl::Status Resolver::ResolveQuantifiedComparisonExprArray(
     expr_resolution_info->flatten_state.set_can_flatten(true, &restorer);
     GOOGLESQL_RETURN_IF_ERROR(ResolveExpressionArgument(unnest_arg_expr,
                                               expr_resolution_info, &args));
+    GOOGLESQL_RET_CHECK_EQ(args.size(), 2);
+    GOOGLESQL_ASSIGN_OR_RETURN(args[1], WrapUnnestArgInFlattenIfNestedArray(
+                                  unnest_expr, std::move(args[1]),
+                                  expr_resolution_info->flatten_state));
   }
 
   // Resolve the function call with the now-resolved arguments
@@ -4456,6 +4696,50 @@ absl::Status Resolver::ResolveQuantifiedComparisonExprArray(
       op_location, arg_locations,
       /*match_internal_signatures=*/false, function_name, std::move(args),
       /*named_arguments=*/{}, expr_resolution_info, resolved_expr_out);
+}
+
+absl::Status Resolver::ResolveQuantifiedComparisonSubquery(
+    const ASTQuantifiedComparisonExpression* cmp_expr,
+    ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
+  // Map AST op/quantifier to SubqueryType and check if ordering is required.
+  ResolvedSubqueryExpr::SubqueryType subquery_type;
+  bool requires_ordering = false;
+  const bool is_any = cmp_expr->quantifier()->op() != ASTAnySomeAllOp::kAll;
+
+  switch (cmp_expr->op()) {
+    case ASTBinaryExpression::EQ:
+      subquery_type =
+          is_any ? ResolvedSubqueryExpr::EQ_ANY : ResolvedSubqueryExpr::EQ_ALL;
+      break;
+    case ASTBinaryExpression::NE:
+    case ASTBinaryExpression::NE2:
+      subquery_type =
+          is_any ? ResolvedSubqueryExpr::NE_ANY : ResolvedSubqueryExpr::NE_ALL;
+      break;
+    default:  // Relative comparisons
+      requires_ordering = true;
+      if (cmp_expr->op() == ASTBinaryExpression::GT)
+        subquery_type = is_any ? ResolvedSubqueryExpr::GT_ANY
+                               : ResolvedSubqueryExpr::GT_ALL;
+      else if (cmp_expr->op() == ASTBinaryExpression::GE)
+        subquery_type = is_any ? ResolvedSubqueryExpr::GE_ANY
+                               : ResolvedSubqueryExpr::GE_ALL;
+      else if (cmp_expr->op() == ASTBinaryExpression::LT)
+        subquery_type = is_any ? ResolvedSubqueryExpr::LT_ANY
+                               : ResolvedSubqueryExpr::LT_ALL;
+      else if (cmp_expr->op() == ASTBinaryExpression::LE)
+        subquery_type = is_any ? ResolvedSubqueryExpr::LE_ANY
+                               : ResolvedSubqueryExpr::LE_ALL;
+      else
+        GOOGLESQL_RET_CHECK_FAIL() << "Unsupported quantified operator";
+  }
+
+  return ResolveSubqueryComparisonInternal(
+      cmp_expr->op_location(), cmp_expr->lhs(), cmp_expr->query(),
+      cmp_expr->hint(), subquery_type, requires_ordering,
+      "execute quantified comparison subquery", expr_resolution_info,
+      resolved_expr_out);
 }
 
 ABSL_ATTRIBUTE_NOINLINE
@@ -4480,16 +4764,23 @@ absl::Status Resolver::ResolveQuantifiedComparisonExpr(
   std::unique_ptr<const ResolvedExpr> resolved_cmp_expr;
   if (cmp_expr->query() != nullptr) {
     // Subquery form.
-    // TODO: b/465509210
-    return MakeSqlErrorAt(cmp_expr->op_location())
-           << "Quantified comparisons (" << comparison_description << ")"
-           << " with subqueries are not supported";
+    GOOGLESQL_RETURN_IF_ERROR(ResolveQuantifiedComparisonSubquery(
+        cmp_expr, expr_resolution_info, &resolved_cmp_expr));
   } else if (cmp_expr->in_list() != nullptr) {
     // Expression list form.
-    // TODO: b/465513375
-    return MakeSqlErrorAt(cmp_expr->op_location())
-           << "Quantified comparisons (" << comparison_description << ")"
-           << " with expression lists are not supported";
+    GOOGLESQL_ASSIGN_OR_RETURN(std::string function_name,
+                     GetQuantifiedComparisonFunctionName(cmp_expr));
+
+    std::vector<const ASTExpression*> arguments;
+    arguments.reserve(1 + cmp_expr->in_list()->list().size());
+    arguments.push_back(cmp_expr->lhs());
+    for (const ASTExpression* expr : cmp_expr->in_list()->list()) {
+      arguments.push_back(expr);
+    }
+
+    GOOGLESQL_RETURN_IF_ERROR(ResolveFunctionCallByNameWithoutAggregatePropertyCheck(
+        cmp_expr->op_location(), function_name, arguments,
+        *kEmptyArgumentOptionMap, expr_resolution_info, &resolved_cmp_expr));
   } else if (cmp_expr->unnest_expr() != nullptr) {
     // Array form.
     GOOGLESQL_ASSIGN_OR_RETURN(std::string function_name,
@@ -4576,6 +4867,51 @@ absl::Status Resolver::ResolveOrExpr(
       expr_resolution_info, resolved_expr_out);
 }
 
+ABSL_ATTRIBUTE_NOINLINE
+absl::Status Resolver::ResolveConcatExpr(
+    const ASTConcatExpr* concat_expr, ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  if (language().LanguageFeatureEnabled(FEATURE_LEGACY_BINARY_CONCAT)) {
+    const auto& operands = concat_expr->operands();
+    GOOGLESQL_RET_CHECK_GE(operands.size(), 2);
+
+    std::unique_ptr<const ResolvedExpr> current_lhs;
+    GOOGLESQL_RETURN_IF_ERROR(
+        ResolveExpr(operands[0], expr_resolution_info, &current_lhs));
+    const ASTNode* lhs_location = operands[0];
+
+    for (int i = 1; i < operands.size(); ++i) {
+      std::unique_ptr<const ResolvedExpr> rhs;
+      GOOGLESQL_RETURN_IF_ERROR(ResolveExpr(operands[i], expr_resolution_info, &rhs));
+
+      std::vector<std::unique_ptr<const ResolvedExpr>> args;
+      args.push_back(std::move(current_lhs));
+      args.push_back(std::move(rhs));
+
+      std::vector<const ASTNode*> arg_locations = {lhs_location, operands[i]};
+
+      GOOGLESQL_RETURN_IF_ERROR(ResolveFunctionCallWithResolvedArguments(
+          concat_expr, arg_locations,
+          /*match_internal_signatures=*/false, "$concat_op", std::move(args),
+          /*named_arguments=*/{}, expr_resolution_info, &current_lhs));
+      GOOGLESQL_RETURN_IF_ERROR(
+          ReturnErrorOnLiteralNullArg("||", arg_locations, current_lhs.get()));
+      MaybeRecordParseLocation(ParseLocationRange(concat_expr->start_location(),
+                                                  operands[i]->end_location()),
+                               const_cast<ResolvedExpr*>(current_lhs.get()));
+      lhs_location = concat_expr;
+    }
+    *resolved_expr_out = std::move(current_lhs);
+    return absl::OkStatus();
+  }
+  GOOGLESQL_RETURN_IF_ERROR(ResolveFunctionCallByNameWithoutAggregatePropertyCheck(
+      concat_expr, "$concat_op", concat_expr->operands(),
+      *kEmptyArgumentOptionMap, expr_resolution_info, resolved_expr_out));
+  return ReturnErrorOnLiteralNullArg("||", ToASTNodes(concat_expr->operands()),
+                                     resolved_expr_out->get());
+}
+
 void Resolver::FetchCorrelatedSubqueryParameters(
     const CorrelatedColumnsSet& correlated_columns_set,
     std::vector<std::unique_ptr<const ResolvedColumnRef>>* parameters) {
@@ -4640,11 +4976,12 @@ absl::Status Resolver::ResolveExprSubquery(
       GOOGLESQL_RET_CHECK_FAIL() << "Invalid subquery modifier: "
                        << expr_subquery->modifier();
   }
-  GOOGLESQL_RETURN_IF_ERROR(
-      ResolveQuery(expr_subquery->query(), subquery_scope.get(),
-                   kExprSubqueryId, &resolved_query, &resolved_name_list,
-                   {.inferred_type_for_query = inferred_subquery_type,
-                    .is_expr_subquery = true}));
+
+  GOOGLESQL_RETURN_IF_ERROR(ResolveQuery(
+      expr_subquery->query(), subquery_scope.get(), kExprSubqueryId,
+      &resolved_query, &resolved_name_list, expr_resolution_info,
+      {.inferred_type_for_query = inferred_subquery_type,
+       .is_expr_subquery = true}));
 
   ResolvedSubqueryExpr::SubqueryType subquery_type;
   switch (expr_subquery->modifier()) {
@@ -4693,18 +5030,20 @@ absl::Status Resolver::ResolveExprSubquery(
   }
 
   if (subquery_type == ResolvedSubqueryExpr::ARRAY) {
-    if (output_type->IsArray()) {
+    if (!language().LanguageFeatureEnabled(FEATURE_ARRAY_OF_ARRAY) &&
+        output_type->IsArray()) {
       return MakeSqlErrorAt(expr_subquery)
              << "Cannot use array subquery with column of type "
              << output_type->ShortTypeName(product_mode())
              << " because nested arrays are not supported";
     }
-    if (IsOrContainsMeasure(output_type) || output_type->IsRow()) {
+    if (IsOrContainsMeasure(output_type) || output_type->IsRowOrTable()) {
       return MakeSqlErrorAt(expr_subquery)
              << "Cannot use array subquery with column of type "
              << output_type->ShortTypeName(product_mode());
     }
-    GOOGLESQL_RETURN_IF_ERROR(type_factory_->MakeArrayType(output_type, &output_type));
+    GOOGLESQL_ASSIGN_OR_RETURN(output_type,
+                     type_factory_->MakeArrayType(output_type, language()));
   }
 
   std::vector<std::unique_ptr<const ResolvedColumnRef>> parameters;
@@ -4739,6 +5078,13 @@ absl::Status Resolver::ResolveExprSubquery(
       // not GQL subquery
       break;
   }
+
+  // Resolve group rows subquery.
+  if (CheckAndResolveGroupRowsSubquery(expr_resolution_info, resolved_expr,
+                                       resolved_expr_out)) {
+    return absl::OkStatus();
+  }
+
   *resolved_expr_out = std::move(resolved_expr);
   return absl::OkStatus();
 }
@@ -5205,7 +5551,7 @@ absl::Status Resolver::ResolveIntervalArgument(
                            /*is_explicit=*/false, &result)) {
       GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
           interval_expr->interval_value(), type_factory_->get_int64(),
-          kExplicitCoercion, &resolved_interval_value_arg));
+          TypeModifiers(), kExplicitCoercion, &resolved_interval_value_arg));
       resolved_arguments_out->push_back(std::move(resolved_interval_value_arg));
     } else {
       return MakeSqlErrorAt(interval_expr->interval_value())
@@ -5777,7 +6123,7 @@ absl::Status Resolver::ResolveSequence(
   return absl::OkStatus();
 }
 
-absl::Status Resolver::ResolveLambda(
+absl::Status Resolver::ResolveLambdaBeforeAnnotations(
     const ASTLambda* ast_lambda, absl::Span<const IdString> arg_names,
     absl::Span<const Type* const> arg_types, const Type* body_result_type,
     bool allow_argument_coercion, const NameScope* name_scope,
@@ -5788,15 +6134,21 @@ absl::Status Resolver::ResolveLambda(
     annotated_arg_types.push_back(
         AnnotatedType(arg_type, /*annotation_map=*/nullptr));
   }
+  // No annotations yet, so if any coercion is needed, we won't use any type
+  // modifiers. In the future, even in the absence of annotations, this
+  // TypeModifiers may need to account for type modifiers on the argument type
+  // declaration.
   return ResolveLambdaWithAnnotations(
       ast_lambda, arg_names, annotated_arg_types, body_result_type,
-      allow_argument_coercion, name_scope, resolved_expr_out);
+      /*type_modifiers_for_coercion=*/TypeModifiers(), allow_argument_coercion,
+      name_scope, resolved_expr_out);
 }
 
 absl::Status Resolver::ResolveLambdaWithAnnotations(
     const ASTLambda* ast_lambda, absl::Span<const IdString> arg_names,
     absl::Span<const AnnotatedType> arg_types, const Type* body_result_type,
-    bool allow_argument_coercion, const NameScope* name_scope,
+    TypeModifiers type_modifiers_for_coercion, bool allow_argument_coercion,
+    const NameScope* name_scope,
     std::unique_ptr<const ResolvedInlineLambda>* resolved_expr_out) {
   static constexpr char kLambda[] = "Lambda";
   // Every argument should have a corresponding type.
@@ -5835,11 +6187,25 @@ absl::Status Resolver::ResolveLambdaWithAnnotations(
   GOOGLESQL_RETURN_IF_ERROR(ResolveScalarExpr(ast_lambda->body(), body_name_scope.get(),
                                     kLambda, &resolved_body));
 
+  bool needs_coercion;
+  if (body_result_type == nullptr) {
+    GOOGLESQL_RET_CHECK(type_modifiers_for_coercion.IsEmpty());
+    needs_coercion = false;
+  } else {
+    needs_coercion = !resolved_body->type()->Equals(body_result_type) ||
+                     !type_modifiers_for_coercion.IsEmpty();
+  }
+
   // If <body_result_type> is set, the body expr is expected to have
   // specific type.
-  if (body_result_type != nullptr && allow_argument_coercion) {
+  // Note that annotations do not play a role in this coercion, since we want
+  // the lambda body to propagate any annotations it computes.
+  // These may then propagate to the output during annotation propagation after
+  // resolving the call.
+  if (allow_argument_coercion && needs_coercion) {
     GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
-        ast_lambda->body(), body_result_type, kImplicitCoercion,
+        ast_lambda->body(), body_result_type,
+        std::move(type_modifiers_for_coercion), kImplicitCoercion,
         "Lambda should return type $0, but returns $1", &resolved_body));
   }
 
@@ -6049,7 +6415,6 @@ absl::Status Resolver::ResolveAggregateFunctionCallFirstPass(
   GOOGLESQL_RETURN_IF_ERROR(ValidateMeasureTypeAggregateFunction(ast_function, function,
                                                        expr_resolution_info));
   std::unique_ptr<ExprResolutionInfo> local_expr_resolution_info;
-  std::vector<std::unique_ptr<const ResolvedColumnRef>> correlated_columns;
 
   // Normal case, do initial function call resolution.
   local_expr_resolution_info = std::make_unique<ExprResolutionInfo>(
@@ -6074,8 +6439,7 @@ absl::Status Resolver::ResolveAggregateFunctionCallFirstPass(
 
   return ResolveFunctionCallImpl(
       ast_function, function, error_mode, function_arguments,
-      argument_option_map, local_expr_resolution_info.get(),
-      resolved_expr_out);
+      argument_option_map, local_expr_resolution_info.get(), resolved_expr_out);
 }
 
 // Add the resolved_agg_function_call to the aggregate expression map.
@@ -6313,7 +6677,7 @@ absl::Status Resolver::TryMakeErrorSuggestionForChainedCall(
   return absl::OkStatus();
 }
 
-absl::Status Resolver::LookupFunctionFromCatalogWithChainedCallErrors(
+absl::Status Resolver::LookupFunctionWithChainedCallErrors(
     const ASTFunctionCall* ast_function_call,
     absl::Span<const std::string> function_name_path,
     FunctionNotFoundHandleMode handle_mode,
@@ -6321,6 +6685,57 @@ absl::Status Resolver::LookupFunctionFromCatalogWithChainedCallErrors(
     ResolvedFunctionCallBase::ErrorMode* error_mode) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
 
+  // Function-typed parameters shadow catalog functions. We check them first.
+  // This block handles both direct calls 'p(1)' and safe calls 'SAFE.p(1)'.
+  if (language().LanguageFeatureEnabled(FEATURE_UDF_LAMBDA_ARGUMENTS) &&
+      function_argument_info_ != nullptr) {
+    absl::Span<const std::string> lambda_param_name_path = function_name_path;
+    bool is_safe = false;
+    if (function_name_path.size() > 1 &&
+        googlesql_base::CaseEqual(function_name_path[0], "SAFE")) {
+      lambda_param_name_path = function_name_path.subspan(1);
+      is_safe = true;
+    }
+
+    if (lambda_param_name_path.size() == 1) {
+      const IdString name = MakeIdString(lambda_param_name_path[0]);
+      const FunctionArgumentInfo::ArgumentDetails* arg_details =
+          function_argument_info_->FindScalarArg(name);
+      if (arg_details != nullptr && arg_details->arg_type.IsLambda()) {
+        if (is_safe) {
+          if (!language().LanguageFeatureEnabled(FEATURE_SAFE_FUNCTION_CALL)) {
+            return MakeSqlErrorAtLocalNode(ast_function_call)
+                   << "Function calls with SAFE are not supported";
+          }
+          *error_mode = ResolvedFunctionCallBase::SAFE_ERROR_MODE;
+        } else {
+          *error_mode = ResolvedFunctionCallBase::DEFAULT_ERROR_MODE;
+        }
+
+        // Check if we've already created a proxy function for this argument.
+        for (const auto& func : generated_functions_) {
+          if (func->Name() == arg_details->name.ToString()) {
+            *function = func.get();
+            return absl::OkStatus();
+          }
+        }
+
+        // Create a FunctionTypedParameter for this lambda argument.
+        std::vector<FunctionSignature> signatures;
+        signatures.push_back(
+            FunctionSignature(arg_details->arg_type.lambda().body_type(),
+                              arg_details->arg_type.lambda().argument_types(),
+                              /*context_id=*/-1));
+        auto generated_function = std::make_unique<FunctionTypedParameter>(
+            arg_details->name.ToString(), std::move(signatures));
+        *function = generated_function.get();
+        generated_functions_.push_back(std::move(generated_function));
+        return absl::OkStatus();
+      }
+    }
+  }
+
+  // Otherwise, look up in the catalog.
   const absl::Status lookup_status = LookupFunctionFromCatalog(
       ast_function_call, function_name_path,
       FunctionNotFoundHandleMode::kReturnError, function, error_mode);
@@ -6458,13 +6873,13 @@ absl::Status Resolver::ResolveFunctionCall(
 
   const Function* function;
   ResolvedFunctionCallBase::ErrorMode error_mode;
-  GOOGLESQL_RETURN_IF_ERROR(LookupFunctionFromCatalogWithChainedCallErrors(
+  GOOGLESQL_RETURN_IF_ERROR(LookupFunctionWithChainedCallErrors(
       ast_function, function_name_path,
       FunctionNotFoundHandleMode::kReturnError, expr_resolution_info, &function,
       &error_mode));
 
   if (IsMatchRecognizeMeasuresFunction(function) &&
-      !match_recognize_state_.has_value()) {
+      match_recognize_state_.empty()) {
     return MakeSqlErrorAt(ast_function)
            << function->QualifiedSQLName()
            << " can only be used inside a MATCH_RECOGNIZE's MEASURES clause";
@@ -6639,7 +7054,7 @@ absl::Status Resolver::ResolveAnalyticFunctionCall(
   const Function* function;
   ResolvedFunctionCallBase::ErrorMode error_mode;
   GOOGLESQL_RET_CHECK(analytic_function_call->function() != nullptr);
-  GOOGLESQL_RETURN_IF_ERROR(LookupFunctionFromCatalogWithChainedCallErrors(
+  GOOGLESQL_RETURN_IF_ERROR(LookupFunctionWithChainedCallErrors(
       analytic_function_call->function(), function_name_path,
       FunctionNotFoundHandleMode::kReturnError, expr_resolution_info, &function,
       &error_mode));
@@ -6745,11 +7160,16 @@ absl::Status Resolver::ResolveFormatOrTimeZoneExpr(
     return absl::Substitute("$2 should return type $0, but returns $1",
                             target_type_name, actual_type_name, clause_name);
   };
-  auto status =
-      CoerceExprToType(expr,
-                       {type_factory_->get_string(),
-                        resolved_expr->get()->type_annotation_map()},
-                       kImplicitCoercion, make_error_msg, resolved_expr);
+  Collation collation;
+  if (resolved_expr->get()->type_annotation_map() != nullptr) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        collation,
+        Collation::MakeCollation(*resolved_expr->get()->type_annotation_map()));
+  }
+  auto status = CoerceExprToType(
+      expr, type_factory_->get_string(),
+      TypeModifiers::MakeTypeModifiers(TypeParameters(), std::move(collation)),
+      kImplicitCoercion, make_error_msg, resolved_expr);
   // TODO
   if (!status.ok()) {
     return MakeSqlErrorAt(expr) << status.message();
@@ -6775,9 +7195,9 @@ absl::Status Resolver::ResolveFormatClause(
   }
 
   *resolve_cast_to_null = false;
-  auto iter = internal::GetCastFormatMap().find(
+  auto iter = GetCastFormatMap().find(
       {resolved_argument->type()->kind(), resolved_cast_type->kind()});
-  if (iter == internal::GetCastFormatMap().end()) {
+  if (iter == GetCastFormatMap().end()) {
     return MakeSqlErrorAt(cast->format())
            << "FORMAT is not allowed for cast from "
            << resolved_argument->type()->ShortTypeName(product_mode()) << " to "
@@ -6866,6 +7286,18 @@ Resolver::CreateAnnotationMapFromTypeWithModifiers(
   return type_factory_->TakeOwnership(std::move(annotation_map));
 }
 
+absl::Status Resolver::CheckTypeModifiersFeaturesEnabled(
+    const TypeModifiers& type_modifiers) const {
+  if (!type_modifiers.IsEmpty()) {
+    GOOGLESQL_RET_CHECK(language().LanguageFeatureEnabled(
+        FEATURE_TYPE_MODIFIERS_IN_EXPLICIT_CONSTRUCTORS_AND_UDF));
+  }
+  if (!type_modifiers.collation().Empty()) {
+    GOOGLESQL_RET_CHECK(language().LanguageFeatureEnabled(FEATURE_COLLATION_SUPPORT));
+  }
+  return absl::OkStatus();
+}
+
 // TODO: The noinline attribute is to prevent the stack usage
 // being added to its caller "Resolver::ResolveExpr" which is a recursive
 // function. Now the attribute has to be added for all callees. Hopefully
@@ -6946,7 +7378,7 @@ absl::Status Resolver::ResolveExplicitCast(
     // For an explicit cast, if we are casting a literal then we will try to
     // convert it to the target type and mark it as already cast.
     absl::Status folding_result = function_resolver_->AddCastOrConvertLiteral(
-        cast->expr(), annotated_cast_type, std::move(resolved_format),
+        cast->expr(), annotated_cast_type.type, std::move(resolved_format),
         std::move(resolved_time_zone), resolved_type_modifiers,
         /*scan=*/nullptr, /*set_has_explicit_type=*/true, return_null_on_error,
         &resolved_argument);
@@ -7000,7 +7432,7 @@ absl::Status Resolver::ResolveExplicitCast(
   // If we reach this point, either we decided not to attempt constant folding
   // the cast or we attempted and decided to defer the cast until runtime.
   GOOGLESQL_RETURN_IF_ERROR(ResolveCastWithResolvedArgument(
-      cast->expr(), annotated_cast_type, std::move(resolved_format),
+      cast->expr(), annotated_cast_type.type, std::move(resolved_format),
       std::move(resolved_time_zone), std::move(resolved_type_modifiers),
       return_null_on_error, &resolved_argument));
   // The result is not always a RESOLVED_CAST: if it turns out to be a NOOP
@@ -7044,9 +7476,18 @@ absl::StatusOr<TypeParameters> Resolver::ResolveTypeParameters(
                    ResolveParameterLiterals(*type_parameters));
 
   // Validate type parameters and get the resolved TypeParameters class.
-  absl::StatusOr<TypeParameters> type_params_or_status =
-      resolved_type.ValidateAndResolveTypeParameters(
-          resolved_type_parameter_list, product_mode());
+  absl::StatusOr<TypeParameters> type_params_or_status;
+  if (resolved_type.AsDeclarativeType() != nullptr &&
+      resolved_type.AsDeclarativeType()->IsGoogleSQLBuiltin("VECTOR")) {
+    // TODO: Design a generalized and declarative approach to
+    // resolve type parameters on declarative types.
+    type_params_or_status = ResolveVectorTypeParameters(
+        type_parameters, resolved_type_parameter_list);
+  } else {
+    type_params_or_status = resolved_type.ValidateAndResolveTypeParameters(
+        resolved_type_parameter_list, product_mode());
+  }
+
   // TODO: Modify ValidateAndResolveTypeParameters to
   // handle the attachment of the error location. This can be done by taking an
   // argument that is a function: std::function<StatusBuilder(int)>.
@@ -7144,41 +7585,45 @@ absl::Status Resolver::ResolveCastWithResolvedArgument(
     const ASTNode* ast_location, const Type* to_type, bool return_null_on_error,
     std::unique_ptr<const ResolvedExpr>* resolved_argument) {
   return ResolveCastWithResolvedArgument(
-      ast_location, {to_type, /*annotation_map=*/nullptr}, /*format=*/nullptr,
+      ast_location, to_type, /*format=*/nullptr,
       /*time_zone=*/nullptr, TypeModifiers(), return_null_on_error,
       resolved_argument);
 }
 
-static bool IsCastNoop(AnnotatedType source, AnnotatedType target,
-                       const TypeModifiers& type_modifiers) {
-  return source.type->Equals(target.type) &&
-         type_modifiers.type_parameters().IsEmpty() &&
-         AnnotationMap::Equals(source.annotation_map, target.annotation_map);
+static absl::StatusOr<bool> IsCastNoop(
+    AnnotatedType source, const Type* target,
+    const TypeModifiers& type_modifiers,
+    const AnalyzerOptions& analyzer_options) {
+  if (!source.type->Equals(target)) {
+    return false;
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(int64_t default_precision,
+                   GetDefaultTimestampPrecision(analyzer_options));
+  return type_modifiers.EqualsAnnotations(source.annotation_map,
+                                          default_precision);
 }
 
 absl::Status Resolver::ResolveCastWithResolvedArgument(
-    const ASTNode* ast_location, AnnotatedType to_annotated_type,
+    const ASTNode* ast_location, const Type* to_type,
     std::unique_ptr<const ResolvedExpr> format,
     std::unique_ptr<const ResolvedExpr> time_zone, TypeModifiers type_modifiers,
     bool return_null_on_error,
     std::unique_ptr<const ResolvedExpr>* resolved_argument) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
-  const Type* to_type = to_annotated_type.type;
-  const AnnotationMap* to_type_annotation_map =
-      to_annotated_type.annotation_map;
-  GOOGLESQL_ASSIGN_OR_RETURN(bool equals_collation_annotation,
-                   type_modifiers.collation().EqualsCollationAnnotation(
-                       to_type_annotation_map));
-  GOOGLESQL_RET_CHECK(equals_collation_annotation);
 
   AnnotatedType source_annotated_type =
       resolved_argument->get()->annotated_type();
 
   // We can return without creating a ResolvedCast if the original type and
   // target type & annotations are the same, unless explicitly requested.
-  if (!analyzer_options_.preserve_unnecessary_cast() &&
-      IsCastNoop(source_annotated_type, to_annotated_type, type_modifiers)) {
-    return absl::OkStatus();
+  if (!analyzer_options_.preserve_unnecessary_cast()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(bool is_cast_noop,
+                     IsCastNoop(source_annotated_type, to_type, type_modifiers,
+                                analyzer_options()));
+    if (is_cast_noop) {
+      return absl::OkStatus();
+    }
   }
 
   ExtendedCompositeCastEvaluator extended_conversion_evaluator =
@@ -7196,22 +7641,10 @@ absl::Status Resolver::ResolveCastWithResolvedArgument(
       to_type, std::move(*resolved_argument), std::move(format),
       std::move(time_zone), std::move(type_modifiers), return_null_on_error,
       extended_conversion_evaluator);
-  if (to_type_annotation_map != nullptr) {
-    resolved_cast->set_type_annotation_map(to_type_annotation_map);
-  }
 
   GOOGLESQL_RETURN_IF_ERROR(annotation_propagator_->CheckAndPropagateAnnotations(
       ast_location, resolved_cast.get()));
-
-  // Annotation propagation may have added defaults, so check again whether the
-  // final cast is a NOOP. If so, just return the input argument directly.
-  if (!analyzer_options_.preserve_unnecessary_cast() &&
-      IsCastNoop(source_annotated_type, resolved_cast->annotated_type(),
-                 resolved_cast->type_modifiers())) {
-    *resolved_argument = ToBuilder(std::move(resolved_cast)).release_expr();
-  } else {
-    *resolved_argument = std::move(resolved_cast);
-  }
+  *resolved_argument = std::move(resolved_cast);
   return absl::OkStatus();
 }
 
@@ -7343,7 +7776,9 @@ absl::Status Resolver::ResolveArrayElement(
       /*multi_level_aggregate_info=*/nullptr, resolved_expr_out));
 
   if (resolved_flatten != nullptr) {
-    resolved_flatten->add_get_field_list(std::move(*resolved_expr_out));
+    GOOGLESQL_RETURN_IF_ERROR(AddGetFieldToFlatten(std::move(*resolved_expr_out),
+                                         type_factory_, resolved_flatten.get(),
+                                         language()));
     *resolved_expr_out = std::move(resolved_flatten);
   }
   return absl::OkStatus();
@@ -7649,7 +8084,8 @@ absl::Status Resolver::ResolveArrayElementAccess(
   // Coerce to INT64 if necessary.
   if (!is_map_at) {
     GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
-        *unwrapped_ast_position_expr, types::Int64Type(), kImplicitCoercion,
+        *unwrapped_ast_position_expr, types::Int64Type(), TypeModifiers(),
+        kImplicitCoercion,
         "Array position in [] must be coercible to $0 type, but has type $1",
         resolved_expr_out));
   }
@@ -7669,7 +8105,10 @@ absl::Status Resolver::ResolveArrayElementAccess(
     GOOGLESQL_RETURN_IF_ERROR(type_factory_->GetProtoFieldType(
         proto_type->map_key(), proto_type->CatalogNamePath(), &key_type));
     GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
-        *unwrapped_ast_position_expr, key_type, kImplicitCoercion,
+        *unwrapped_ast_position_expr, key_type,
+        // Note: update TypeModifiers if the proto map key type ever uses them,
+        // e.g. if will ever have collation.
+        TypeModifiers(), kImplicitCoercion,
         "Map key in [] must be coercible to type $0, but has type $1",
         resolved_expr_out));
   }
@@ -7790,7 +8229,8 @@ absl::Status Resolver::ResolveExtractExpression(
     // name error for the EXTRACT function.
     if (!resolved_arguments[0]->type()->IsTimestamp() &&
         !resolved_arguments[0]->type()->IsCivilDateOrTimeType() &&
-        !resolved_arguments[0]->type()->IsProto()) {
+        !resolved_arguments[0]->type()->IsProto() &&
+        !resolved_arguments[0]->type()->IsInterval()) {
       return MakeSqlErrorAt(extract_expression->rhs_expr())
              << "EXTRACT does not support arguments of type: "
              << resolved_arguments[0]->type()->ShortTypeName(product_mode());
@@ -7995,16 +8435,21 @@ Resolver::ResolveBracedConstructorLhs(
     const ProtoType* parent_type) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
 
-  BracedConstructorField field;
+  auto path_expr = ast_braced_constructor_lhs->key_expr()
+                       ->GetAsOrNull<ASTGeneralizedPathExpression>();
+  if (path_expr == nullptr) {
+    return MakeSqlErrorAt(ast_braced_constructor_lhs->key_expr())
+           << "Braced constructor field name must be a path expression";
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(
       Resolver::FindFieldsOutput output,
-      FindFieldsFromPathExpression(
-          "BracedConstructor", ast_braced_constructor_lhs->extended_path_expr(),
-          parent_type, /*can_traverse_array_fields=*/true));
-  field.location = ast_braced_constructor_lhs->extended_path_expr();
-  field.field_info = output;
-
-  return field;
+      FindFieldsFromPathExpression("BracedConstructor", path_expr, parent_type,
+                                   /*can_traverse_array_fields=*/true,
+                                   /*lhs_maybe_extension=*/true));
+  BracedConstructorField result;
+  result.location = path_expr;
+  result.field_info = std::move(output);
+  return result;
 }
 
 absl::StatusOr<Resolver::ResolvedBuildProtoArg>
@@ -8017,6 +8462,15 @@ Resolver::ResolveBracedConstructorField(
 
   const ASTBracedConstructorLhs* braced_constructor_lhs =
       ast_braced_constructor_field->braced_constructor_lhs();
+  // Non-colon operators (like '*:' or '?:') represent update semantics
+  // and are not allowed in standard initialization contexts (e.g., NEW).
+  if (update_constructor_expr_to_modify == nullptr) {
+    if (braced_constructor_lhs->operation() !=
+        ASTBracedConstructorLhs::UPDATE_SINGLE) {
+      return MakeSqlErrorAt(braced_constructor_lhs)
+             << "Only \':\' operator is allowed in braced constructors";
+    }
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(
       BracedConstructorField field,
       ResolveBracedConstructorLhs(braced_constructor_lhs, parent_type));
@@ -8039,6 +8493,14 @@ Resolver::ResolveBracedConstructorField(
   GOOGLESQL_ASSIGN_OR_RETURN(const Type* lhs_type,
                    FindProtoFieldType(leaf_field_descriptor, field.location,
                                       parent_type->CatalogNamePath()));
+  // For repeated field updates (the `*:` operator), the update value
+  // expression evaluates against each element individually. Therefore, we
+  // resolve the left-hand side type as the repeated field's element type.
+  if (braced_constructor_lhs->operation() ==
+          ASTBracedConstructorLhs::UPDATE_MANY &&
+      lhs_type->IsArray()) {
+    lhs_type = lhs_type->AsArray()->element_type();
+  }
   // Resolve the field value.
   GOOGLESQL_RET_CHECK(ast_braced_constructor_field->value());
   GOOGLESQL_RET_CHECK(ast_braced_constructor_field->value()->expression());
@@ -8063,12 +8525,30 @@ Resolver::ResolveBracedConstructorField(
   std::unique_ptr<const ResolvedExpr> expr;
   if (update_constructor_expr_to_modify != nullptr &&
       field_value->node_kind() == AST_BRACED_CONSTRUCTOR) {
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        std::unique_ptr<const ResolvedExpr> proto_expr,
-        ResolveProtoFieldAccess(*update_constructor_expr_to_modify,
-                                field_value->location(),
-                                *braced_constructor_lhs->extended_path_expr(),
-                                &expr_resolution_info->flatten_state));
+    auto path_expr = braced_constructor_lhs->key_expr()
+                         ->GetAsOrNull<ASTGeneralizedPathExpression>();
+    GOOGLESQL_RET_CHECK(path_expr != nullptr);
+    std::unique_ptr<const ResolvedExpr> proto_expr;
+    if (braced_constructor_lhs->operation() ==
+        ASTBracedConstructorLhs::UPDATE_MANY) {
+      // For repeated field updates (the `*:` operator), the update applies to
+      // each individual element of the repeated field. We use a placeholder
+      // (ResolvedFlattenedArg) representing the repeated field's element type
+      // so that nested path accesses check against the element type rather than
+      // the container type. E.g. in `arr *: { field: x }` where `arr`
+      // is a repeated field of protos, the nested `{ field: x }` resolves
+      // against the repeated field's element type.
+      proto_expr = MakeResolvedFlattenedArg(lhs_type);
+    } else {
+      // For standard updates (the `:` operator), which can apply to all
+      // field types (replacing the value as a whole), we resolve the field path
+      // directly. Since this operation does not traverse into elements of a
+      // repeated field, we can resolve it without flattening.
+      GOOGLESQL_ASSIGN_OR_RETURN(proto_expr, ResolveProtoFieldAccess(
+                                       *update_constructor_expr_to_modify,
+                                       field_value->location(), *path_expr,
+                                       &expr_resolution_info->flatten_state));
+    }
     GOOGLESQL_ASSIGN_OR_RETURN(expr, ResolveBracedConstructorInUpdateContext(
                                *field_value, std::move(proto_expr),
                                /*alias=*/"",
@@ -8156,26 +8636,6 @@ Resolver::ResolveProtoFieldAccess(
           dot_generalized->path(), flatten_state, &resolved_expr_out));
       return resolved_expr_out;
     }
-    case AST_EXTENDED_PATH_EXPRESSION: {
-      const ASTExtendedPathExpression* extended_path_expression =
-          generalized_path.GetAs<ASTExtendedPathExpression>();
-      const ASTGeneralizedPathExpression* lhs =
-          extended_path_expression->parenthesized_path()
-              ->GetAsOrNull<ASTGeneralizedPathExpression>();
-      if (lhs == nullptr) {
-        return MakeSqlErrorAt(extended_path_expression->parenthesized_path())
-               << "Path expression expected, instead found: "
-               << extended_path_expression->parenthesized_path()->DebugString();
-      }
-      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<const ResolvedExpr> resolved_expr_out,
-                       ResolveProtoFieldAccess(resolved_base, parse_location,
-                                               *lhs, flatten_state));
-      GOOGLESQL_RET_CHECK(extended_path_expression->generalized_path_expression());
-      return ResolveProtoFieldAccess(
-          *resolved_expr_out, parse_location,
-          *extended_path_expression->generalized_path_expression(),
-          flatten_state);
-    }
     default:
       return MakeSqlErrorAt(&generalized_path)
              << "Unimplemented node type while resolving proto field path: "
@@ -8193,6 +8653,12 @@ absl::Status Resolver::ResolveBracedConstructor(
     const Type* inferred_type, ExprResolutionInfo* expr_resolution_info,
     std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+
+  if (!language().LanguageFeatureEnabled(FEATURE_BRACED_PROTO_CONSTRUCTORS)) {
+    return MakeSqlErrorAt(ast_braced_constructor)
+           << "Braced constructors are not supported";
+  }
+
   // This function is called for bare brace, we don't know whether the brace is
   // struct or proto, so we need to derive from the infer_type.
   if (inferred_type == nullptr) {
@@ -8210,8 +8676,12 @@ absl::Status Resolver::ResolveBracedConstructor(
     return ResolveBracedConstructorForProto(ast_braced_constructor,
                                             inferred_type, expr_resolution_info,
                                             resolved_expr_out);
+  } else if (inferred_type->IsMap()) {
+    return ResolveMapBracedConstructor(
+        ast_braced_constructor, ast_braced_constructor, inferred_type,
+        TypeModifiers(), expr_resolution_info, resolved_expr_out);
   }
-  // Neither Proto or Struct
+  // Neither Proto, Struct, nor Map
   return MakeSqlErrorAt(ast_braced_constructor)
          << "Braced constructors are not allowed for type "
          << inferred_type->ShortTypeName(product_mode());
@@ -8243,16 +8713,24 @@ absl::Status Resolver::ResolveBracedConstructorForStruct(
     if (is_first_field) {
       is_first_field = false;
     }
-    const ASTGeneralizedPathExpression* generalized_path =
-        ast_field->braced_constructor_lhs()->extended_path_expr();
-    if (generalized_path->node_kind() != AST_PATH_EXPRESSION ||
-        generalized_path->GetAsOrDie<ASTPathExpression>()->num_names() != 1) {
-      return MakeSqlErrorAt(ast_field)
-             << "Fields in STRUCT Braced constructor should always have a "
-                "single identifier specified, not a path expression";
+    // STRUCT constructors are initialization-only and do not support
+    // update operators like '*:' or '?:'.
+    if (ast_field->braced_constructor_lhs()->operation() !=
+        ASTBracedConstructorLhs::UPDATE_SINGLE) {
+      return MakeSqlErrorAt(ast_field->braced_constructor_lhs())
+             << "Only \':\' operator is allowed in braced constructors";
     }
-    identifiers.push_back(
-        generalized_path->GetAsOrDie<ASTPathExpression>()->first_name());
+    auto path_expr = ast_field->braced_constructor_lhs()
+                         ->key_expr()
+                         ->GetAsOrNull<ASTPathExpression>();
+    // TODO: b/299411581 - This condition should also check for parenthesized
+    //     path expressions. `STRUCT{(a) : 1}` should not be allowed.
+    if (path_expr == nullptr || path_expr->num_names() != 1) {
+      return MakeSqlErrorAt(ast_field)
+             << "Field name in the STRUCT Braced constructor must be a single "
+             << "identifier";
+    }
+    identifiers.push_back(path_expr->first_name());
     field_expressions.push_back(ast_field->value()->expression());
   }
   // Skip name matching for all bare struct.
@@ -8261,6 +8739,26 @@ absl::Status Resolver::ResolveBracedConstructorForStruct(
       expression_location_node, ast_struct_type, field_expressions, identifiers,
       inferred_type, /*require_name_match=*/!is_bare_struct,
       expr_resolution_info, resolved_expr_out));
+  return absl::OkStatus();
+}
+
+absl::Status Resolver::ValidateBracedConstructorFields(
+    const ASTBracedConstructor& ast_braced_constructor,
+    const ProtoType* proto_type) {
+  ConflictingFieldPathsValidator path_validator;
+  for (const ASTBracedConstructorField* ast_field :
+       ast_braced_constructor.fields()) {
+    const ASTBracedConstructorLhs* lhs = ast_field->braced_constructor_lhs();
+    GOOGLESQL_ASSIGN_OR_RETURN(BracedConstructorField field,
+                     ResolveBracedConstructorLhs(lhs, proto_type));
+    absl::Status status = path_validator.AddFieldPath(lhs, field.field_info);
+    if (!status.ok()) {
+      return googlesql_base::StatusBuilder(status)
+                 .With(LocationOverride(lhs))
+                 .SetPrepend()
+             << "Update Constructor: ";
+    }
+  }
   return absl::OkStatus();
 }
 
@@ -8301,6 +8799,11 @@ absl::Status Resolver::ResolveBracedNewConstructor(
     std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
 
+  if (!language().LanguageFeatureEnabled(FEATURE_BRACED_PROTO_CONSTRUCTORS)) {
+    return MakeSqlErrorAt(ast_braced_new_constructor)
+           << "Braced constructors are not supported";
+  }
+
   const Type* resolved_type;
   GOOGLESQL_RET_CHECK(ast_braced_new_constructor->type_name()->type_parameters() ==
             nullptr)
@@ -8333,6 +8836,11 @@ absl::Status Resolver::ResolveStructBracedConstructor(
     std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
 
+  if (!language().LanguageFeatureEnabled(FEATURE_BRACED_PROTO_CONSTRUCTORS)) {
+    return MakeSqlErrorAt(ast_struct_braced_constructor)
+           << "Braced constructors are not supported";
+  }
+
   const ASTType* type_name = ast_struct_braced_constructor->type_name();
   const ASTStructType* ast_struct_type = nullptr;
   bool is_bare_struct = true;
@@ -8355,6 +8863,147 @@ absl::Status Resolver::ResolveStructBracedConstructor(
       ast_struct_braced_constructor->braced_constructor(), is_bare_struct,
       ast_struct_braced_constructor, ast_struct_type, inferred_type,
       expr_resolution_info, resolved_expr_out));
+
+  return absl::OkStatus();
+}
+
+absl::Status Resolver::ResolveTypedBracedConstructor(
+    const ASTTypedBracedConstructor* ast_typed_braced_constructor,
+    ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  const Type* resolved_type;
+  TypeModifiers resolved_type_modifiers;
+  bool support_type_modifiers = language().LanguageFeatureEnabled(
+      FEATURE_TYPE_MODIFIERS_IN_EXPLICIT_CONSTRUCTORS_AND_UDF);
+  GOOGLESQL_RETURN_IF_ERROR(ResolveType(ast_typed_braced_constructor->type_name(),
+                              {.allow_type_parameters = support_type_modifiers,
+                               .allow_collation = support_type_modifiers,
+                               .context = "braced constructor"},
+                              &resolved_type, &resolved_type_modifiers));
+  if (resolved_type->IsMap()) {
+    return ResolveMapBracedConstructor(
+        ast_typed_braced_constructor,
+        ast_typed_braced_constructor->braced_constructor(), resolved_type,
+        std::move(resolved_type_modifiers), expr_resolution_info,
+        resolved_expr_out);
+  }
+  return MakeSqlErrorAt(ast_typed_braced_constructor)
+         << "Braced constructors are not supported for type "
+         << resolved_type->ShortTypeName(product_mode());
+}
+
+absl::Status Resolver::ResolveMapBracedConstructor(
+    const ASTNode* ast_location,
+    const ASTBracedConstructor* ast_braced_constructor,
+    const Type* expected_type, TypeModifiers expected_type_modifiers,
+    ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  GOOGLESQL_RET_CHECK(ast_braced_constructor != nullptr);
+
+  // 1. Verify that the MAP_LITERAL feature gate is enabled.
+  if (!language().LanguageFeatureEnabled(FEATURE_MAP_LITERAL)) {
+    return MakeSqlErrorAt(ast_braced_constructor)
+           << "MAP braced constructors are not supported";
+  }
+
+  const MapType* map_type = nullptr;
+  TypeModifiers key_modifiers;
+  TypeModifiers value_modifiers;
+
+  // 2. If an expected type is present, validate that it is indeed a MAP type,
+  //    and extract the key and value type parameter/collation modifiers.
+  if (expected_type != nullptr) {
+    GOOGLESQL_RET_CHECK(expected_type->IsMap())
+        << "Expected MAP type, but got "
+        << expected_type->ShortTypeName(product_mode());
+    map_type = expected_type->AsMap();
+    if (!expected_type_modifiers.IsEmpty()) {
+      GOOGLESQL_ASSIGN_OR_RETURN(key_modifiers, expected_type_modifiers.GetChild(0));
+      GOOGLESQL_ASSIGN_OR_RETURN(value_modifiers, expected_type_modifiers.GetChild(1));
+    }
+  }
+
+  std::vector<std::unique_ptr<const ResolvedExpr>> resolved_keys;
+  std::vector<std::unique_ptr<const ResolvedExpr>> resolved_values;
+  resolved_keys.reserve(ast_braced_constructor->fields().size());
+  resolved_values.reserve(ast_braced_constructor->fields().size());
+
+  // 3. Resolve each entry's key and value expressions.
+  for (const ASTBracedConstructorField* ast_field :
+       ast_braced_constructor->fields()) {
+    std::unique_ptr<const ResolvedExpr> resolved_key;
+    std::unique_ptr<const ResolvedExpr> resolved_value;
+    GOOGLESQL_RETURN_IF_ERROR(ResolveMapBracedConstructorEntry(
+        ast_field, map_type, expr_resolution_info, &resolved_key,
+        &resolved_value));
+    resolved_keys.push_back(std::move(resolved_key));
+    resolved_values.push_back(std::move(resolved_value));
+  }
+
+  // 4. Determine component key and value types.
+  const Type* key_type = nullptr;
+  const Type* value_type = nullptr;
+
+  if (map_type != nullptr) {
+    // For the Typed Complete/Bare forms, use types defined by the expected MAP
+    // type.
+    key_type = map_type->key_type();
+    value_type = map_type->value_type();
+  } else {
+    // For the Derived form, infer types from the common supertype of all
+    // resolved elements.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        auto derived_types,
+        ResolveMapBracedConstructorDerivedTypes(
+            ast_braced_constructor, resolved_keys, resolved_values));
+    key_type = derived_types.first;
+    value_type = derived_types.second;
+
+    GOOGLESQL_ASSIGN_OR_RETURN(const Type* temp_map_type,
+                     type_factory_->MakeMapType(key_type, value_type));
+    map_type = temp_map_type->AsMap();
+  }
+
+  // 5. Coerce elements to the target key and value types and build entry list.
+  bool all_literals = true;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::vector<std::unique_ptr<const ResolvedMakeMapEntry>> entries,
+      ResolveMapBracedConstructorEntries(
+          ast_braced_constructor, std::move(resolved_keys),
+          std::move(resolved_values), key_type, value_type, expected_type,
+          key_modifiers, value_modifiers, &all_literals));
+
+  // 6. Build the MakeMap resolved AST node and propagate type annotations.
+  auto make_map = MakeResolvedMakeMap(map_type, std::move(entries));
+  GOOGLESQL_RETURN_IF_ERROR(CheckAndPropagateAnnotations(ast_location, make_map.get()));
+
+  // 7. Compile-time fold literal maps if all elements resolved as literals.
+  if (all_literals) {
+    std::vector<std::pair<Value, Value>> literal_entries;
+    literal_entries.reserve(make_map->entry_list_size());
+    for (const auto& entry : make_map->entry_list()) {
+      literal_entries.emplace_back(
+          entry->key()->GetAs<ResolvedLiteral>()->value(),
+          entry->value()->GetAs<ResolvedLiteral>()->value());
+    }
+    auto map_val_or_status =
+        Value::MakeMap(map_type, std::move(literal_entries));
+    if (map_val_or_status.ok()) {
+      *resolved_expr_out = MakeResolvedLiteral(
+          ast_location, {map_type, make_map->type_annotation_map()},
+          map_val_or_status.value(),
+          /*has_explicit_type=*/expected_type != nullptr);
+    } else {
+      // If Value::MakeMap fails (e.g., duplicate keys detected), fall back
+      // cleanly to ResolvedMakeMap, deferring the duplicate key check to
+      // runtime.
+      *resolved_expr_out = std::move(make_map);
+    }
+  } else {
+    *resolved_expr_out = std::move(make_map);
+  }
 
   return absl::OkStatus();
 }
@@ -8452,6 +9101,9 @@ Resolver::ResolveBracedConstructorInUpdateContext(
            << expr_to_modify->type()->ShortTypeName(product_mode());
   }
 
+  GOOGLESQL_RETURN_IF_ERROR(ValidateBracedConstructorFields(
+      ast_braced_constructor, expr_to_modify->type()->AsProto()));
+
   const Type* proto_type = expr_to_modify->type();
 
   std::vector<std::unique_ptr<const ResolvedUpdateFieldItem>>
@@ -8471,7 +9123,9 @@ Resolver::ResolveBracedConstructorInUpdateContext(
                          expr_resolution_info));
     GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
         ast_field->value()->expression(), arg.leaf_field_type,
-        kImplicitAssignment,
+        // Note: It appears like we need to create based on the
+        // annotations of the DML target. Also ensure there's test coverage.
+        TypeModifiers(), kImplicitAssignment,
         "Cannot update field of type $0 with value of type $1", &arg.expr));
 
     ResolvedUpdateFieldItem::Operation operation;
@@ -8486,6 +9140,51 @@ Resolver::ResolveBracedConstructorInUpdateContext(
         operation = ResolvedUpdateFieldItem::UPDATE_SINGLE_NO_CREATION;
         break;
     }
+
+    if (operation == ResolvedUpdateFieldItem::UPDATE_MANY) {
+      if (!absl::c_any_of(arg.field_descriptor_path,
+                          [](const google::protobuf::FieldDescriptor* field) {
+                            return field->is_repeated();
+                          })) {
+        return MakeSqlErrorAt(ast_field->braced_constructor_lhs())
+               << "*: operator requires a repeated field in the path";
+      }
+    } else if (!arg.field_descriptor_path.empty()) {
+      // We cannot have repeated fields in the middle of a field path for
+      // standard whole-value updates.
+      if (absl::c_any_of(absl::MakeSpan(arg.field_descriptor_path)
+                             .subspan(0, arg.field_descriptor_path.size() - 1),
+                         [](const google::protobuf::FieldDescriptor* field) {
+                           return field->is_repeated();
+                         })) {
+        return MakeSqlErrorAt(ast_field->braced_constructor_lhs())
+               << "Field path in UPDATE constructor without * operator "
+               << "cannot contain repeated fields except at the end of the "
+                  "path";
+      }
+    }
+
+    const Type* target_type = arg.leaf_field_type;
+    // For repeated field updates (the `*:` operator), the operation applies to
+    // each element individually. Therefore, we must target the repeated field's
+    // element type, not the container type itself.
+    // For example, if 'arr' is a repeated INT64 field
+    // and we have 'arr *: 1' as Update expression, '1' must be compatible with
+    // the INT64 element type.
+    if (operation == ResolvedUpdateFieldItem::UPDATE_MANY &&
+        target_type->IsArray()) {
+      target_type = target_type->AsArray()->element_type();
+    }
+
+    // Verify that the provided update value is compatible with the target type
+    // (the repeated field element type for repeated field updates, or the field
+    // type for standard updates). This handles implicit casting (e.g., int32 ->
+    // int64) or
+    // returns an error on mismatch.
+    GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
+        ast_field->value()->expression(), target_type, TypeModifiers(),
+        kImplicitAssignment,
+        "Cannot update field of type $0 with value of type $1", &arg.expr));
     resolved_update_field_items.push_back(MakeResolvedUpdateFieldItem(
         std::move(arg.expr), arg.field_descriptor_path, operation));
   }
@@ -8506,6 +9205,11 @@ absl::Status Resolver::ResolveUpdateConstructor(
     std::unique_ptr<const ResolvedExpr>* resolved_expr_out) {
   RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
 
+  if (!language().LanguageFeatureEnabled(FEATURE_BRACED_PROTO_CONSTRUCTORS)) {
+    return MakeSqlErrorAt(&ast_update_constructor)
+           << "Braced constructors are not supported";
+  }
+
   std::string alias;
   std::unique_ptr<const ResolvedExpr> expr_to_modify;
   GOOGLESQL_RETURN_IF_ERROR(ResolveUpdateConstructorProtoExpression(
@@ -8518,80 +9222,6 @@ absl::Status Resolver::ResolveUpdateConstructor(
           ast_update_constructor, std::move(expr_to_modify), std::move(alias),
           *ast_update_constructor.braced_constructor(), expr_resolution_info));
   return absl::OkStatus();
-}
-
-// Copies a specific annotation from one AnnotationMap to another.
-// Returns the modified target AnnotationMap. If the target was nullptr but the
-// new annotation needs to be added, creates a new AnnotationMap and
-// internalizes it in `type_factory`, and returns the pointer to that map.
-// REQUIRES:
-// - The two must have compatible structure.
-// - The target annotation must *NOT* exist in the target yet.
-// For example: if the input annotation map is <{X:1}, {collation:"und:ci"}>,
-// and the target annotation map is <{id:1}, {id:2}>, the output of importing
-// collation from the source to the target will be
-// <{id:1}, {id:2, collation:"und:ci"}>.
-static absl::StatusOr<const AnnotationMap*> ImportSpecificAnnotation(
-    int target_annotation_id, const Type* type, const AnnotationMap* source,
-    TypeFactory& type_factory, AnnotationMap* target) {
-  GOOGLESQL_RET_CHECK(target == nullptr || target->Empty() ||
-            target->GetAnnotation(target_annotation_id) == nullptr);
-
-  GOOGLESQL_RET_CHECK(source == nullptr || source->HasCompatibleStructure(type));
-  GOOGLESQL_RET_CHECK(target == nullptr || target->HasCompatibleStructure(type));
-  if (source == nullptr || source->Empty()) {
-    // The source does not have the annotation in itself or any subtrees, so
-    // nothing to import. The target stays unchanged.
-    return target;
-  }
-
-  // Used only if we need to create an annotation map for target to insert the
-  // new annotation into.
-  std::unique_ptr<AnnotationMap> owned_target;
-
-  const SimpleValue* value_at_current_level =
-      source->GetAnnotation(target_annotation_id);
-  if (value_at_current_level != nullptr) {
-    if (target == nullptr) {
-      owned_target = AnnotationMap::Create(type);
-      target = owned_target.get();
-    }
-    target->SetAnnotation(target_annotation_id, *value_at_current_level);
-  }
-
-  if (source->IsStructMap()) {
-    const StructAnnotationMap* source_struct_map = source->AsStructMap();
-    std::vector<const Type*> type_components = type->ComponentTypes();
-    GOOGLESQL_RET_CHECK_EQ(type_components.size(), source_struct_map->num_fields());
-
-    for (int i = 0; i < source->AsStructMap()->num_fields(); ++i) {
-      GOOGLESQL_ASSIGN_OR_RETURN(
-          const AnnotationMap* target_field,
-          ImportSpecificAnnotation(
-              target_annotation_id, type_components[i],
-              source->AsStructMap()->field(i), type_factory,
-              target == nullptr ? nullptr
-                                : target->AsStructMap()->mutable_field(i)));
-      if (target_field != nullptr) {
-        if (target == nullptr) {
-          owned_target = AnnotationMap::Create(type);
-          target = owned_target.get();
-        }
-        GOOGLESQL_RETURN_IF_ERROR(target->AsStructMap()->CloneIntoField(i, target_field));
-      }
-    }
-  }
-
-  if (owned_target == nullptr) {
-    // We never needed to create a new target map.
-    return target;
-  }
-
-  owned_target->Normalize();
-  if (owned_target->Empty()) {
-    return nullptr;
-  }
-  return type_factory.TakeOwnership(std::move(owned_target));
 }
 
 // TODO: The noinline attribute is to prevent the stack usage
@@ -8617,12 +9247,16 @@ absl::Status Resolver::ResolveArrayConstructor(
   const ArrayType* array_type = nullptr;
   // Indicates whether the array constructor has an explicit element type.
   bool has_explicit_type = false;
-  // TODO: Support collated type in array constructor later.
+  TypeModifiers explicit_type_modifiers;
+  bool support_type_modifiers = language().LanguageFeatureEnabled(
+      FEATURE_TYPE_MODIFIERS_IN_EXPLICIT_CONSTRUCTORS_AND_UDF);
   if (ast_array_constructor->type() != nullptr) {
-    GOOGLESQL_RETURN_IF_ERROR(ResolveArrayType(ast_array_constructor->type(),
-                                     {.context = "literal value construction"},
-                                     &array_type,
-                                     /*resolved_type_modifiers=*/nullptr));
+    GOOGLESQL_RETURN_IF_ERROR(
+        ResolveArrayType(ast_array_constructor->type(),
+                         {.allow_type_parameters = support_type_modifiers,
+                          .allow_collation = support_type_modifiers,
+                          .context = "literal value construction"},
+                         &array_type, &explicit_type_modifiers));
     has_explicit_type = true;
     inferred_element_type = array_type->element_type();
   }
@@ -8640,7 +9274,8 @@ absl::Status Resolver::ResolveArrayConstructor(
     GOOGLESQL_RETURN_IF_ERROR(ResolveExpr(element, expr_resolution_info, &resolved_expr,
                                 inferred_element_type));
 
-    if (resolved_expr->type()->IsArray()) {
+    if (!language().LanguageFeatureEnabled(FEATURE_ARRAY_OF_ARRAY) &&
+        resolved_expr->type()->IsArray()) {
       return MakeSqlErrorAt(element)
              << "Cannot construct array with element type "
              << resolved_expr->type()->ShortTypeName(product_mode())
@@ -8671,8 +9306,8 @@ absl::Status Resolver::ResolveArrayConstructor(
       // If neither array_type nor element is specified, empty array [] is
       // always resolved as an ARRAY<int64>, which is similar to resolving
       // NULL. The coercion rules may make the empty array [] change type.
-      GOOGLESQL_RETURN_IF_ERROR(type_factory_->MakeArrayType(type_factory_->get_int64(),
-                                                   &array_type));
+      GOOGLESQL_ASSIGN_OR_RETURN(array_type, type_factory_->MakeArrayType(
+                                       type_factory_->get_int64(), language()));
     } else {
       const Type* super_type = nullptr;
       GOOGLESQL_RETURN_IF_ERROR(
@@ -8705,109 +9340,78 @@ absl::Status Resolver::ResolveArrayConstructor(
         }
         super_type = type_factory_->get_uint64();
       }
-      GOOGLESQL_RETURN_IF_ERROR(type_factory_->MakeArrayType(super_type, &array_type));
+      GOOGLESQL_ASSIGN_OR_RETURN(array_type,
+                       type_factory_->MakeArrayType(super_type, language()));
     }
-  }
-
-  // Note that `nullptr` is different from `std::nullopt` here.
-  // If the value isn't set at all (i.e., `std::nullopt`), it means no explicit
-  // target type was provided.
-  // However, `nullptr` means that there was an explicit target type, and its
-  // declared annotations are `nullptr` (no annotations), e.g. the explicit ctor
-  // `ARRAY<STRING>[...]` is dropping collation from any array elements.
-  std::optional<const AnnotationMap*> explicit_target_annotation_map;
-  if (ast_array_constructor->type() != nullptr) {
-    // TODO: b/449016617 - This will need to check the target collation if
-    // explicitly specified via the COLLATE syntax in the type, e.g.
-    // ARRAY<STRING COLLATE 'und:ci'>[...]
-    // or if type precision is supported, e.g. `ARRAY<NUMERIC(5,2)>[...]`
-    // or `ARRAY<TIMESTAMP(12)>[...]`
-    explicit_target_annotation_map = nullptr;
   }
 
   // Add casts or convert literal values to array element type if necessary.
   bool is_array_literal = true;
   bool has_annotations = false;
+
+  GOOGLESQL_RET_CHECK_LE(explicit_type_modifiers.collation().num_children(), 1);
+  GOOGLESQL_RET_CHECK_LE(explicit_type_modifiers.type_parameters().num_children(), 1);
+
   for (int i = 0; i < resolved_elements.size(); ++i) {
-    // The target annotation map is the explicitly stated one if available.
-    // Otherwise, set it to the element's own annotations so it stays unchanged.
-    const AnnotationMap* target_element_annotation_map;
+    TypeModifiers element_type_modifiers;
 
     if (ast_array_constructor->type() != nullptr) {
-      GOOGLESQL_RET_CHECK(explicit_target_annotation_map.has_value());
-      if (*explicit_target_annotation_map == nullptr) {
-        target_element_annotation_map = nullptr;
-      } else {
-        const StructAnnotationMap* struct_map =
-            (*explicit_target_annotation_map)->AsStructMap();
-        GOOGLESQL_RET_CHECK_EQ(struct_map->num_fields(), 1);
-        target_element_annotation_map = struct_map->field(0);
-      }
+      TypeParameters element_type_parameters =
+          explicit_type_modifiers.type_parameters().num_children() > 0
+              ? explicit_type_modifiers.type_parameters().child(0)
+              : TypeParameters();
+      Collation element_collation =
+          explicit_type_modifiers.collation().num_children() > 0
+              ? explicit_type_modifiers.collation().child(0)
+              : Collation();
+
+      element_type_modifiers = TypeModifiers::MakeTypeModifiers(
+          std::move(element_type_parameters), std::move(element_collation));
 
       if (language().LanguageFeatureEnabled(
-              FEATURE_BUGGY_LEAK_ANNOTATIONS_TO_ARRAY_CONSTRUCTOR_EXPLICIT_TYPE)) {  // NOLINT
-        auto buggy_annotation_map =
-            target_element_annotation_map != nullptr
-                ? target_element_annotation_map->Clone()
-                : AnnotationMap::Create(array_type->element_type());
+              FEATURE_BUGGY_LEAK_COLLATION_TO_ARRAY_CONSTRUCTOR_EXPLICIT_TYPE) &&  // NOLINT
+          // New syntax doesn't need backcompat
+          explicit_type_modifiers.IsEmpty() &&
+          // Bug backcompat only relevant when collation is present on the input
+          CollationAnnotation::ExistsIn(
+              resolved_elements[i]->type_annotation_map()) &&
+          // The input annotation may not match the target type, e.g. if the
+          // current argument is untyped, e.g. a NULL or []  (empty array).
+          // In this case, we do not bother propagating annotations.
+          resolved_elements[i]->type_annotation_map()->HasCompatibleStructure(
+              array_type->element_type())) {
 
-        // The input annotation may not match the target type, e.g. if the
-        // current argument is untyped, e.g. a NULL or []  (empty array).
-        // In this case, we do not bother propagating annotations.
-        if (!buggy_annotation_map->HasCompatibleStructure(
-                resolved_elements[i]->type())) {
-          buggy_annotation_map = nullptr;
-        } else {
-          // 1. Clear collations from this map. Today, this is not yet possible
-          //    to specify in the syntax as we do not support the COLLATE syntax
-          //    in type declarations yet. When supported, we should replace the
-          //    following check with:
-          //        buggy_annotation_map->UnsetAnnotationRecursively(
-          //            CollationAnnotation::GetId());
-          GOOGLESQL_RET_CHECK(!CollationAnnotation::ExistsIn(buggy_annotation_map.get()));
-          // 2. Copy collation from the element's annotation map at every
-          // subtree.
-          if (buggy_annotation_map != nullptr) {
-            GOOGLESQL_ASSIGN_OR_RETURN(
-                target_element_annotation_map,
-                ImportSpecificAnnotation(
-                    CollationAnnotation::GetId(), array_type->element_type(),
-                    resolved_elements[i]->type_annotation_map(), *type_factory_,
-                    buggy_annotation_map.get()));
-          }
+        // Copy collation from the element's annotation map at every subtree.
+        GOOGLESQL_ASSIGN_OR_RETURN(Collation leaked_collation,
+                         Collation::MakeCollation(
+                             *resolved_elements[i]->type_annotation_map()));
+        element_type_modifiers = TypeModifiers::MakeTypeModifiers(
+            element_type_modifiers.release_type_parameters(),
+            std::move(leaked_collation));
 
-          GOOGLESQL_RET_CHECK_EQ(target_element_annotation_map,
-                       buggy_annotation_map.get());
-          GOOGLESQL_ASSIGN_OR_RETURN(
-              target_element_annotation_map,
-              type_factory_->TakeOwnership(std::move(buggy_annotation_map)));
-
-          // TODO: In the future, we would need to also pass the
-          // target TypeModifiers for the general explicit cases, e.g.
-          // ARRAY<STRUCT<NUMERIC(5,2), STRING(10) COLLATE 'und:ci'>>[...]
-          //
-          // Finally, log a warning
-          GOOGLESQL_RETURN_IF_ERROR(AddDeprecationWarning(
-              ast_array_constructor,
-              DeprecationWarning::BUGGY_COLLATION_LEAK_IN_ARRAY_CONSTRUCTOR,
-              absl::StrCat(
-                  "Array constructor with explicit type leaks collation "
-                  "from argument ",
-                  i)));
-        }
+        // TODO: In the future, we would need to also pass the
+        // target TypeModifiers for the general explicit cases, e.g.
+        // ARRAY<STRUCT<NUMERIC(5,2), STRING(10) COLLATE 'und:ci'>>[...]
+        //
+        // Finally, log a warning
+        GOOGLESQL_RETURN_IF_ERROR(AddDeprecationWarning(
+            ast_array_constructor,
+            DeprecationWarning::BUGGY_COLLATION_LEAK_IN_ARRAY_CONSTRUCTOR,
+            absl::StrCat("Array constructor with explicit type leaks collation "
+                         "from argument ",
+                         i)));
       }
     } else {
-      // Set the target annotation map to the element's own annotations, so that
-      // they stay unchanged.
-      target_element_annotation_map =
-          resolved_elements[i]->type_annotation_map();
+      GOOGLESQL_RET_CHECK(explicit_type_modifiers.IsEmpty());
+      GOOGLESQL_ASSIGN_OR_RETURN(element_type_modifiers,
+                       TypeModifiers::MakeTypeModifiers(
+                           resolved_elements[i]->type_annotation_map()));
     }
+
     GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
-        ast_array_constructor->element(i),
-        AnnotatedType(array_type->element_type(),
-                      target_element_annotation_map),
-        kImplicitCoercion, "Array element type $1 does not coerce to $0",
-        &resolved_elements[i]));
+        ast_array_constructor->element(i), array_type->element_type(),
+        std::move(element_type_modifiers), kImplicitCoercion,
+        "Array element type $1 does not coerce to $0", &resolved_elements[i]));
 
     if (resolved_elements[i]->node_kind() != RESOLVED_LITERAL) {
       is_array_literal = false;
@@ -9023,11 +9627,17 @@ absl::Status Resolver::ResolveStructConstructorImpl(
   // names and types and make a new StructType below.
   // TODO: Support collation name in struct constructor later.
   const StructType* struct_type = nullptr;
+  TypeModifiers resolved_type_modifiers;
+  bool support_type_modifiers = language().LanguageFeatureEnabled(
+      FEATURE_TYPE_MODIFIERS_IN_EXPLICIT_CONSTRUCTORS_AND_UDF);
   if (ast_struct_type != nullptr) {
-    GOOGLESQL_RETURN_IF_ERROR(ResolveStructType(ast_struct_type,
-                                      {.context = "literal value construction"},
-                                      &struct_type,
-                                      /*resolved_type_modifiers=*/nullptr));
+    GOOGLESQL_RETURN_IF_ERROR(ResolveStructType(
+        ast_struct_type,
+        {.allow_type_parameters = support_type_modifiers,
+         .allow_collation = support_type_modifiers,
+         .context = "literal value construction"},
+        &struct_type,
+        /*resolved_type_modifiers=*/&resolved_type_modifiers));
   }
 
   // We find the inferred type for the struct following in order:
@@ -9129,7 +9739,8 @@ absl::Status Resolver::ResolveStructConstructorImpl(
           // TODO: The condition below will be comparing the input
           // field collation and target collation after
           // STRUCT<STRING COLLATE '...'> syntax is supported.
-          CollationAnnotation::ExistsIn(resolved_expr->type_annotation_map())) {
+          CollationAnnotation::ExistsIn(resolved_expr->type_annotation_map()) ||
+          !resolved_type_modifiers.IsEmpty()) {
         SignatureMatchResult result;
         GOOGLESQL_ASSIGN_OR_RETURN(const InputArgumentType input_argument_type,
                          GetInputArgumentTypeForExpr(
@@ -9145,12 +9756,15 @@ absl::Status Resolver::ResolveStructConstructorImpl(
                  << target_field_type->ShortTypeName(product_mode());
         }
 
+        GOOGLESQL_ASSIGN_OR_RETURN(TypeModifiers type_modifiers,
+                         resolved_type_modifiers.GetChild(i));
+
         // We cannot use CoerceExprToType in this case because we need to
         // propagate 'struct_has_explicit_type' so that NULL and [] literals
         // are typed correctly.
         GOOGLESQL_RETURN_IF_ERROR(function_resolver_->AddCastOrConvertLiteral(
             ast_expression, target_field_type, /*format=*/nullptr,
-            /*time_zone=*/nullptr, TypeParameters(),
+            /*time_zone=*/nullptr, std::move(type_modifiers),
             /*scan=*/nullptr, struct_has_explicit_type,
             /*return_null_on_error=*/false, &resolved_expr));
       }
@@ -9253,13 +9867,17 @@ absl::Status Resolver::ResolveStructConstructorImpl(
     GOOGLESQL_RETURN_IF_ERROR(type_factory_->MakeStructType(struct_fields, &struct_type));
   }
 
-  if (absl::c_any_of(struct_type->fields(), [&](const StructField& field) {
-        return field.type->IsMeasureType();
-      })) {
-    return MakeSqlErrorAt(ast_location) << "STRUCT type cannot contain MEASURE";
+  if (!language().LanguageFeatureEnabled(FEATURE_MEASURES_IN_STRUCT)) {
+    if (absl::c_any_of(struct_type->fields(), [&](const StructField& field) {
+          return field.type->IsMeasureType();
+        })) {
+      return MakeSqlErrorAt(ast_location)
+             << "STRUCT type cannot contain MEASURE";
+    }
   }
+
   if (absl::c_any_of(struct_type->fields(), [&](const StructField& field) {
-        return field.type->IsRow();
+        return field.type->IsRowOrTable();
       })) {
     return MakeSqlErrorAt(ast_location)
            << "STRUCT type cannot contain ROW-type values";
@@ -9511,8 +10129,9 @@ absl::Status Resolver::ResolveAggregateFunctionOrderByModifiers(
       MultiLevelAggregationPresent(ast_function_call);
 
   if (IsMatchRecognizeMeasuresFunction(function)) {
-    GOOGLESQL_RET_CHECK(match_recognize_state_.has_value());
-    GOOGLESQL_RET_CHECK(match_recognize_state_->match_row_number_column.IsInitialized());
+    GOOGLESQL_RET_CHECK(!match_recognize_state_.empty());
+    GOOGLESQL_RET_CHECK(
+        match_recognize_state_.top().match_row_number_column.IsInitialized());
     GOOGLESQL_RET_CHECK_EQ(function->NumSignatures(), 1);
     const int64_t context_id = function->GetSignature(0)->context_id();
     GOOGLESQL_RET_CHECK(context_id == FN_FIRST_AGG || context_id == FN_LAST_AGG);
@@ -9533,7 +10152,7 @@ absl::Status Resolver::ResolveAggregateFunctionOrderByModifiers(
 
     // Add the order by match_row_number.
     resolved_order_by_items->push_back(MakeResolvedOrderByItem(
-        MakeColumnRef(match_recognize_state_->match_row_number_column),
+        MakeColumnRef(match_recognize_state_.top().match_row_number_column),
         /*collation_name=*/nullptr, /*is_descending=*/false,
         ResolvedOrderByItemEnums::ORDER_UNSPECIFIED));
     return absl::OkStatus();
@@ -9562,17 +10181,17 @@ absl::Status Resolver::ResolveAggregateFunctionOrderByModifiers(
       // clause (not through a subquery), supports ordering, and is
       // not multi-level, and no ORDER BY was specified.
       // It gets the implicit ordering of MATCH_ROW_NUMBER().
-      GOOGLESQL_RET_CHECK(match_recognize_state_.has_value());
+      GOOGLESQL_RET_CHECK(!match_recognize_state_.empty());
       GOOGLESQL_RET_CHECK(
-          match_recognize_state_->match_row_number_column.IsInitialized());
+          match_recognize_state_.top().match_row_number_column.IsInitialized());
 
       bool apply_implicit_ordering = true;
       if (ast_function_call->distinct()) {
         // Make a dummy column ref (Not through MakeColumnRef() which records
         // access) to see if it's already in the args.
         auto dummy_col_ref = MakeResolvedColumnRef(
-            match_recognize_state_->match_row_number_column.type(),
-            match_recognize_state_->match_row_number_column,
+            match_recognize_state_.top().match_row_number_column.type(),
+            match_recognize_state_.top().match_row_number_column,
             /*is_correlated=*/false);
         GOOGLESQL_ASSIGN_OR_RETURN(
             apply_implicit_ordering,
@@ -9592,7 +10211,7 @@ absl::Status Resolver::ResolveAggregateFunctionOrderByModifiers(
         // Add the order by match_row_number.
         // Add the order by match_row_number.
         resolved_order_by_items->push_back(MakeResolvedOrderByItem(
-            MakeColumnRef(match_recognize_state_->match_row_number_column),
+            MakeColumnRef(match_recognize_state_.top().match_row_number_column),
             /*collation_name=*/nullptr, /*is_descending=*/false,
             ResolvedOrderByItemEnums::ORDER_UNSPECIFIED));
       }
@@ -10052,15 +10671,6 @@ absl::Status Resolver::FinishResolvingAggregateFunction(
     }
   }
 
-  bool args_have_annotations = false;
-  for (const std::unique_ptr<const ResolvedExpr>& arg : arg_list) {
-    if (arg->type_annotation_map() != nullptr &&
-        !arg->type_annotation_map()->Empty()) {
-      args_have_annotations = true;
-      break;
-    }
-  }
-
   auto compute_input_argument_types =
       [&](absl::Span<const std::unique_ptr<const ResolvedExpr>> args)
       -> absl::StatusOr<std::vector<InputArgumentType>> {
@@ -10358,6 +10968,19 @@ static const ASTLambda* GetLambdaArgument(const ASTExpression* arg) {
   return nullptr;
 }
 
+// Returns the nested ASTFunctionRefArg if the argument is a function reference,
+// unwrapping named arguments if necessary. Returns nullptr otherwise.
+static const ASTFunctionRefArg* GetFunctionRefArgument(
+    const ASTExpression* arg) {
+  if (arg->Is<ASTFunctionRefArg>()) {
+    return arg->GetAsOrDie<ASTFunctionRefArg>();
+  }
+  if (arg->Is<ASTNamedArgument>()) {
+    return GetFunctionRefArgument(arg->GetAsOrDie<ASTNamedArgument>()->expr());
+  }
+  return nullptr;
+}
+
 ABSL_ATTRIBUTE_NOINLINE
 absl::Status Resolver::ResolveExpressionArguments(
     ExprResolutionInfo* expr_resolution_info,
@@ -10412,6 +11035,24 @@ absl::Status Resolver::ResolveExpressionArguments(
     } else if (arg->Is<ASTSequenceArg>()) {
       if (!language().LanguageFeatureEnabled(FEATURE_SEQUENCE_ARG)) {
         return MakeSqlErrorAt(arg) << "Sequence args are not supported";
+      }
+      resolved_arguments_out->push_back(nullptr);
+      ast_arguments_out->push_back(arg);
+    } else if (const ASTFunctionRefArg* func_ref = GetFunctionRefArgument(arg);
+               func_ref != nullptr) {
+      if (!language().LanguageFeatureEnabled(FEATURE_UDF_LAMBDA_ARGUMENTS)) {
+        return MakeSqlErrorAt(func_ref)
+               << "Function references are not supported";
+      }
+      // Function references (like UDF lambda parameters) cannot be resolved as
+      // standard expressions. We put nullptrs in place of function references,
+      // and resolve them during signature matching when the expected signature
+      // is known.
+      resolved_arguments_out->push_back(nullptr);
+      ast_arguments_out->push_back(arg);
+    } else if (arg->Is<ASTModelArg>()) {
+      if (!language().LanguageFeatureEnabled(FEATURE_MODEL_ARG)) {
+        return MakeSqlErrorAt(arg) << "Model args are not supported";
       }
       resolved_arguments_out->push_back(nullptr);
       ast_arguments_out->push_back(arg);
@@ -10613,7 +11254,7 @@ static absl::Status EnsureNoIllegallyTypedArguments(
              << "MEASURE-typed arguments are only permitted in the AGG "
                 "function";
     }
-    if (resolved_argument.type()->IsRow()) {
+    if (resolved_argument.type()->IsRowOrTable()) {
       return MakeSqlErrorAt(arg_locations[i])
              << "ROW-typed values cannot be passed as function arguments";
     }
@@ -10832,6 +11473,85 @@ Resolver::ResolveAsRegexpExtractGroupsFunction(
 }
 
 ABSL_ATTRIBUTE_NOINLINE
+absl::StatusOr<std::unique_ptr<const ResolvedExpr>> Resolver::FinalizeFlatten(
+    const ASTNode* ast_location, std::unique_ptr<const ResolvedExpr> arg,
+    std::unique_ptr<const ResolvedExpr> depth_expr,
+    const ASTNode* ast_depth_expr, FlattenState& flatten_state) {
+  GOOGLESQL_RET_CHECK(depth_expr != nullptr);
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      Value depth_value,
+      GetConstantValue(ast_location, depth_expr.get(), "FLATTEN() call"));
+
+  GOOGLESQL_RET_CHECK(depth_value.type()->IsInt64());
+  GOOGLESQL_RET_CHECK(depth_value.is_valid());
+
+  std::optional<int64_t> depth_int = std::nullopt;
+  if (!depth_value.is_null()) {
+    depth_int = depth_value.int64_value();
+    if (*depth_int < 0) {
+      return MakeSqlErrorAt(ast_location)
+             << "FLATTEN depth must be non-negative, but got " << *depth_int;
+    }
+  } else if (ast_depth_expr == nullptr) {
+    // The depth value is NULL, and there's no actual depth argument in the
+    // original input. Do not persist the depth expr on the ResolvedFlatten
+    // node.
+    depth_expr = nullptr;
+  }
+
+  AnnotatedType arg_annotated_type = arg->annotated_type();
+  GOOGLESQL_RET_CHECK(arg_annotated_type.type->IsArray());
+
+  // Convert to a ResolvedFlatten with the correct depth and validate that
+  // the depth value doesn't exceed the number of available layers.
+  const ArrayType* arg_type = arg_annotated_type.type->AsArray();
+  const AnnotationMap* arg_annotations = arg_annotated_type.annotation_map;
+
+  // The number of immediately available nested layers.
+  int num_unraveled_nested_layers = 0;
+
+  while (arg_type->element_type()->IsArray() &&
+         (!depth_int.has_value() || num_unraveled_nested_layers < *depth_int)) {
+    arg_type = arg_type->element_type()->AsArray();
+    if (arg_annotations != nullptr) {
+      GOOGLESQL_RET_CHECK(arg_annotations->IsStructMap());
+      GOOGLESQL_RET_CHECK_EQ(arg_annotations->AsStructMap()->num_fields(), 1);
+      arg_annotations = arg_annotations->AsStructMap()->field(0);
+    }
+    ++num_unraveled_nested_layers;
+  }
+
+  if (depth_int.has_value() && *depth_int > num_unraveled_nested_layers) {
+    return MakeSqlErrorAt(ast_location)
+           << "FLATTEN depth (" << *depth_int
+           << ") exceeds the number of available nested layers ("
+           << num_unraveled_nested_layers << ")";
+  }
+
+  if (flatten_state.active_flatten() == arg.get()) {
+    return ToBuilder(std::unique_ptr<const ResolvedFlatten>(
+                         arg.release()->GetAs<ResolvedFlatten>()))
+        .set_depth(std::move(depth_expr))
+        .set_type(arg_type)
+        .set_type_annotation_map(arg_annotations)
+        .Build();
+  }
+
+  if (num_unraveled_nested_layers > 0) {
+    // If there was no path at all, the argument is not wrapped in a
+    // ResolvedFlatten. We need to wrap it in one.
+    auto flatten =
+        MakeResolvedFlatten(arg_type, std::move(arg),
+                            /*get_field_list=*/{}, std::move(depth_expr));
+    flatten->set_type_annotation_map(arg_annotations);
+    return flatten;
+  }
+
+  // No path, and no layers to unnest. This FLATTEN() is just a NOOP.
+  return arg;
+}
+
+ABSL_ATTRIBUTE_NOINLINE
 absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
     const ASTNode* ast_location,
     const std::vector<const ASTNode*>& arg_locations,
@@ -10915,14 +11635,14 @@ absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
 
   // If the function call resolved to an aggregate function, then do the
   // extra processing required for aggregates.
-  if (multi_level_aggregate_info == nullptr) {
-    multi_level_aggregate_info = std::make_unique<QueryResolutionInfo>(
-        this, expr_resolution_info->query_resolution_info);
-  }
   if (function->IsAggregate()) {
     const ASTFunctionCall* ast_function_call =
         ast_location->GetAsOrNull<ASTFunctionCall>();
     GOOGLESQL_RET_CHECK(ast_function_call != nullptr);
+    if (multi_level_aggregate_info == nullptr) {
+      multi_level_aggregate_info = std::make_unique<QueryResolutionInfo>(
+          this, expr_resolution_info->query_resolution_info);
+    }
     std::optional<ResolvedColumn> unconsumed_side_effect_column;
     GOOGLESQL_RETURN_IF_ERROR(FinishResolvingAggregateFunction(
         ast_function_call, &resolved_function_call, expr_resolution_info,
@@ -10982,15 +11702,21 @@ absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
     GOOGLESQL_RET_CHECK(
         language().LanguageFeatureEnabled(FEATURE_UNNEST_AND_FLATTEN_ARRAYS))
         << "The FLATTEN function is not supported";
-    GOOGLESQL_RET_CHECK_EQ(1, resolved_function_call->argument_list_size());
-    *resolved_expr_out =
-        std::move(resolved_function_call->release_argument_list()[0]);
+
+    auto args = resolved_function_call->release_argument_list();
+    GOOGLESQL_RET_CHECK_EQ(args.size(), 2);
+
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        *resolved_expr_out,
+        FinalizeFlatten(ast_location, std::move(args[0]), std::move(args[1]),
+                        arg_locations.size() > 1 ? arg_locations[1] : nullptr,
+                        expr_resolution_info->flatten_state));
     return absl::OkStatus();
   }
 
   if (IsMatchRecognizeMeasuresFunction(function)) {
     GOOGLESQL_RET_CHECK_EQ(function->NumSignatures(), 1);
-    GOOGLESQL_RET_CHECK(match_recognize_state_.has_value());
+    GOOGLESQL_RET_CHECK(!match_recognize_state_.empty());
     GOOGLESQL_RET_CHECK(!expr_resolution_info->in_match_recognize_define);
     if (!expr_resolution_info->name_scope->allows_match_number_function()) {
       // MR state is initialized, but the namescope doesn't even allow
@@ -11004,17 +11730,18 @@ absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
     switch (signature_id) {
       case FN_MATCH_NUMBER: {
         // Rewrite to a column ref, exposing the actual state.
-        GOOGLESQL_RET_CHECK(match_recognize_state_->match_number_column.IsInitialized());
+        GOOGLESQL_RET_CHECK(
+            match_recognize_state_.top().match_number_column.IsInitialized());
         GOOGLESQL_RET_CHECK(
             expr_resolution_info->name_scope->allows_match_number_function());
         *resolved_expr_out =
-            MakeColumnRef(match_recognize_state_->match_number_column);
+            MakeColumnRef(match_recognize_state_.top().match_number_column);
         GOOGLESQL_RET_CHECK_EQ(resolved_expr_out->get()->type()->kind(), TYPE_INT64);
         break;
       }
       case FN_MATCH_ROW_NUMBER: {
-        GOOGLESQL_RET_CHECK(
-            match_recognize_state_->match_row_number_column.IsInitialized());
+        GOOGLESQL_RET_CHECK(match_recognize_state_.top()
+                      .match_row_number_column.IsInitialized());
         if (!expr_resolution_info->name_scope->allows_match_row_functions()) {
           return MakeSqlErrorAt(ast_location)
                  << function->QualifiedSQLName(/*capitalize_qualifier=*/true)
@@ -11022,7 +11749,7 @@ absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
         }
         // Rewrite to a column ref, exposing the actual state.
         *resolved_expr_out =
-            MakeColumnRef(match_recognize_state_->match_row_number_column);
+            MakeColumnRef(match_recognize_state_.top().match_row_number_column);
         GOOGLESQL_RET_CHECK_EQ(resolved_expr_out->get()->type()->kind(), TYPE_INT64);
         break;
       }
@@ -11033,9 +11760,10 @@ absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
                  << function->QualifiedSQLName(/*capitalize_qualifier=*/true)
                  << " must be aggregated";
         }
-        GOOGLESQL_RET_CHECK(match_recognize_state_->classifier_column.IsInitialized());
+        GOOGLESQL_RET_CHECK(
+            match_recognize_state_.top().classifier_column.IsInitialized());
         *resolved_expr_out =
-            MakeColumnRef(match_recognize_state_->classifier_column);
+            MakeColumnRef(match_recognize_state_.top().classifier_column);
         GOOGLESQL_RET_CHECK_EQ(resolved_expr_out->get()->type()->kind(), TYPE_STRING);
         break;
       }
@@ -11381,8 +12109,12 @@ CreatePostGroupingNameScopeForMultiLevelAggregation(
     // already accessible from a namescope. NOT AGGREGATE args don't need to be
     // shadowed, since they are grouping constants within the context of the
     // multi-level aggregate.
-    if (arg_details->arg_kind != ResolvedArgumentRef::AGGREGATE ||
-        aggregate_name_scope->HasName(arg_details->name)) {
+    if (arg_details->arg_kind != ResolvedArgumentRef::AGGREGATE) {
+      continue;
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(bool has_name,
+                     aggregate_name_scope->HasName(arg_details->name));
+    if (has_name) {
       continue;
     }
 
@@ -11458,19 +12190,18 @@ absl::Status Resolver::ResolveFunctionCallImpl(
     expr_resolution_info->findings.has_volatile = true;
   }
 
-  // A "flatten" function allows the child to flatten.
+  // A "flatten" function allows the argument to flatten.
   FlattenState::Restorer restorer;
   GOOGLESQL_RET_CHECK_EQ(nullptr, expr_resolution_info->flatten_state.active_flatten());
   if (IsFlatten(function)) {
     // We check early for too many arguments as otherwise we can GOOGLESQL_RET_CHECK for
     // resolving arguments with flatten in progress which happens before arg
     // count checking.
-    if (arguments.size() != 1) {
+    if (arguments.size() != 1 && arguments.size() != 2) {
       return MakeSqlErrorAt(ast_location)
              << "Number of arguments does not match for function FLATTEN. "
-                "Supported signature: FLATTEN(ARRAY)";
+                "Supported signature: FLATTEN(ARRAY, [depth => INT64])";
     }
-    expr_resolution_info->flatten_state.set_can_flatten(true, &restorer);
   }
 
   if (IsProtoDefaultIfNull(function)) {
@@ -11508,8 +12239,27 @@ absl::Status Resolver::ResolveFunctionCallImpl(
   std::unique_ptr<ExprResolutionInfo> post_grouping_expr_resolution_info =
       nullptr;
 
-  if (!function->IsAggregate() || !is_ast_function_call ||
-      (ast_function_call->group_by() == nullptr)) {
+  if (IsFlatten(function)) {
+    // We resolve arguments separately here because only the first one allows
+    // flattening.
+    // Resolve flattened argument, with flattening enabled.
+    {
+      FlattenState::Restorer restorer;
+      expr_resolution_info->flatten_state.set_can_flatten(true, &restorer);
+      GOOGLESQL_RETURN_IF_ERROR(ResolveExpressionArgument(
+          arguments[0], expr_resolution_info, &resolved_arguments));
+      ast_arguments.push_back(arguments[0]);
+    }
+
+    if (arguments.size() > 1) {
+      // Resolve the depth argument, if present, excluded from the new flatten
+      // state.
+      GOOGLESQL_RETURN_IF_ERROR(ResolveExpressionArgument(
+          arguments[1], expr_resolution_info, &resolved_arguments));
+      ast_arguments.push_back(arguments[1]);
+    }
+  } else if (!function->IsAggregate() || !is_ast_function_call ||
+             (ast_function_call->group_by() == nullptr)) {
     // Simple case: For functions that are not multi-level aggregates, just
     // resolve the arguments and return.
     GOOGLESQL_RETURN_IF_ERROR(ResolveExpressionArguments(
@@ -11529,7 +12279,7 @@ absl::Status Resolver::ResolveFunctionCallImpl(
     // After this point, errors should use `ast_function_call` rather than
     // `ast_location`.
     ast_location = ast_function_call;
-    GOOGLESQL_RETURN_IF_ERROR(ResolvedMultiLevelAggregateArguments(
+    GOOGLESQL_RETURN_IF_ERROR(ResolveMultiLevelAggregateArguments(
         ast_function_call, function, arguments, argument_option_map,
         expr_resolution_info, multi_level_aggregate_info,
         post_grouping_expr_resolution_info, post_grouping_name_scope,
@@ -11546,7 +12296,7 @@ absl::Status Resolver::ResolveFunctionCallImpl(
 }
 
 ABSL_ATTRIBUTE_NOINLINE
-absl::Status Resolver::ResolvedMultiLevelAggregateArguments(
+absl::Status Resolver::ResolveMultiLevelAggregateArguments(
     const ASTFunctionCall* ast_function_call, const Function* function,
     absl::Span<const ASTExpression* const> arguments,
     const std::map<int, SpecialArgumentType>& argument_option_map,
@@ -11783,33 +12533,24 @@ absl::Status Resolver::CoerceExprToBool(
                             target_type_name, actual_type_name, clause_name);
   };
   return CoerceExprToType(ast_location, type_factory_->get_bool(),
-                          kImplicitCoercion, make_error_msg, resolved_expr);
+                          TypeModifiers(), kImplicitCoercion, make_error_msg,
+                          resolved_expr);
 }
 
 ABSL_ATTRIBUTE_NOINLINE
 absl::Status Resolver::CoerceExprToType(
-    const ASTNode* ast_location, AnnotatedType annotated_target_type,
-    CoercionMode mode, CoercionErrorMessageFunction make_error,
+    const ASTNode* ast_location, const Type* target_type,
+    TypeModifiers type_modifiers, CoercionMode mode,
+    CoercionErrorMessageFunction make_error,
     std::unique_ptr<const ResolvedExpr>* resolved_expr) const {
-  const Type* target_type = annotated_target_type.type;
-  const AnnotationMap* target_type_annotation_map =
-      annotated_target_type.annotation_map;
   GOOGLESQL_RET_CHECK_NE(target_type, nullptr);
   GOOGLESQL_RET_CHECK_NE(resolved_expr, nullptr);
   GOOGLESQL_RET_CHECK_NE(resolved_expr->get(), nullptr);
-  const AnnotationMap* source_type_annotation_map =
-      resolved_expr->get()->type_annotation_map();
-  if (target_type_annotation_map != nullptr) {
-    GOOGLESQL_RET_CHECK(target_type_annotation_map->HasCompatibleStructure(target_type))
-        << "The type annotation map "
-        << target_type_annotation_map->DebugString()
-        << " is not compatible with the target type "
-        << target_type->DebugString();
-  }
-  if (target_type->Equals(resolved_expr->get()->type()) &&
-      AnnotationMap::HasEqualAnnotations(source_type_annotation_map,
-                                         target_type_annotation_map,
-                                         CollationAnnotation::GetId())) {
+
+  GOOGLESQL_ASSIGN_OR_RETURN(bool is_cast_noop,
+                   IsCastNoop(resolved_expr->get()->annotated_type(),
+                              target_type, type_modifiers, analyzer_options()));
+  if (is_cast_noop) {
     return absl::OkStatus();
   }
 
@@ -11847,18 +12588,10 @@ absl::Status Resolver::CoerceExprToType(
 
   // The coercion is legal, so implement it by adding a cast.  Note that
   // AddCastOrConvertLiteral() adds a cast node only when necessary.
-  Collation target_type_collation;
-  if (target_type_annotation_map != nullptr) {
-    GOOGLESQL_ASSIGN_OR_RETURN(target_type_collation,
-                     Collation::MakeCollation(*target_type_annotation_map));
-  }
-
   GOOGLESQL_RETURN_IF_ERROR(function_resolver_->AddCastOrConvertLiteral(
-      ast_location, {target_type, target_type_annotation_map},
+      ast_location, target_type,
       /*format=*/nullptr,
-      /*time_zone=*/nullptr,
-      TypeModifiers::MakeTypeModifiers(TypeParameters(),
-                                       std::move(target_type_collation)),
+      /*time_zone=*/nullptr, std::move(type_modifiers),
       /*scan=*/nullptr,
       /*set_has_explicit_type=*/false,
       /*return_null_on_error=*/false, resolved_expr));
@@ -11867,49 +12600,24 @@ absl::Status Resolver::CoerceExprToType(
 }
 
 absl::Status Resolver::CoerceExprToType(
-    const ASTNode* ast_location, const Type* target_type, CoercionMode mode,
-    CoercionErrorMessageFunction make_error,
-    std::unique_ptr<const ResolvedExpr>* resolved_expr) const {
-  return CoerceExprToType(
-      ast_location, AnnotatedType(target_type, /*annotation_map=*/nullptr),
-      mode, make_error, resolved_expr);
-}
-
-absl::Status Resolver::CoerceExprToType(
-    const ASTNode* ast_location, const Type* target_type, CoercionMode mode,
+    const ASTNode* ast_location, const Type* target_type,
+    TypeModifiers type_modifiers, CoercionMode mode,
     absl::string_view error_template,
-    std::unique_ptr<const ResolvedExpr>* resolved_expr) const {
-  return CoerceExprToType(
-      ast_location, AnnotatedType(target_type, /*annotation_map=*/nullptr),
-      mode, error_template, resolved_expr);
-}
-
-absl::Status Resolver::CoerceExprToType(
-    const ASTNode* ast_location, AnnotatedType annotated_target_type,
-    CoercionMode mode, absl::string_view error_template,
     std::unique_ptr<const ResolvedExpr>* resolved_expr) const {
   auto make_error_msg = [error_template](absl::string_view target_type_name,
                                          absl::string_view actual_type_name) {
     return absl::Substitute(error_template, target_type_name, actual_type_name);
   };
-  return CoerceExprToType(ast_location, annotated_target_type, mode,
-                          make_error_msg, resolved_expr);
+  return CoerceExprToType(ast_location, target_type, std::move(type_modifiers),
+                          mode, make_error_msg, resolved_expr);
 }
 
 absl::Status Resolver::CoerceExprToType(
-    const ASTNode* ast_location, const Type* target_type, CoercionMode mode,
+    const ASTNode* ast_location, const Type* target_type,
+    TypeModifiers type_modifiers, CoercionMode mode,
     std::unique_ptr<const ResolvedExpr>* resolved_expr) const {
-  return CoerceExprToType(
-      ast_location, AnnotatedType(target_type, /*annotation_map=*/nullptr),
-      mode, resolved_expr);
-}
-
-absl::Status Resolver::CoerceExprToType(
-    const ASTNode* ast_location, AnnotatedType annotated_target_type,
-    CoercionMode mode,
-    std::unique_ptr<const ResolvedExpr>* resolved_expr) const {
-  return CoerceExprToType(ast_location, annotated_target_type, mode,
-                          "Expected type $0; found $1", resolved_expr);
+  return CoerceExprToType(ast_location, target_type, std::move(type_modifiers),
+                          mode, "Expected type $0; found $1", resolved_expr);
 }
 
 absl::Status Resolver::ResolveExecuteImmediateArgument(
@@ -12200,6 +12908,393 @@ absl::Status Resolver::ResolveWithExpr(
       parent_expr_resolution_info->findings.has_aggregation ||
       child_has_aggregation;
   return absl::OkStatus();
+}
+
+absl::StatusOr<std::unique_ptr<const ResolvedWithinBounds>>
+Resolver::ResolveWithinBounds(
+    const ASTAlignWithinClause* /*absl_nonnull*/ ast_within_clause,
+    const NameScope* /*absl_nonnull*/ name_scope) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+
+  auto ast_within_lower_bound = ast_within_clause->lower_bound();
+  auto ast_within_upper_bound = ast_within_clause->upper_bound();
+  std::unique_ptr<const ResolvedWithinBoundExpr> lower_bound;
+  if (ast_within_lower_bound != nullptr) {
+    GOOGLESQL_ASSIGN_OR_RETURN(lower_bound, ResolveWithinBoundExpr(ast_within_lower_bound,
+                                                         name_scope));
+  } else {
+    lower_bound = MakeResolvedWithinBoundExpr(
+        ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING, /*expr=*/nullptr);
+  }
+  std::unique_ptr<const ResolvedWithinBoundExpr> upper_bound;
+  if (ast_within_upper_bound != nullptr) {
+    GOOGLESQL_ASSIGN_OR_RETURN(upper_bound, ResolveWithinBoundExpr(ast_within_upper_bound,
+                                                         name_scope));
+  } else {
+    upper_bound = MakeResolvedWithinBoundExpr(
+        ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP, /*expr=*/nullptr);
+  }
+
+  std::unique_ptr<ResolvedWithinBounds> resolved_within_bounds =
+      MakeResolvedWithinBounds(std::move(lower_bound), std::move(upper_bound));
+  GOOGLESQL_RETURN_IF_ERROR(
+      ValidateWithinBounds(ast_within_clause, resolved_within_bounds.get()));
+
+  return resolved_within_bounds;
+}
+
+static bool IsFiniteRelativeResolvedWithinBound(
+    const ResolvedWithinBoundExpr* bound) {
+  switch (bound->bound_kind()) {
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+      return true;
+    case ResolvedWithinBoundExpr::NOT_SET:
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return false;
+  }
+}
+
+static bool IsFiniteAbsoluteResolvedWithinBound(
+    const ResolvedWithinBoundExpr* bound) {
+  switch (bound->bound_kind()) {
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return true;
+    case ResolvedWithinBoundExpr::NOT_SET:
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+      return false;
+  }
+}
+
+static bool IsInvalidBoundCombination(
+    const ResolvedWithinBoundExpr* lower_bound,
+    const ResolvedWithinBoundExpr* upper_bound) {
+  return (IsFiniteAbsoluteResolvedWithinBound(lower_bound) &&
+          IsFiniteRelativeResolvedWithinBound(upper_bound)) ||
+         (IsFiniteAbsoluteResolvedWithinBound(upper_bound) &&
+          IsFiniteRelativeResolvedWithinBound(lower_bound));
+}
+
+static absl::StatusOr<ResolvedWithinBoundExpr::BoundKind> GetBoundKind(
+    ASTAlignWithinBoundExpr::AlignWithinBoundType bound_type) {
+  switch (bound_type) {
+    case ASTAlignWithinBoundExpr::NOT_SET:
+      GOOGLESQL_RET_CHECK_FAIL() << "Within bound kind is not set";
+    case ASTAlignWithinBoundExpr::UNBOUNDED_PRECEDING:
+      return ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING;
+    case ASTAlignWithinBoundExpr::UNBOUNDED_FOLLOWING:
+      return ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING;
+    case ASTAlignWithinBoundExpr::PERIOD_PRECEDING:
+      return ResolvedWithinBoundExpr::PERIOD_PRECEDING;
+    case ASTAlignWithinBoundExpr::PERIOD_FOLLOWING:
+      return ResolvedWithinBoundExpr::PERIOD_FOLLOWING;
+    case ASTAlignWithinBoundExpr::INTERVAL_PRECEDING:
+      return ResolvedWithinBoundExpr::INTERVAL_PRECEDING;
+    case ASTAlignWithinBoundExpr::INTERVAL_FOLLOWING:
+      return ResolvedWithinBoundExpr::INTERVAL_FOLLOWING;
+    case ASTAlignWithinBoundExpr::TIMESTAMP:
+      return ResolvedWithinBoundExpr::TIMESTAMP;
+  }
+}
+
+absl::Status Resolver::ValidateWithinBounds(
+    const ASTAlignWithinClause* /*absl_nonnull*/ ast_within_clause,
+    const ResolvedWithinBounds* /*absl_nonnull*/ node) {
+  const ResolvedWithinBoundExpr* lower_bound = node->lower_bound();
+  const ResolvedWithinBoundExpr* upper_bound = node->upper_bound();
+
+  if (IsInvalidBoundCombination(lower_bound, upper_bound)) {
+    return MakeSqlErrorAt(ast_within_clause)
+           << "A WITHIN clause cannot mix absolute (TIMESTAMP) and relative "
+              "(INTERVAL or PERIOD) bounds";
+  }
+  if (upper_bound->bound_kind() ==
+      ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING) {
+    return MakeSqlErrorAt(ast_within_clause)
+           << "Invalid WITHIN clause, represents an empty WITHIN range";
+  }
+
+  switch (lower_bound->bound_kind()) {
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING: {
+      return MakeSqlErrorAt(ast_within_clause)
+             << "Invalid WITHIN clause, represents an empty WITHIN range";
+    }
+    // Both PERIOD and INTERVAL represent positive durations. Although we
+    // cannot verify that the query-const expressions are positive at
+    // resolution time (this check occurs at runtime), we can statically
+    // determine that these bound combinations always result in an empty
+    // range.
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING: {
+      switch (upper_bound->bound_kind()) {
+        case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+        case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+        case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+        case ResolvedWithinBoundExpr::TIMESTAMP:
+          return absl::OkStatus();
+        default:
+          return MakeSqlErrorAt(ast_within_clause)
+                 << "Invalid WITHIN clause, represents an empty WITHIN range";
+      }
+    }
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return absl::OkStatus();
+    case ResolvedWithinBoundExpr::NOT_SET:
+      GOOGLESQL_RET_CHECK_FAIL() << "Within bound kind is not set";
+  }
+}
+
+absl::StatusOr<std::unique_ptr<const ResolvedWithinBoundExpr>>
+Resolver::ResolveWithinBoundExpr(
+    const ASTAlignWithinBoundExpr* /*absl_nonnull*/ ast_within_bound_expr,
+    const NameScope* /*absl_nonnull*/ name_scope) {
+  RETURN_ERROR_IF_OUT_OF_STACK_SPACE();
+  std::unique_ptr<const ResolvedExpr> resolved_expr;
+
+  if (ast_within_bound_expr->expr() != nullptr) {
+    GOOGLESQL_RETURN_IF_ERROR(ResolveScalarExpr(ast_within_bound_expr->expr(), name_scope,
+                                      "WITHIN bound expression",
+                                      &resolved_expr));
+    if (!IsQueryConstant(resolved_expr.get())) {
+      return MakeSqlErrorAt(ast_within_bound_expr->expr())
+             << "WITHIN bound expression must be a query constant";
+    }
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(ResolvedWithinBoundExpr::BoundKind bound_kind,
+                   GetBoundKind(ast_within_bound_expr->bound_type()));
+
+  std::unique_ptr<ResolvedWithinBoundExpr> resolved_within_bound_expr =
+      MakeResolvedWithinBoundExpr(bound_kind, std::move(resolved_expr));
+
+  GOOGLESQL_RETURN_IF_ERROR(ValidateWithinBoundExpr(ast_within_bound_expr,
+                                          resolved_within_bound_expr.get()));
+  return resolved_within_bound_expr;
+}
+
+absl::Status Resolver::ValidateWithinBoundExpr(
+    const ASTAlignWithinBoundExpr* /*absl_nonnull*/ ast_within_bound_expr,
+    const ResolvedWithinBoundExpr* /*absl_nonnull*/ node) {
+  switch (node->bound_kind()) {
+    case ResolvedWithinBoundExpr::NOT_SET:
+      GOOGLESQL_RET_CHECK_FAIL() << "Within bound kind is not set";
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+      GOOGLESQL_RET_CHECK(node->expr() == nullptr);
+      return absl::OkStatus();
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+      GOOGLESQL_RET_CHECK(node->expr() != nullptr);
+      if (node->expr()->type()->IsInt64() || node->expr()->type()->IsDouble()) {
+        return absl::OkStatus();
+      }
+      return MakeSqlErrorAt(ast_within_bound_expr)
+             << "Expression must be of type INT64 or DOUBLE, but has type "
+             << node->expr()->type()->ShortTypeName(language().product_mode());
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+      GOOGLESQL_RET_CHECK(node->expr() != nullptr);
+      if (node->expr()->type()->IsInterval()) {
+        return absl::OkStatus();
+      }
+      return MakeSqlErrorAt(ast_within_bound_expr)
+             << "Expression must be of type INTERVAL, but has type "
+             << node->expr()->type()->ShortTypeName(language().product_mode());
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      GOOGLESQL_RET_CHECK(node->expr() != nullptr);
+      if (node->expr()->type()->IsTimestamp()) {
+        return absl::OkStatus();
+      }
+      return MakeSqlErrorAt(ast_within_bound_expr)
+             << "Expression must be of type TIMESTAMP, but has type "
+             << node->expr()->type()->ShortTypeName(language().product_mode());
+  }
+}
+
+absl::StatusOr<std::pair<const Type*, const Type*>>
+Resolver::ResolveMapBracedConstructorDerivedTypes(
+    const ASTBracedConstructor* ast_braced_constructor,
+    absl::Span<const std::unique_ptr<const ResolvedExpr>> resolved_keys,
+    absl::Span<const std::unique_ptr<const ResolvedExpr>> resolved_values) {
+  if (resolved_keys.empty()) {
+    return MakeSqlErrorAt(ast_braced_constructor)
+           << "Cannot construct an empty MAP without an expected type";
+  }
+
+  // 1. Determine derived Key Type from all resolved key expressions.
+  const Type* key_type = nullptr;
+  InputArgumentTypeSet key_arg_types;
+  for (const auto& key : resolved_keys) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        InputArgumentType key_arg_type,
+        GetInputArgumentTypeForExpr(
+            key.get(), /*pick_default_type_for_untyped_expr=*/false,
+            analyzer_options()));
+    key_arg_types.Insert(key_arg_type);
+  }
+  GOOGLESQL_RETURN_IF_ERROR(coercer_.GetCommonSuperType(key_arg_types, &key_type));
+  if (key_type == nullptr) {
+    return MakeSqlErrorAt(ast_braced_constructor)
+           << "No common supertype found for MAP keys in braced constructor: "
+           << key_arg_types.ToString();
+  }
+
+  // 2. Determine derived Value Type from all resolved value expressions.
+  const Type* value_type = nullptr;
+  InputArgumentTypeSet value_arg_types;
+  for (const auto& val : resolved_values) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        InputArgumentType value_arg_type,
+        GetInputArgumentTypeForExpr(
+            val.get(), /*pick_default_type_for_untyped_expr=*/false,
+            analyzer_options()));
+    value_arg_types.Insert(value_arg_type);
+  }
+  GOOGLESQL_RETURN_IF_ERROR(coercer_.GetCommonSuperType(value_arg_types, &value_type));
+  if (value_type == nullptr) {
+    return MakeSqlErrorAt(ast_braced_constructor)
+           << "No common supertype found for MAP values in braced constructor: "
+           << value_arg_types.ToString();
+  }
+
+  return std::make_pair(key_type, value_type);
+}
+
+absl::Status Resolver::ResolveMapBracedConstructorEntry(
+    const ASTBracedConstructorField* ast_field, const MapType* map_type,
+    ExprResolutionInfo* expr_resolution_info,
+    std::unique_ptr<const ResolvedExpr>* resolved_key_out,
+    std::unique_ptr<const ResolvedExpr>* resolved_value_out) {
+  const ASTBracedConstructorLhs* lhs = ast_field->braced_constructor_lhs();
+
+  // MAP braced constructors do not support modifiers like '*:' or '?:' (update
+  // operations).
+  if (lhs->operation() != ASTBracedConstructorLhs::UPDATE_SINGLE) {
+    return MakeSqlErrorAt(lhs)
+           << "Modifiers '*:' and '?:' are not supported in MAP constructors";
+  }
+  GOOGLESQL_RET_CHECK(ast_field->value() != nullptr);
+  if (!ast_field->value()->colon_prefixed()) {
+    return MakeSqlErrorAt(ast_field)
+           << "MAP braced constructor entries must use ':' separator";
+  }
+
+  const Type* expected_key_type =
+      map_type != nullptr ? map_type->key_type() : nullptr;
+  const Type* expected_value_type =
+      map_type != nullptr ? map_type->value_type() : nullptr;
+
+  GOOGLESQL_RETURN_IF_ERROR(ResolveExpr(lhs->key_expr(), expr_resolution_info,
+                              resolved_key_out, expected_key_type));
+
+  GOOGLESQL_RETURN_IF_ERROR(ResolveExpr(ast_field->value()->expression(),
+                              expr_resolution_info, resolved_value_out,
+                              expected_value_type));
+
+  if ((*resolved_key_out)->type_annotation_map() != nullptr &&
+      CollationAnnotation::ExistsIn(
+          (*resolved_key_out)->type_annotation_map())) {
+    return MakeSqlErrorAt(lhs->key_expr())
+           << "Collation is not supported on MAP or its key and value types";
+  }
+  if ((*resolved_value_out)->type_annotation_map() != nullptr &&
+      CollationAnnotation::ExistsIn(
+          (*resolved_value_out)->type_annotation_map())) {
+    return MakeSqlErrorAt(ast_field->value()->expression())
+           << "Collation is not supported on MAP or its key and value types";
+  }
+
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::vector<std::unique_ptr<const ResolvedMakeMapEntry>>>
+Resolver::ResolveMapBracedConstructorEntries(
+    const ASTBracedConstructor* ast_braced_constructor,
+    std::vector<std::unique_ptr<const ResolvedExpr>> resolved_keys,
+    std::vector<std::unique_ptr<const ResolvedExpr>> resolved_values,
+    const Type* key_type, const Type* value_type, const Type* expected_type,
+    const TypeModifiers& key_modifiers, const TypeModifiers& value_modifiers,
+    bool* all_literals) {
+  std::vector<std::unique_ptr<const ResolvedMakeMapEntry>> entries;
+  entries.reserve(resolved_keys.size());
+
+  const int num_entries = static_cast<int>(resolved_keys.size());
+  for (int i = 0; i < num_entries; ++i) {
+    std::unique_ptr<const ResolvedExpr> coerced_key =
+        std::move(resolved_keys[i]);
+    TypeModifiers key_type_modifiers = key_modifiers;
+    if (expected_type == nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          key_type_modifiers,
+          TypeModifiers::MakeTypeModifiers(coerced_key->type_annotation_map()));
+    }
+    GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
+        ast_braced_constructor->fields(i)->braced_constructor_lhs()->key_expr(),
+        key_type, std::move(key_type_modifiers), kImplicitCoercion,
+        "MAP key type $1 does not coerce to $0", &coerced_key));
+
+    std::unique_ptr<const ResolvedExpr> coerced_val =
+        std::move(resolved_values[i]);
+    TypeModifiers value_type_modifiers = value_modifiers;
+    if (expected_type == nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          value_type_modifiers,
+          TypeModifiers::MakeTypeModifiers(coerced_val->type_annotation_map()));
+    }
+    GOOGLESQL_RETURN_IF_ERROR(CoerceExprToType(
+        ast_braced_constructor->fields(i)->value()->expression(), value_type,
+        std::move(value_type_modifiers), kImplicitCoercion,
+        "MAP value type $1 does not coerce to $0", &coerced_val));
+
+    if (coerced_key->node_kind() != RESOLVED_LITERAL ||
+        coerced_val->node_kind() != RESOLVED_LITERAL) {
+      *all_literals = false;
+    }
+
+    entries.push_back(MakeResolvedMakeMapEntry(std::move(coerced_key),
+                                               std::move(coerced_val)));
+  }
+
+  return entries;
+}
+
+absl::StatusOr<TypeParameters> Resolver::ResolveVectorTypeParameters(
+    const ASTTypeParameterList* type_parameters,
+    const std::vector<TypeParameterValue>& resolved_type_parameter_list) {
+  if (resolved_type_parameter_list.size() != 1) {
+    return MakeSqlErrorAt(type_parameters)
+           << "VECTOR type can only have one parameter. Found "
+           << resolved_type_parameter_list.size() << " parameters";
+  }
+  const TypeParameterValue& param = resolved_type_parameter_list[0];
+  if (param.IsSpecialLiteral() || !param.GetValue().has_int64_value()) {
+    return MakeSqlErrorAt(type_parameters)
+           << "VECTOR length parameter must be an integer literal";
+  }
+  int64_t length = param.GetValue().int64_value();
+  if (length <= 0) {
+    return MakeSqlErrorAt(type_parameters)
+           << "VECTOR length must be greater than 0";
+  }
+  VectorTypeParametersProto proto;
+  proto.set_length(length);
+  return TypeParameters::MakeVectorTypeParameters(proto);
 }
 
 }  // namespace googlesql

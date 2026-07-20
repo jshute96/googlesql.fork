@@ -28,6 +28,7 @@
 #include "googlesql/testdata/test_schema.pb.h"
 #include "absl/container/flat_hash_set.h"
 #include "googlesql/base/check.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -35,7 +36,6 @@
 #include "file_based_test_driver/test_case_options.h"
 #include "google/protobuf/text_format.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 

@@ -22,6 +22,7 @@
 #include "googlesql/public/types/annotation.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "googlesql/resolved_ast/resolved_node.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
@@ -156,6 +157,19 @@ absl::StatusOr<ConstnessLevel> GetConstnessLevel(const ResolvedNode* node) {
       }
       return max_constness_level;
     }
+    case RESOLVED_MAKE_MAP: {
+      const ResolvedMakeMap* make_map = node->GetAs<ResolvedMakeMap>();
+      ConstnessLevel max_constness_level = ConstnessLevel::kForeverConst;
+      for (const auto& entry : make_map->entry_list()) {
+        GOOGLESQL_ASSIGN_OR_RETURN(ConstnessLevel key_constness,
+                         GetConstnessLevel(entry->key()));
+        GOOGLESQL_ASSIGN_OR_RETURN(ConstnessLevel val_constness,
+                         GetConstnessLevel(entry->value()));
+        max_constness_level = std::max(max_constness_level,
+                                       std::max(key_constness, val_constness));
+      }
+      return max_constness_level;
+    }
 
     case RESOLVED_CAST:
       return GetConstnessLevel(node->GetAs<ResolvedCast>()->expr());
@@ -204,7 +218,8 @@ absl::StatusOr<ConstnessLevel> GetConstnessLevel(const ResolvedNode* node) {
     case RESOLVED_CATALOG_COLUMN_REF:
     case RESOLVED_DMLDEFAULT:
     case RESOLVED_GRAPH_GET_ELEMENT_PROPERTY:
-    case RESOLVED_GRAPH_MAKE_ELEMENT: {
+    case RESOLVED_GRAPH_MAKE_ELEMENT:
+    case RESOLVED_GRAPH_INSERT_ELEMENT: {
       return ConstnessLevel::kNotConst;
     }
 

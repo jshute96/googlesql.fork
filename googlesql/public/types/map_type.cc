@@ -39,13 +39,13 @@
 #include "absl/hash/hash.h"
 #include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -103,12 +103,6 @@ absl::StatusOr<std::string> MapType::TypeNameWithModifiers(
   return absl::StrCat("MAP<", key_type_name, ", ", value_type_name, ">");
 }
 
-std::string MapType::CapitalizedName() const {
-  ABSL_CHECK_EQ(kind(), TYPE_MAP);  // Crash OK
-  return absl::StrCat("Map<", GetMapKeyType(this)->CapitalizedName(), ", ",
-                      GetMapValueType(this)->CapitalizedName(), ">");
-}
-
 bool MapType::SupportsOrdering(const LanguageOptions& language_options,
                                std::string* type_description) const {
   if (type_description != nullptr) {
@@ -143,7 +137,7 @@ absl::Status MapType::ValidateResolvedTypeParameters(
                                                      mode);
 }
 
-MapType::MapType(const TypeFactoryBase* factory, const Type* key_type,
+MapType::MapType(const TypeFactoryBase& factory, const Type* key_type,
                  const Type* value_type)
     : ContainerType(factory, TYPE_MAP),
       key_type_(key_type),
@@ -161,8 +155,25 @@ bool MapType::SupportsPartitioningImpl(
     const LanguageOptions& language_options,
     const Type** no_partitioning_type) const {
   // Map does not currently support partitioning. (broken link).
-  *no_partitioning_type = this;
+  if (no_partitioning_type != nullptr) {
+    *no_partitioning_type = this;
+  }
   return false;
+}
+
+bool MapType::SupportsReturningImpl(const LanguageOptions& language_options,
+                                    const Type** no_returning_type) const {
+  if (!key_type()->SupportsReturningImpl(language_options, no_returning_type)) {
+    return false;
+  }
+  if (!value_type()->SupportsReturningImpl(language_options,
+                                           no_returning_type)) {
+    return false;
+  }
+  if (no_returning_type != nullptr) {
+    *no_returning_type = nullptr;
+  }
+  return true;
 }
 
 absl::Status MapType::SerializeToProtoAndDistinctFileDescriptorsImpl(
@@ -203,6 +214,11 @@ void MapType::CopyValueContent(const ValueContent& from,
 
 void MapType::ClearValueContent(const ValueContent& value) const {
   value.GetAs<internal::ValueContentMapRef*>()->Unref();
+}
+
+uint64_t MapType::GetValueContentExternallyAllocatedByteSize(
+    const ValueContent& value) const {
+  return value.GetAs<internal::ValueContentMapRef*>()->physical_byte_size();
 }
 
 absl::HashState MapType::HashTypeParameter(absl::HashState state) const {

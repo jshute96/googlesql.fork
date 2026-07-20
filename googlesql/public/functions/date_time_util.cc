@@ -33,6 +33,7 @@
 
 #include "googlesql/base/logging.h"
 #include "googlesql/common/errors.h"
+#include "googlesql/common/proto_format_utils.h"
 #include "googlesql/public/civil_time.h"
 #include "googlesql/public/functions/arithmetics.h"
 #include "googlesql/public/functions/date_time_util_internal.h"
@@ -46,6 +47,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/numeric/int128.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/escaping.h"
@@ -60,7 +62,6 @@
 #include "absl/time/time.h"
 #include "googlesql/base/mathutil.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 #include "googlesql/base/time_proto_util.h"
 
 namespace googlesql {
@@ -227,7 +228,7 @@ static bool CheckRemainingLength(absl::string_view str, int current_idx,
 template <class T>
 static bool ParseDigits(absl::string_view str, int min_digits, int max_digits,
                         int* idx, T* part_value) {
-  static_assert(std::is_same<T, int>::value || std::is_same<T, int64_t>::value,
+  static_assert(std::is_same_v<T, int> || std::is_same_v<T, int64_t>,
                 "T must be int or int64_t");
   int num_digits = 0;
   *part_value = 0;
@@ -961,7 +962,6 @@ static bool AddAtLeastDaysToCivilTime(DateTimestampPart part, int32_t interval,
       break;
     }
     default:
-      ABSL_DCHECK(false) << "Should not reach here";
       return false;
   }
   return true;
@@ -1204,9 +1204,8 @@ static absl::Status AddTimestampNanos(int64_t nanos, absl::TimeZone timezone,
 
 template <typename T>
 static void NarrowTimestampIfPossible(T* timestamp, TimestampScale* scale) {
-  static_assert(
-      std::is_same<T, int64_t>::value || std::is_same<T, absl::int128>::value,
-      "T must be either int64_t or absl::int128");
+  static_assert(std::is_same_v<T, int64_t> || std::is_same_v<T, absl::int128>,
+                "T must be either int64_t or absl::int128");
   while (*timestamp % 1000 == 0) {
     switch (*scale) {
       case kSeconds:
@@ -3559,9 +3558,8 @@ absl::Status ConvertProto3TimestampToTimestamp(
     const google::protobuf::Timestamp& input_timestamp, absl::Time* output) {
   auto result_or = googlesql_base::DecodeGoogleApiProto(input_timestamp);
   if (!result_or.ok()) {
-    return MakeEvalError()
-           << "Invalid Proto3 Timestamp input: "
-                        << input_timestamp.DebugString();
+    return MakeEvalError() << "Invalid Proto3 Timestamp input: "
+                           << ToStableDebugString(input_timestamp);
   }
   *output = result_or.value();
   // DecodeGoogleApiProto enforces the same valid timestamp range as GoogleSQL.
