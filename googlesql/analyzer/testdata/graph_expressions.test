@@ -104,19 +104,24 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS Account)
+      (a IS Person)
+      -[e IS (% | ! %)]->
+      (b IS Account)
     COLUMNS(
-      SAME(a_2, a_4, a_2, a_4) AS a_5,
-      SAME(a_2, a_2, a_2) AS a_6,
-      SAME(a_3, a_3) AS a_7
+      SAME(a, b, a, b) AS same_node_a_b,
+      SAME(a, a, a) AS same_node_a,
+      SAME(e, e) AS same_edge
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS same_node_a_b,
-     aml_1.a_6 AS same_node_a,
-     aml_1.a_7 AS same_edge;
+     aml_1.same_node_a_b,
+     aml_1.same_node_a,
+     aml_1.same_edge
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.same_node_a_b,
+     graphtablescan_2.same_node_a,
+     graphtablescan_2.same_edge;
 ==
 
 select * from graph_table(
@@ -327,29 +332,39 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS Account)
+      (a IS Person)
+      -[b IS (% | ! %)]->
+      (c IS Account)
     COLUMNS(
-      a_2 IS SOURCE OF a_3 AS a_5,
-      a_2 IS SOURCE OF a_3 AS a_6,
-      NOT(a_2 IS SOURCE OF a_3) AS a_7,
-      NOT(a_2 IS SOURCE OF a_3) AS a_8,
-      a_2 IS DESTINATION OF a_3 AS a_9,
-      a_2 IS DESTINATION OF a_3 AS a_10,
-      NOT(a_2 IS DESTINATION OF a_3) AS a_11,
-      NOT(a_2 IS DESTINATION OF a_3) AS a_12
+      a IS SOURCE OF b AS val0,
+      a IS SOURCE OF b AS val1,
+      NOT(a IS SOURCE OF b) AS val2,
+      NOT(a IS SOURCE OF b) AS val3,
+      a IS DESTINATION OF b AS val4,
+      a IS DESTINATION OF b AS val5,
+      NOT(a IS DESTINATION OF b) AS val6,
+      NOT(a IS DESTINATION OF b) AS val7
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS val0,
-     aml_1.a_6 AS val1,
-     aml_1.a_7 AS val2,
-     aml_1.a_8 AS val3,
-     aml_1.a_9 AS val4,
-     aml_1.a_10 AS val5,
-     aml_1.a_11 AS val6,
-     aml_1.a_12 AS val7;
+     aml_1.val0,
+     aml_1.val1,
+     aml_1.val2,
+     aml_1.val3,
+     aml_1.val4,
+     aml_1.val5,
+     aml_1.val6,
+     aml_1.val7
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.val0,
+     graphtablescan_2.val1,
+     graphtablescan_2.val2,
+     graphtablescan_2.val3,
+     graphtablescan_2.val4,
+     graphtablescan_2.val5,
+     graphtablescan_2.val6,
+     graphtablescan_2.val7;
 ==
 
 # <source/destination predicate> first argument must be node.
@@ -647,15 +662,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (Person | Account)
+      (n IS (Person | Account)
       WHERE
-        PROPERTY_EXISTS(a_2, birthday))
+        PROPERTY_EXISTS(n, birthday))
     COLUMNS(
-      PROPERTY_EXISTS(a_2, id) AS a_3
+      PROPERTY_EXISTS(n, id) AS has_id
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS has_id;
+     aml_1.has_id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.has_id;
 
 ==
 
@@ -722,15 +740,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Account
+      (n IS Account
       WHERE
-        PROPERTY_EXISTS(a_2, id))
+        PROPERTY_EXISTS(n, id))
     COLUMNS(
-      PROPERTY_EXISTS(a_2, birthday) AS a_3
+      PROPERTY_EXISTS(n, birthday) AS has_birthday
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS has_birthday;
+     aml_1.has_birthday
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.has_birthday;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -812,16 +833,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
-      ARRAY[a_2] AS a_3
+      ARRAY[n] AS array_of_n
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3
-|> AS graphtablescan_4
+     aml_1.array_of_n
+|> AS graphtablescan_2
 |> SELECT
-     1 AS a_5;
+     1 AS a_3;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -984,16 +1005,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
-      (a_2) IS NULL AS a_3
+      (n) IS NULL AS n_is_null
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3
-|> AS graphtablescan_4
+     aml_1.n_is_null
+|> AS graphtablescan_2
 |> SELECT
-     1 AS a_5;
+     1 AS a_3;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -1079,16 +1100,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
-      `IF`(true, a_2, a_2) AS a_3
+      `IF`(true, n, n) AS if_expr
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3
-|> AS graphtablescan_4
+     aml_1.if_expr
+|> AS graphtablescan_2
 |> SELECT
-     1 AS a_5;
+     1 AS a_3;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -1201,21 +1222,25 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       ARRAY_LENGTH((
           SELECT
-            1 AS a_4
-          |> AS projectscan_5
+            1 AS a_2
+          |> AS projectscan_3
           |> AGGREGATE
-               ARRAY_AGG(a_2) AS a_6)) AS a_3
+               ARRAY_AGG(n) AS a_4
+          |> AS aggregatescan_5
+          |> SELECT
+               aggregatescan_5.a_4
+        )) AS arr_length
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3
-|> AS graphtablescan_7
+     aml_1.arr_length
+|> AS graphtablescan_6
 |> SELECT
-     1 AS a_8;
+     1 AS a_7;
 ==
 
 select gt.* from graph_table(
@@ -1379,17 +1404,20 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
+      -[a_2 IS (% | ! %)]->
+      (m IS (% | ! %))
       -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
-      -[a_5 IS (% | ! %)]->
-      (a_6 IS (% | ! %))
+      (k IS (% | ! %))
     COLUMNS(
-      ALL_DIFFERENT(a_2, a_4, a_6) AS a_7
+      ALL_DIFFERENT(n, m, k) AS all_different
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS all_different;
+     aml_1.all_different
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.all_different;
 
 ==
 
@@ -1543,18 +1571,21 @@ FROM
     aml
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
+      -[e1 IS (% | ! %)]->
+      (a_3 IS (% | ! %))
+      -[e2 IS (% | ! %)]->
       (a_4 IS (% | ! %))
-      -[a_5 IS (% | ! %)]->
-      (a_6 IS (% | ! %))
-      -[a_7 IS (% | ! %)]->
-      (a_8 IS (% | ! %))
+      -[e3 IS (% | ! %)]->
+      (a_5 IS (% | ! %))
     COLUMNS(
-      ALL_DIFFERENT(a_3, a_5, a_7) AS a_9
+      ALL_DIFFERENT(e1, e2, e3) AS all_different
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_9 AS all_different;
+     aml_1.all_different
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.all_different;
 ==
 
 # mixing node and edge in all_different is not allowed
@@ -1784,19 +1815,24 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
+      (m IS (% | ! %))
     COLUMNS(
-      TO_JSON(a_2, stringify_wide_numbers  => true) AS a_5,
-      TO_JSON(a_3, stringify_wide_numbers  => true) AS a_6,
-      TO_JSON(a_4, stringify_wide_numbers  => true) AS a_7
+      TO_JSON(n, stringify_wide_numbers  => true) AS js_n,
+      TO_JSON(e, stringify_wide_numbers  => true) AS js_e,
+      TO_JSON(m, stringify_wide_numbers  => true) AS js_m
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS js_n,
-     aml_1.a_6 AS js_e,
-     aml_1.a_7 AS js_m;
+     aml_1.js_n,
+     aml_1.js_e,
+     aml_1.js_m
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.js_n,
+     graphtablescan_2.js_e,
+     graphtablescan_2.js_m;
 ==
 
 select gt.* from graph_table(
@@ -1861,13 +1897,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
-      LABELS(a_2) AS a_3
+      LABELS(n) AS node_labels
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS node_labels;
+     aml_1.node_labels
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.node_labels;
 ==
 
 select gt.* from graph_table(
@@ -1960,14 +1999,17 @@ FROM
     aml
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
+      -[e IS (% | ! %)]-
+      (a_3 IS (% | ! %))
     COLUMNS(
-      LABELS(a_3) AS a_5
+      LABELS(e) AS edge_labels
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS edge_labels;
+     aml_1.edge_labels
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.edge_labels;
 ==
 
 select gt.* from graph_table(
@@ -2041,15 +2083,19 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% & ! %))
+      (n IS (% & ! %))
     COLUMNS(
-      LABELS(a_2) AS a_3,
-      PROPERTY_EXISTS(a_2, id) AS a_4
+      LABELS(n) AS empty_labels,
+      PROPERTY_EXISTS(n, id) AS has_id
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS empty_labels,
-     aml_1.a_4 AS has_id;
+     aml_1.empty_labels,
+     aml_1.has_id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.empty_labels,
+     graphtablescan_2.has_id;
 ==
 
 select gt.* from graph_table(
@@ -2114,13 +2160,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
-      PROPERTY_NAMES(a_2) AS a_3
+      PROPERTY_NAMES(n) AS node_properties
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS node_properties;
+     aml_1.node_properties
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.node_properties;
 ==
 
 select gt.* from graph_table(
@@ -2213,14 +2262,17 @@ FROM
     aml
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
+      -[e IS (% | ! %)]-
+      (a_3 IS (% | ! %))
     COLUMNS(
-      PROPERTY_NAMES(a_3) AS a_5
+      PROPERTY_NAMES(e) AS edge_properties
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS edge_properties;
+     aml_1.edge_properties
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.edge_properties;
 ==
 
 # <is labeled predicate> LHS must be a graph element type
@@ -2415,23 +2467,30 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
+      (a IS (% | ! %))
+      -[e IS (% | ! %)]->
+      (b IS (% | ! %))
     COLUMNS(
-      LABELS(a_2) AS a_5,
-      a_2 IS LABELED(% |(Account & Person)) AS a_6,
-      a_2 IS NOT LABELED(% | ! %) AS a_7,
-      a_2 IS LABELED Person AS a_8,
-      a_2 IS LABELED Account AS a_9
+      LABELS(a) AS labels,
+      a IS LABELED(% |(Account & Person)) AS true_pred,
+      a IS NOT LABELED(% | ! %) AS false_pred,
+      a IS LABELED Person AS is_person,
+      a IS LABELED Account AS is_account
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS labels,
-     aml_1.a_6 AS true_pred,
-     aml_1.a_7 AS false_pred,
-     aml_1.a_8 AS is_person,
-     aml_1.a_9 AS is_account;
+     aml_1.labels,
+     aml_1.true_pred,
+     aml_1.false_pred,
+     aml_1.is_person,
+     aml_1.is_account
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.labels,
+     graphtablescan_2.true_pred,
+     graphtablescan_2.false_pred,
+     graphtablescan_2.is_person,
+     graphtablescan_2.is_account;
 ==
 
 select gt.* from graph_table(
@@ -2544,21 +2603,27 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
+      (n1 IS (% | ! %))
+      -[e IS (% | ! %)]-
+      (n2 IS (% | ! %))
     COLUMNS(
-      ELEMENT_ID(a_2) AS a_5,
-      ELEMENT_ID(a_3) AS a_6,
-      SOURCE_NODE_ID(a_3) AS a_7,
-      DESTINATION_NODE_ID(a_3) AS a_8
+      ELEMENT_ID(n1) AS nid,
+      ELEMENT_ID(e) AS eid,
+      SOURCE_NODE_ID(e) AS source_node_id,
+      DESTINATION_NODE_ID(e) AS destination_node_id
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS nid,
-     aml_1.a_6 AS eid,
-     aml_1.a_7 AS source_node_id,
-     aml_1.a_8 AS destination_node_id;
+     aml_1.nid,
+     aml_1.eid,
+     aml_1.source_node_id,
+     aml_1.destination_node_id
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.nid,
+     graphtablescan_2.eid,
+     graphtablescan_2.source_node_id,
+     graphtablescan_2.destination_node_id;
 ==
 
 # TODO: b/348064840 - Add test cases for path variables
@@ -2720,17 +2785,21 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]-
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
     COLUMNS(
-      ELEMENT_DEFINITION_NAME(a_2) AS a_5,
-      ELEMENT_DEFINITION_NAME(a_3) AS a_6
+      ELEMENT_DEFINITION_NAME(n) AS node_name,
+      ELEMENT_DEFINITION_NAME(e) AS edge_name
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS node_name,
-     aml_1.a_6 AS edge_name;
+     aml_1.node_name,
+     aml_1.edge_name
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_name,
+     graphtablescan_3.edge_name;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+JSON_TYPE,+JSON_MUTATOR_FUNCTIONS{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -2889,19 +2958,19 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (a IS Person)
     RETURN
-      ANY_VALUE(a_2) AS a_3,
-      COUNT(a_2) AS a_4,
-      ARRAY_AGG(a_2) AS a_5
+      ANY_VALUE(a) AS any_value,
+      COUNT(a) AS count,
+      ARRAY_AGG(a) AS array_agg
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3,
-     aml_1.a_4 AS a_4,
-     aml_1.a_5 AS a_5
-|> AS graphtablescan_6
+     aml_1.any_value,
+     aml_1.count,
+     aml_1.array_agg
+|> AS graphtablescan_2
 |> SELECT
-     1 AS a_7;
+     1 AS a_3;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -3053,28 +3122,28 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (a IS Person)
     COLUMNS(
-      a_2 AS a_3
+      a AS a_2
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS a_3
-|> AS graphtablescan_4
+     aml_1.a_2
+|> AS graphtablescan_2
 |> SELECT
-     graphtablescan_4.a_3 AS a_3,
-     graphtablescan_4.a_3.id AS a_5
+     graphtablescan_2.a_2,
+     graphtablescan_2.a_2.id
+|> AS projectscan_3
+|> SELECT
+     projectscan_3.a_2,
+     FIRST_VALUE(projectscan_3.a_2) OVER (
+       ORDER BY projectscan_3.id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_4
+|> AS analyticscan_5
+|> SELECT
+     analyticscan_5.a_4
 |> AS projectscan_6
 |> SELECT
-     projectscan_6.a_3 AS a_3,
-     FIRST_VALUE(projectscan_6.a_3) OVER (
-       ORDER BY projectscan_6.a_5 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_7
-|> AS analyticscan_8
-|> SELECT
-     analyticscan_8.a_7 AS a_7
-|> AS projectscan_9
-|> SELECT
-     1 AS a_10;
+     1 AS a_7;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+NAMED_ARGUMENTS,+TEMPLATED_SQL_FUNCTION_RESOLVE_WITH_TYPED_ARGS,+TABLE_VALUED_FUNCTIONS{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -3183,16 +3252,19 @@ FROM
       GRAPH_TABLE(
         aml
         MATCH
-          (a_2 IS Person)
+          (a IS Person)
         COLUMNS(
-          a_2 AS a_3
+          a AS a_2
         )
       ) AS aml_1
     |> SELECT
-         aml_1.a_3 AS a_3
-  )) AS tvfscan_4
+         aml_1.a_2
+    |> AS graphtablescan_2
+    |> SELECT
+         graphtablescan_2.a_2
+  )) AS tvfscan_3
 |> SELECT
-     tvfscan_4.x.id AS id;
+     tvfscan_3.x.id;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+SQL_GRAPH_BOUNDED_PATH_QUANTIFICATION,+INLINE_LAMBDA_ARGUMENT,+CAST_DIFFERENT_ARRAY_TYPES,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT]
@@ -3307,19 +3379,19 @@ FROM
     aml
     MATCH
       ANY (
-        (a_2 IS Person)
-        -[a_3 IS (% | ! %)]->
-        (a_4 IS (Account | Person))
+        (x IS Person)
+        -[y IS (% | ! %)]->
+        (z IS (Account | Person))
       ) { 3, 3 }
     COLUMNS(
-      ARRAY_CONCAT(a_2, a_4) AS a_5
+      ARRAY_CONCAT(x, z) AS arr
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS a_5
-|> AS graphtablescan_6
+     aml_1.arr
+|> AS graphtablescan_2
 |> SELECT
-     ARRAY_LENGTH(graphtablescan_6.a_5) AS a_7;
+     ARRAY_LENGTH(graphtablescan_2.arr) AS a_3;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+SQL_GRAPH_BOUNDED_PATH_QUANTIFICATION,+INLINE_LAMBDA_ARGUMENT,+CAST_DIFFERENT_ARRAY_TYPES,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT]
@@ -3439,16 +3511,19 @@ FROM
     aml
     MATCH
       ANY (
-        (a_2 IS Person)
-        -[a_3 IS (% | ! %)]->
-        (a_4 IS (Account | Person))
+        (x IS Person)
+        -[y IS (% | ! %)]->
+        (z IS (Account | Person))
       ) { 3, 3 }
     COLUMNS(
-      ARRAY_TRANSFORM(ARRAY_CONCAT(a_2, a_4), (a_6) -> a_6.name) AS a_5
+      ARRAY_TRANSFORM(ARRAY_CONCAT(x, z), (x_2) -> x_2.name) AS arr
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS arr;
+     aml_1.arr
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.arr;
 ==
 
 # Repro test for b/355707672
@@ -3558,12 +3633,15 @@ FROM
          GRAPH_TABLE(
            aml
            MATCH
-             (a_4 IS Person)
+             (n IS Person)
            RETURN
-             tvfscan_1.x AS a_5
+             tvfscan_1.x AS x
          ) AS aml_3
        |> SELECT
-            aml_3.a_5 AS a_5
+            aml_3.x
+       |> AS graphtablescan_4
+       |> SELECT
+            graphtablescan_4.x
      ) AS a_2;
 ==
 
@@ -3734,15 +3812,18 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (a_3 IS (% | ! %))
-      -[a_4 IS (% | ! %)]->
-      (a_5 IS (% | ! %))
+      p = (n IS (% | ! %))
+      -[e IS (% | ! %)]->
+      (m IS (% | ! %))
     COLUMNS(
-      TO_JSON(a_2, stringify_wide_numbers  => true) AS a_6
+      TO_JSON(p, stringify_wide_numbers  => true) AS js_p
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS js_p;
+     aml_1.js_p
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.js_p;
 ==
 
 [language_features=NONE,+SQL_GRAPH{{|,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT}}]
@@ -4041,17 +4122,21 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS Account)
+      (a IS Person)
+      -[e IS (% | ! %)]->
+      (b IS Account)
     COLUMNS(
-      SAFE.SAME(a_2, a_2, a_2) AS a_5,
-      SAFE.ALL_DIFFERENT(a_2, a_4) AS a_6
+      SAFE.SAME(a, a, a) AS same_node_a,
+      SAFE.ALL_DIFFERENT(a, b) AS all_different_node_a_b
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS same_node_a,
-     aml_1.a_6 AS all_different_node_a_b;
+     aml_1.same_node_a,
+     aml_1.all_different_node_a_b
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.same_node_a,
+     graphtablescan_2.all_different_node_a_b;
 
 ==
 

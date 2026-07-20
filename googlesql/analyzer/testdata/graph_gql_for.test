@@ -699,12 +699,16 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
-    FOR a_3 IN ARRAY< INT64 >[1, 2, 3] WITH OFFSET AS a_4
+      (n IS (% | ! %))
+    FOR x IN ARRAY< INT64 >[1, 2, 3] WITH OFFSET AS offset
     RETURN
-      a_3 AS a_5,
-      a_4 AS a_6
+      x AS x_2,
+      offset AS offset_2
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS x,
-     aml_1.a_6 AS offset;
+     aml_1.x_2,
+     aml_1.offset_2
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.x_2 AS x,
+     graphtablescan_2.offset_2 AS offset;

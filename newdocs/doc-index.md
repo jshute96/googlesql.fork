@@ -14,6 +14,7 @@ component doc when working on that area.
 | [doc-index.md](doc-index.md) | This file — doc map + component hierarchy. |
 | [components/parser.md](components/parser.md) | Lexer + parser → parse tree (AST); macros; codegen. |
 | [components/resolved-ast.md](components/resolved-ast.md) | The Resolved AST IR, its codegen, validator, SQLBuilder. |
+| [pipe-sql-builder.md](pipe-sql-builder.md) | SQLBuilder's pipe-syntax output: where it can't form pipe SQL and where scans aren't 1:1 with pipe operators. |
 | [components/analyzer.md](components/analyzer.md) | The Resolver (AST → Resolved AST) and the rewriter framework. |
 | [components/public-api.md](components/public-api.md) | Public API surface: analyzer entry, catalog, functions, evaluator. |
 | [components/type-system.md](components/type-system.md) | Type hierarchy, `TypeFactory`, `Value` (subcomponent of public). |
@@ -22,6 +23,7 @@ component doc when working on that area.
 | [components/scripting.md](components/scripting.md) | Procedural SQL scripts (control flow, variables). |
 | [components/compliance-and-testing.md](components/compliance-and-testing.md) | Conformance framework + shared test catalog/data. |
 | [components/tooling-and-bindings.md](components/tooling-and-bindings.md) | `execute_query`, formatter, `local_service`, Java bindings, examples. |
+| [execute-query-visualizer.md](execute-query-visualizer.md) | The `execute_query` query visualizer: input SQL / Resolved AST / SQLBuilder SQL side by side, with correspondence highlighting. |
 | `../CLAUDE.md` | Top-level orientation & quick pointers (repo root). |
 
 ## Component hierarchy

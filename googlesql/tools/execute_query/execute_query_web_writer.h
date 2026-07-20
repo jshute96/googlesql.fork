@@ -61,6 +61,22 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
 
   absl::Status parsed(absl::string_view parse_debug_string) override;
 
+  absl::Status formatted_sql_html(absl::string_view original_html,
+                                  absl::string_view boxed_html) override {
+    current_statement_params_["result_formatted_sql"] =
+        std::string(original_html);
+    current_statement_params_["result_formatted_sql_boxed"] =
+        std::string(boxed_html);
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
+  absl::Status formatted_analyzed_html(absl::string_view html) override {
+    current_statement_params_["result_formatted_analyzed"] = std::string(html);
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
   absl::Status unparsed(absl::string_view unparse_string) override {
     current_statement_params_["result_unparsed"] = std::string(unparse_string);
     got_results_ = true;
@@ -72,6 +88,22 @@ class ExecuteQueryWebWriter : public ExecuteQueryWriter {
   absl::Status unanalyze(absl::string_view unanalyze_string) override {
     current_statement_params_["result_unanalyzed"] =
         std::string(unanalyze_string);
+    got_results_ = true;
+    return absl::OkStatus();
+  }
+
+  absl::Status visualized(const VisualizationData& data) override {
+    current_statement_params_["result_visualized"] = true;
+    current_statement_params_["viz_input_sql_html"] = data.input_sql_html;
+    current_statement_params_["viz_resolved_ast_html"] =
+        data.resolved_ast_html;
+    current_statement_params_["viz_sqlbuilder_sql_html"] =
+        data.sqlbuilder_sql_html;
+    if (!data.post_rewrite_ast_html.empty()) {
+      current_statement_params_["viz_has_post_rewrite"] = true;
+      current_statement_params_["viz_post_rewrite_ast_html"] =
+          data.post_rewrite_ast_html;
+    }
     got_results_ = true;
     return absl::OkStatus();
   }

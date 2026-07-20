@@ -137,6 +137,69 @@ class AnalyzerOptionsTest : public ::testing::Test {
   std::unique_ptr<SampleCatalog> sample_catalog_;
 };
 
+TEST_F(AnalyzerOptionsTest, AstNodeResolvedInfoTableScan) {
+  // A table name that resolves to a ResolvedTableScan should have an entry in
+  // the ast_node_resolved_info_map() with table_scan_info populated.
+  std::unique_ptr<const AnalyzerOutput> output;
+  GOOGLESQL_ASSERT_OK(AnalyzeStatement("SELECT key FROM KeyValue", options_, catalog(),
+                              &type_factory_, &output));
+
+  const Table* key_value_table = nullptr;
+  GOOGLESQL_ASSERT_OK(catalog()->FindTable({"KeyValue"}, &key_value_table));
+
+  const ASTNodeResolvedInfoMap& info_map = output->ast_node_resolved_info_map();
+
+  // Exactly one node should have table_scan_info, and it should point at the
+  // KeyValue table with a non-null output NameList.
+  int num_table_scans = 0;
+  for (const auto& [ast_node, info] : info_map) {
+    if (info.table_scan_info.has_value()) {
+      ++num_table_scans;
+      EXPECT_EQ(info.table_scan_info->table, key_value_table);
+      EXPECT_NE(info.table_scan_info->output_name_list, nullptr);
+      // This node is a table scan, not a pipe operator.
+      EXPECT_FALSE(info.resolved_scan_info.has_value());
+    }
+  }
+  EXPECT_EQ(num_table_scans, 1);
+}
+
+TEST_F(AnalyzerOptionsTest, AstNodeResolvedInfoPipeOperators) {
+  // Each pipe operator should have an entry in the ast_node_resolved_info_map()
+  // with resolved_scan_info populated, including the input and output
+  // NameLists.  The leading table scan should additionally have
+  // table_scan_info.
+  options_.mutable_language()->EnableLanguageFeature(FEATURE_PIPES);
+  std::unique_ptr<const AnalyzerOutput> output;
+  GOOGLESQL_ASSERT_OK(
+      AnalyzeStatement("FROM KeyValue |> WHERE key = 1 |> SELECT value",
+                       options_, catalog(), &type_factory_, &output));
+
+  const Table* key_value_table = nullptr;
+  GOOGLESQL_ASSERT_OK(catalog()->FindTable({"KeyValue"}, &key_value_table));
+
+  const ASTNodeResolvedInfoMap& info_map = output->ast_node_resolved_info_map();
+
+  int num_table_scans = 0;
+  int num_pipe_operators = 0;
+  for (const auto& [ast_node, info] : info_map) {
+    if (info.table_scan_info.has_value()) {
+      ++num_table_scans;
+      EXPECT_EQ(info.table_scan_info->table, key_value_table);
+    }
+    if (info.resolved_scan_info.has_value()) {
+      ++num_pipe_operators;
+      EXPECT_TRUE(info.resolved_scan_info->is_pipe_operator);
+      // Both the names in scope before and after the operator are captured.
+      EXPECT_NE(info.resolved_scan_info->input_name_list, nullptr);
+      EXPECT_NE(info.resolved_scan_info->output_name_list, nullptr);
+    }
+  }
+  EXPECT_EQ(num_table_scans, 1);
+  // The two pipe operators are `|> WHERE ...` and `|> SELECT ...`.
+  EXPECT_EQ(num_pipe_operators, 2);
+}
+
 TEST_F(AnalyzerOptionsTest, AddSystemVariable) {
   // Simple cases
   EXPECT_EQ(options_.system_variables().size(), 0);

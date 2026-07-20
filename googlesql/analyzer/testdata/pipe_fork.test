@@ -1468,6 +1468,11 @@ MultiStmt
 ==
 
 # When input is ordered, subpipelines still don't get is_ordered.
+# This also exercises the SQLBuilder for FORK with a subpipeline that uses
+# ORDER BY (on the input) and LIMIT (inside the subpipeline).
+[run_sqlbuilder]
+[sql_builder_target_syntax_mode=pipe]
+[show_sqlbuilder_output]
 FROM KeyValue
 |> ORDER BY key
 |> FORK
@@ -1503,6 +1508,47 @@ GeneralizedQueryStmt
               +-KeyValue.Key#1 AS Key [INT64]
               +-KeyValue.Value#2 AS Value [STRING]
 
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> ORDER BY KeyValue.Key
+|> FORK (
+     |> LIMIT 1
+   );
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+GeneralizedQueryStmt
++-query=
+  +-PipeForkScan
+    +-input_scan=
+    | +-OrderByScan
+    |   +-column_list=KeyValue.[Key#1, Value#2]
+    |   +-is_ordered=TRUE
+    |   +-input_scan=
+    |   | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    |   +-order_by_item_list=
+    |     +-OrderByItem
+    |       +-column_ref=
+    |         +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    +-subpipeline_list=
+      +-GeneralizedQuerySubpipeline
+        +-subpipeline=
+        | +-Subpipeline
+        |   +-scan=
+        |     +-LimitOffsetScan
+        |       +-column_list=KeyValue.[Key#1, Value#2]
+        |       +-input_scan=
+        |       | +-SubpipelineInputScan(column_list=KeyValue.[Key#1, Value#2])
+        |       +-limit=
+        |         +-Literal(type=INT64, value=1)
+        +-output_schema=
+          +-OutputSchema
+            +-output_column_list=
+              +-KeyValue.Key#1 AS Key [INT64]
+              +-KeyValue.Value#2 AS Value [STRING]
 
 [REWRITTEN AST]
 MultiStmt

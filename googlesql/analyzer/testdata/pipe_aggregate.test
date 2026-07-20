@@ -1693,6 +1693,103 @@ QueryStmt
       +-ColumnRef(type=INT64, column=$groupby.f1#7)
       +-ColumnRef(type=INT64, column=$groupby.f1#7)
       +-ColumnRef(type=STRING, column=$groupby.value#6)
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> SELECT
+     KeyValue.Key,
+     KeyValue.Value,
+     STRUCT< f1 INT64, f2 STRING > (KeyValue.Key, KeyValue.Value) AS kv_struct1
+|> AS projectscan_1
+|> SELECT
+     projectscan_1.Key,
+     projectscan_1.Value,
+     projectscan_1.kv_struct1,
+     STRUCT< f1 INT64, f2 STRING > ((projectscan_1.Key) + 1, UPPER(projectscan_1.Value)) AS kv_struct2
+|> AS projectscan_2
+|> EXTEND
+     IFNULL(projectscan_2.kv_struct1, projectscan_2.kv_struct2).f1 AS f1
+|> AGGREGATE
+     COUNT(*) AS a_3
+   GROUP BY ROLLUP(projectscan_2.Value, f1, f1, projectscan_2.Value);
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+QueryStmt
++-output_column_list=
+| +-$groupby.Value#7 AS Value [STRING]
+| +-$groupby.f1#8 AS f1 [INT64]
+| +-$aggregate.a_3#6 AS a_3 [INT64]
++-query=
+  +-AggregateScan
+    +-column_list=[$groupby.Value#7, $groupby.f1#8, $aggregate.a_3#6]
+    +-input_scan=
+    | +-ProjectScan
+    |   +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4, $pipe_extend.f1#5]
+    |   +-expr_list=
+    |   | +-f1#5 :=
+    |   |   +-GetStructField
+    |   |     +-type=INT64
+    |   |     +-expr=
+    |   |     | +-FunctionCall(GoogleSQL:ifnull(STRUCT<f1 INT64, f2 STRING>, STRUCT<f1 INT64, f2 STRING>) -> STRUCT<f1 INT64, f2 STRING>)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct1#3)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct2#4)
+    |   |     +-field_idx=0
+    |   +-input_scan=
+    |     +-ProjectScan
+    |       +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4]
+    |       +-expr_list=
+    |       | +-kv_struct2#4 :=
+    |       |   +-MakeStruct
+    |       |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |       |     +-field_list=
+    |       |       +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
+    |       |       | +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |       |       | +-Literal(type=INT64, value=1)
+    |       |       +-FunctionCall(GoogleSQL:upper(STRING) -> STRING)
+    |       |         +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |       +-input_scan=
+    |         +-ProjectScan
+    |           +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3]
+    |           +-expr_list=
+    |           | +-kv_struct1#3 :=
+    |           |   +-MakeStruct
+    |           |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |           |     +-field_list=
+    |           |       +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |           |       +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |           +-input_scan=
+    |             +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-group_by_list=
+    | +-Value#7 := ColumnRef(type=STRING, column=KeyValue.Value#2)
+    | +-f1#8 := ColumnRef(type=INT64, column=$pipe_extend.f1#5)
+    +-aggregate_list=
+    | +-a_3#6 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+    +-grouping_set_list=
+    | +-GroupingSet
+    | | +-group_by_column_list=
+    | |   +-ColumnRef(type=STRING, column=$groupby.Value#7)
+    | |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+    | +-GroupingSet
+    | | +-group_by_column_list=
+    | |   +-ColumnRef(type=STRING, column=$groupby.Value#7)
+    | |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+    | +-GroupingSet
+    | | +-group_by_column_list=
+    | |   +-ColumnRef(type=STRING, column=$groupby.Value#7)
+    | |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+    | +-GroupingSet
+    | | +-group_by_column_list=
+    | |   +-ColumnRef(type=STRING, column=$groupby.Value#7)
+    | +-GroupingSet
+    +-rollup_column_list=
+      +-ColumnRef(type=STRING, column=$groupby.Value#7)
+      +-ColumnRef(type=INT64, column=$groupby.f1#8)
+      +-ColumnRef(type=INT64, column=$groupby.f1#8)
+      +-ColumnRef(type=STRING, column=$groupby.Value#7)
 --
 ALTERNATION GROUP: CUBE
 --
@@ -1768,6 +1865,96 @@ QueryStmt
           +-GroupingSetMultiColumn
             +-column_list=
               +-ColumnRef(type=STRING, column=$groupby.value#6)
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> SELECT
+     KeyValue.Key,
+     KeyValue.Value,
+     STRUCT< f1 INT64, f2 STRING > (KeyValue.Key, KeyValue.Value) AS kv_struct1
+|> AS projectscan_1
+|> SELECT
+     projectscan_1.Key,
+     projectscan_1.Value,
+     projectscan_1.kv_struct1,
+     STRUCT< f1 INT64, f2 STRING > ((projectscan_1.Key) + 1, UPPER(projectscan_1.Value)) AS kv_struct2
+|> AS projectscan_2
+|> EXTEND
+     IFNULL(projectscan_2.kv_struct1, projectscan_2.kv_struct2).f1 AS f1
+|> AGGREGATE
+     COUNT(*) AS a_3
+   GROUP BY ROLLUP(projectscan_2.Value, f1, f1, projectscan_2.Value);
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+QueryStmt
++-output_column_list=
+| +-$groupby.Value#7 AS Value [STRING]
+| +-$groupby.f1#8 AS f1 [INT64]
+| +-$aggregate.a_3#6 AS a_3 [INT64]
++-query=
+  +-AggregateScan
+    +-column_list=[$groupby.Value#7, $groupby.f1#8, $aggregate.a_3#6]
+    +-input_scan=
+    | +-ProjectScan
+    |   +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4, $pipe_extend.f1#5]
+    |   +-expr_list=
+    |   | +-f1#5 :=
+    |   |   +-GetStructField
+    |   |     +-type=INT64
+    |   |     +-expr=
+    |   |     | +-FunctionCall(GoogleSQL:ifnull(STRUCT<f1 INT64, f2 STRING>, STRUCT<f1 INT64, f2 STRING>) -> STRUCT<f1 INT64, f2 STRING>)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct1#3)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct2#4)
+    |   |     +-field_idx=0
+    |   +-input_scan=
+    |     +-ProjectScan
+    |       +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4]
+    |       +-expr_list=
+    |       | +-kv_struct2#4 :=
+    |       |   +-MakeStruct
+    |       |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |       |     +-field_list=
+    |       |       +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
+    |       |       | +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |       |       | +-Literal(type=INT64, value=1)
+    |       |       +-FunctionCall(GoogleSQL:upper(STRING) -> STRING)
+    |       |         +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |       +-input_scan=
+    |         +-ProjectScan
+    |           +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3]
+    |           +-expr_list=
+    |           | +-kv_struct1#3 :=
+    |           |   +-MakeStruct
+    |           |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |           |     +-field_list=
+    |           |       +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |           |       +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |           +-input_scan=
+    |             +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-group_by_list=
+    | +-Value#7 := ColumnRef(type=STRING, column=KeyValue.Value#2)
+    | +-f1#8 := ColumnRef(type=INT64, column=$pipe_extend.f1#5)
+    +-aggregate_list=
+    | +-a_3#6 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+    +-grouping_set_list=
+      +-Rollup
+        +-rollup_column_list=
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=STRING, column=$groupby.Value#7)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+          +-GroupingSetMultiColumn
+            +-column_list=
+              +-ColumnRef(type=STRING, column=$groupby.Value#7)
 --
 ALTERNATION GROUP: ,+GROUPING_SETS,CUBE
 --
@@ -1831,6 +2018,96 @@ QueryStmt
           +-GroupingSetMultiColumn
             +-column_list=
               +-ColumnRef(type=STRING, column=$groupby.value#6)
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> SELECT
+     KeyValue.Key,
+     KeyValue.Value,
+     STRUCT< f1 INT64, f2 STRING > (KeyValue.Key, KeyValue.Value) AS kv_struct1
+|> AS projectscan_1
+|> SELECT
+     projectscan_1.Key,
+     projectscan_1.Value,
+     projectscan_1.kv_struct1,
+     STRUCT< f1 INT64, f2 STRING > ((projectscan_1.Key) + 1, UPPER(projectscan_1.Value)) AS kv_struct2
+|> AS projectscan_2
+|> EXTEND
+     IFNULL(projectscan_2.kv_struct1, projectscan_2.kv_struct2).f1 AS f1
+|> AGGREGATE
+     COUNT(*) AS a_3
+   GROUP BY CUBE(projectscan_2.Value, f1, f1, projectscan_2.Value);
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+QueryStmt
++-output_column_list=
+| +-$groupby.Value#7 AS Value [STRING]
+| +-$groupby.f1#8 AS f1 [INT64]
+| +-$aggregate.a_3#6 AS a_3 [INT64]
++-query=
+  +-AggregateScan
+    +-column_list=[$groupby.Value#7, $groupby.f1#8, $aggregate.a_3#6]
+    +-input_scan=
+    | +-ProjectScan
+    |   +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4, $pipe_extend.f1#5]
+    |   +-expr_list=
+    |   | +-f1#5 :=
+    |   |   +-GetStructField
+    |   |     +-type=INT64
+    |   |     +-expr=
+    |   |     | +-FunctionCall(GoogleSQL:ifnull(STRUCT<f1 INT64, f2 STRING>, STRUCT<f1 INT64, f2 STRING>) -> STRUCT<f1 INT64, f2 STRING>)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct1#3)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct2#4)
+    |   |     +-field_idx=0
+    |   +-input_scan=
+    |     +-ProjectScan
+    |       +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4]
+    |       +-expr_list=
+    |       | +-kv_struct2#4 :=
+    |       |   +-MakeStruct
+    |       |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |       |     +-field_list=
+    |       |       +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
+    |       |       | +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |       |       | +-Literal(type=INT64, value=1)
+    |       |       +-FunctionCall(GoogleSQL:upper(STRING) -> STRING)
+    |       |         +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |       +-input_scan=
+    |         +-ProjectScan
+    |           +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3]
+    |           +-expr_list=
+    |           | +-kv_struct1#3 :=
+    |           |   +-MakeStruct
+    |           |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |           |     +-field_list=
+    |           |       +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |           |       +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |           +-input_scan=
+    |             +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-group_by_list=
+    | +-Value#7 := ColumnRef(type=STRING, column=KeyValue.Value#2)
+    | +-f1#8 := ColumnRef(type=INT64, column=$pipe_extend.f1#5)
+    +-aggregate_list=
+    | +-a_3#6 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+    +-grouping_set_list=
+      +-Cube
+        +-cube_column_list=
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=STRING, column=$groupby.Value#7)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+          +-GroupingSetMultiColumn
+            +-column_list=
+              +-ColumnRef(type=STRING, column=$groupby.Value#7)
 --
 ALTERNATION GROUP: ,+GROUPING_SETS,GROUPING SETS
 --
@@ -1892,6 +2169,94 @@ QueryStmt
       +-GroupingSet
         +-group_by_column_list=
           +-ColumnRef(type=STRING, column=$groupby.value#6)
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> SELECT
+     KeyValue.Key,
+     KeyValue.Value,
+     STRUCT< f1 INT64, f2 STRING > (KeyValue.Key, KeyValue.Value) AS kv_struct1
+|> AS projectscan_1
+|> SELECT
+     projectscan_1.Key,
+     projectscan_1.Value,
+     projectscan_1.kv_struct1,
+     STRUCT< f1 INT64, f2 STRING > ((projectscan_1.Key) + 1, UPPER(projectscan_1.Value)) AS kv_struct2
+|> AS projectscan_2
+|> EXTEND
+     IFNULL(projectscan_2.kv_struct1, projectscan_2.kv_struct2).f1 AS f1
+|> AGGREGATE
+     COUNT(*) AS a_3
+   GROUP BY GROUPING SETS(projectscan_2.Value, f1, f1, projectscan_2.Value);
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+QueryStmt
++-output_column_list=
+| +-$groupby.Value#7 AS Value [STRING]
+| +-$groupby.f1#8 AS f1 [INT64]
+| +-$aggregate.a_3#6 AS a_3 [INT64]
++-query=
+  +-AggregateScan
+    +-column_list=[$groupby.Value#7, $groupby.f1#8, $aggregate.a_3#6]
+    +-input_scan=
+    | +-ProjectScan
+    |   +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4, $pipe_extend.f1#5]
+    |   +-expr_list=
+    |   | +-f1#5 :=
+    |   |   +-GetStructField
+    |   |     +-type=INT64
+    |   |     +-expr=
+    |   |     | +-FunctionCall(GoogleSQL:ifnull(STRUCT<f1 INT64, f2 STRING>, STRUCT<f1 INT64, f2 STRING>) -> STRUCT<f1 INT64, f2 STRING>)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct1#3)
+    |   |     |   +-ColumnRef(type=STRUCT<f1 INT64, f2 STRING>, column=$pipe_select.kv_struct2#4)
+    |   |     +-field_idx=0
+    |   +-input_scan=
+    |     +-ProjectScan
+    |       +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3, $pipe_select.kv_struct2#4]
+    |       +-expr_list=
+    |       | +-kv_struct2#4 :=
+    |       |   +-MakeStruct
+    |       |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |       |     +-field_list=
+    |       |       +-FunctionCall(GoogleSQL:$add(INT64, INT64) -> INT64)
+    |       |       | +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |       |       | +-Literal(type=INT64, value=1)
+    |       |       +-FunctionCall(GoogleSQL:upper(STRING) -> STRING)
+    |       |         +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |       +-input_scan=
+    |         +-ProjectScan
+    |           +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_select.kv_struct1#3]
+    |           +-expr_list=
+    |           | +-kv_struct1#3 :=
+    |           |   +-MakeStruct
+    |           |     +-type=STRUCT<f1 INT64, f2 STRING>
+    |           |     +-field_list=
+    |           |       +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |           |       +-ColumnRef(type=STRING, column=KeyValue.Value#2)
+    |           +-input_scan=
+    |             +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-group_by_list=
+    | +-Value#7 := ColumnRef(type=STRING, column=KeyValue.Value#2)
+    | +-f1#8 := ColumnRef(type=INT64, column=$pipe_extend.f1#5)
+    +-aggregate_list=
+    | +-a_3#6 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+    +-grouping_set_list=
+      +-GroupingSet
+      | +-group_by_column_list=
+      |   +-ColumnRef(type=STRING, column=$groupby.Value#7)
+      +-GroupingSet
+      | +-group_by_column_list=
+      |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+      +-GroupingSet
+      | +-group_by_column_list=
+      |   +-ColumnRef(type=INT64, column=$groupby.f1#8)
+      +-GroupingSet
+        +-group_by_column_list=
+          +-ColumnRef(type=STRING, column=$groupby.Value#7)
 ==
 
 # Supported expression type GetStructField will be deduplicated.
@@ -2151,6 +2516,63 @@ QueryStmt
           +-GroupingSetMultiColumn
             +-column_list=
               +-ColumnRef(type=STRING, column=$groupby.value#5)
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> EXTEND
+     STRUCT< f1 INT64 > (KeyValue.Key).f1 AS f1
+|> AGGREGATE
+     COUNT(*) AS a_1
+   GROUP BY ROLLUP(f1, f1, KeyValue.Value, KeyValue.Value);
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+QueryStmt
++-output_column_list=
+| +-$groupby.f1#5 AS f1 [INT64]
+| +-$groupby.Value#6 AS Value [STRING]
+| +-$aggregate.a_1#4 AS a_1 [INT64]
++-query=
+  +-AggregateScan
+    +-column_list=[$groupby.f1#5, $groupby.Value#6, $aggregate.a_1#4]
+    +-input_scan=
+    | +-ProjectScan
+    |   +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_extend.f1#3]
+    |   +-expr_list=
+    |   | +-f1#3 :=
+    |   |   +-GetStructField
+    |   |     +-type=INT64
+    |   |     +-expr=
+    |   |     | +-MakeStruct
+    |   |     |   +-type=STRUCT<f1 INT64>
+    |   |     |   +-field_list=
+    |   |     |     +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |   |     +-field_idx=0
+    |   +-input_scan=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-group_by_list=
+    | +-f1#5 := ColumnRef(type=INT64, column=$pipe_extend.f1#3)
+    | +-Value#6 := ColumnRef(type=STRING, column=KeyValue.Value#2)
+    +-aggregate_list=
+    | +-a_1#4 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+    +-grouping_set_list=
+      +-Rollup
+        +-rollup_column_list=
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#5)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#5)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=STRING, column=$groupby.Value#6)
+          +-GroupingSetMultiColumn
+            +-column_list=
+              +-ColumnRef(type=STRING, column=$groupby.Value#6)
 --
 ALTERNATION GROUP: ,+MATCH_MAKE_STRUCT_IN_GROUP_BY,CUBE
 --
@@ -2192,6 +2614,63 @@ QueryStmt
           +-GroupingSetMultiColumn
             +-column_list=
               +-ColumnRef(type=STRING, column=$groupby.value#5)
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> EXTEND
+     STRUCT< f1 INT64 > (KeyValue.Key).f1 AS f1
+|> AGGREGATE
+     COUNT(*) AS a_1
+   GROUP BY CUBE(f1, f1, KeyValue.Value, KeyValue.Value);
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+QueryStmt
++-output_column_list=
+| +-$groupby.f1#5 AS f1 [INT64]
+| +-$groupby.Value#6 AS Value [STRING]
+| +-$aggregate.a_1#4 AS a_1 [INT64]
++-query=
+  +-AggregateScan
+    +-column_list=[$groupby.f1#5, $groupby.Value#6, $aggregate.a_1#4]
+    +-input_scan=
+    | +-ProjectScan
+    |   +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_extend.f1#3]
+    |   +-expr_list=
+    |   | +-f1#3 :=
+    |   |   +-GetStructField
+    |   |     +-type=INT64
+    |   |     +-expr=
+    |   |     | +-MakeStruct
+    |   |     |   +-type=STRUCT<f1 INT64>
+    |   |     |   +-field_list=
+    |   |     |     +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |   |     +-field_idx=0
+    |   +-input_scan=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-group_by_list=
+    | +-f1#5 := ColumnRef(type=INT64, column=$pipe_extend.f1#3)
+    | +-Value#6 := ColumnRef(type=STRING, column=KeyValue.Value#2)
+    +-aggregate_list=
+    | +-a_1#4 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+    +-grouping_set_list=
+      +-Cube
+        +-cube_column_list=
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#5)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=INT64, column=$groupby.f1#5)
+          +-GroupingSetMultiColumn
+          | +-column_list=
+          |   +-ColumnRef(type=STRING, column=$groupby.Value#6)
+          +-GroupingSetMultiColumn
+            +-column_list=
+              +-ColumnRef(type=STRING, column=$groupby.Value#6)
 --
 ALTERNATION GROUP: ,+MATCH_MAKE_STRUCT_IN_GROUP_BY,GROUPING SETS
 --
@@ -2231,6 +2710,61 @@ QueryStmt
       +-GroupingSet
         +-group_by_column_list=
           +-ColumnRef(type=STRING, column=$groupby.value#5)
+
+[SQLBUILDER_OUTPUT]
+FROM
+  KeyValue
+|> EXTEND
+     STRUCT< f1 INT64 > (KeyValue.Key).f1 AS f1
+|> AGGREGATE
+     COUNT(*) AS a_1
+   GROUP BY GROUPING SETS(f1, f1, KeyValue.Value, KeyValue.Value);
+
+[SQLBUILDER_RESOLVED_AST_SHAPE]
+* Resolved tree of SQLBuilder output does not have the same shape as the original resolved tree
+
+[SQLBUILDER_RESOLVED_AST]
+QueryStmt
++-output_column_list=
+| +-$groupby.f1#5 AS f1 [INT64]
+| +-$groupby.Value#6 AS Value [STRING]
+| +-$aggregate.a_1#4 AS a_1 [INT64]
++-query=
+  +-AggregateScan
+    +-column_list=[$groupby.f1#5, $groupby.Value#6, $aggregate.a_1#4]
+    +-input_scan=
+    | +-ProjectScan
+    |   +-column_list=[KeyValue.Key#1, KeyValue.Value#2, $pipe_extend.f1#3]
+    |   +-expr_list=
+    |   | +-f1#3 :=
+    |   |   +-GetStructField
+    |   |     +-type=INT64
+    |   |     +-expr=
+    |   |     | +-MakeStruct
+    |   |     |   +-type=STRUCT<f1 INT64>
+    |   |     |   +-field_list=
+    |   |     |     +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |   |     +-field_idx=0
+    |   +-input_scan=
+    |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    +-group_by_list=
+    | +-f1#5 := ColumnRef(type=INT64, column=$pipe_extend.f1#3)
+    | +-Value#6 := ColumnRef(type=STRING, column=KeyValue.Value#2)
+    +-aggregate_list=
+    | +-a_1#4 := AggregateFunctionCall(GoogleSQL:$count_star() -> INT64)
+    +-grouping_set_list=
+      +-GroupingSet
+      | +-group_by_column_list=
+      |   +-ColumnRef(type=INT64, column=$groupby.f1#5)
+      +-GroupingSet
+      | +-group_by_column_list=
+      |   +-ColumnRef(type=INT64, column=$groupby.f1#5)
+      +-GroupingSet
+      | +-group_by_column_list=
+      |   +-ColumnRef(type=STRING, column=$groupby.Value#6)
+      +-GroupingSet
+        +-group_by_column_list=
+          +-ColumnRef(type=STRING, column=$groupby.Value#6)
 ==
 
 # Equivalent expressions in non-grouping sets queries won't be deduplicated.

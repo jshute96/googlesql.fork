@@ -135,7 +135,8 @@ bool ExecuteQueryWebHandler::HandleRequest(
   }
 
   mstch::map template_params = {{"query", request.query()},
-                                {"css", templates_.GetWebPageCSS()}};
+                                {"css", templates_.GetWebPageCSS()},
+                                {"js", templates_.GetWebPageJS()}};
 
   // Determine selected values for UI from request, with fallback to config
   std::string selected_catalog = request.catalog();

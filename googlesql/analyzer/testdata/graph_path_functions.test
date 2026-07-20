@@ -101,16 +101,19 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      a_2 = (a_3 IS (% | ! %))
+      p = (a IS (% | ! %))
     LET
-      a_4 = PATH(a_3)
+      q = PATH(a)
     LET
-      a_5 = a_2 || a_4
+      concatted = p || q
     RETURN
-      PATH_LENGTH(a_5) AS a_6
+      PATH_LENGTH(concatted) AS len
   ) AS aml_1
 |> SELECT
-     aml_1.a_6 AS len;
+     aml_1.len
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.len;
 
 ==
 

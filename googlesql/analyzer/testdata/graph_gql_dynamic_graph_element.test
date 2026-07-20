@@ -88,12 +88,15 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED Person AS a_3
+      n IS LABELED Person AS is_person
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS is_person;
+     aml_1.is_person
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_person;
 ==
 
 # Static label in IS LABELED predicate in a dynamic element table
@@ -199,12 +202,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED Entity AS a_3
+      n IS LABELED Entity AS is_static_label_entity
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_static_label_entity;
+     aml_dynamic_1.is_static_label_entity
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_static_label_entity;
 --
 ALTERNATION GROUP: ,+SQL_GRAPH_DYNAMIC_LABEL_PROPERTIES_IN_DDL,+SQL_GRAPH_DYNAMIC_ELEMENT_TYPE,+SQL_GRAPH_DYNAMIC_MULTI_LABEL_NODES,aml_dynamic_multi
 --
@@ -283,12 +289,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED Entity AS a_3
+      n IS LABELED Entity AS is_static_label_entity
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_static_label_entity;
+     aml_dynamic_multi_1.is_static_label_entity
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_static_label_entity;
 ==
 
 # Dynamic label in IS LABELED predicate in a dynamic element table
@@ -392,12 +401,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED DynamicLabelUnknown AS a_3
+      n IS LABELED DynamicLabelUnknown AS a_2
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_dynamic_label_unknown;
+     aml_dynamic_1.a_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.a_2 AS is_dynamic_label_unknown;
 --
 ALTERNATION GROUP: ,+SQL_GRAPH_DYNAMIC_LABEL_PROPERTIES_IN_DDL,+SQL_GRAPH_DYNAMIC_ELEMENT_TYPE,+SQL_GRAPH_DYNAMIC_MULTI_LABEL_NODES,aml_dynamic_multi
 --
@@ -474,12 +486,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED DynamicLabelUnknown AS a_3
+      n IS LABELED DynamicLabelUnknown AS a_2
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_dynamic_label_unknown;
+     aml_dynamic_multi_1.a_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.a_2 AS is_dynamic_label_unknown;
 ==
 
 # Mixing up static and dynamic label in IS LABELED predicate with OR.
@@ -573,12 +588,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown | Entity) AS a_3
+      n IS LABELED(DynamicLabelUnknown | Entity) AS is_or_label
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_or_label;
+     aml_dynamic_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -664,12 +682,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown | Entity) AS a_3
+      n IS LABELED(DynamicLabelUnknown | Entity) AS is_or_label
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_or_label;
+     aml_dynamic_multi_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 ==
 
 # Mixing up static and dynamic label in IS LABELED predicate with AND.
@@ -763,12 +784,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown & Entity) AS a_3
+      n IS LABELED(DynamicLabelUnknown & Entity) AS is_or_label
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_or_label;
+     aml_dynamic_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -854,12 +878,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown & Entity) AS a_3
+      n IS LABELED(DynamicLabelUnknown & Entity) AS is_or_label
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_or_label;
+     aml_dynamic_multi_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 ==
 
 # Mixing up static and dynamic label in IS LABELED predicate
@@ -949,12 +976,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(% | DynamicLabelUnknown) AS a_3
+      n IS LABELED(% | DynamicLabelUnknown) AS is_or_label
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_or_label;
+     aml_dynamic_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic,Entity
 --
@@ -1040,12 +1070,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(Entity | DynamicLabelUnknown) AS a_3
+      n IS LABELED(Entity | DynamicLabelUnknown) AS is_or_label
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_or_label;
+     aml_dynamic_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic_multi,%
 --
@@ -1127,12 +1160,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(% | DynamicLabelUnknown) AS a_3
+      n IS LABELED(% | DynamicLabelUnknown) AS is_or_label
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_or_label;
+     aml_dynamic_multi_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic_multi,Entity
 --
@@ -1218,12 +1254,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(Entity | DynamicLabelUnknown) AS a_3
+      n IS LABELED(Entity | DynamicLabelUnknown) AS is_or_label
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_or_label;
+     aml_dynamic_multi_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 ==
 
 # Mixing up static and dynamic label in IS LABELED predicate, but in a different
@@ -1314,12 +1353,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown | %) AS a_3
+      n IS LABELED(DynamicLabelUnknown | %) AS is_or_label
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_or_label;
+     aml_dynamic_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic,Entity
 --
@@ -1405,12 +1447,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown | Entity) AS a_3
+      n IS LABELED(DynamicLabelUnknown | Entity) AS is_or_label
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_or_label;
+     aml_dynamic_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic_multi,%
 --
@@ -1492,12 +1537,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown | %) AS a_3
+      n IS LABELED(DynamicLabelUnknown | %) AS is_or_label
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_or_label;
+     aml_dynamic_multi_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 --
 ALTERNATION GROUP: aml_dynamic_multi,Entity
 --
@@ -1583,12 +1631,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown | Entity) AS a_3
+      n IS LABELED(DynamicLabelUnknown | Entity) AS is_or_label
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_or_label;
+     aml_dynamic_multi_1.is_or_label
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.is_or_label;
 ==
 
 # Mixing up different dynamic labels in IS LABELED predicate
@@ -1691,12 +1742,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)) AS a_3
+      n IS LABELED(DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)) AS a_2
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS is_complex_dynamic_label;
+     aml_dynamic_1.a_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.a_2 AS is_complex_dynamic_label;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -1791,12 +1845,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      a_2 IS LABELED(DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)) AS a_3
+      n IS LABELED(DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)) AS a_2
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS is_complex_dynamic_label;
+     aml_dynamic_multi_1.a_2
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.a_2 AS is_complex_dynamic_label;
 ==
 
 ###############################################################################
@@ -1878,12 +1935,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS ! Dynamic1)
+      (n IS ! Dynamic1)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 --
 ALTERNATION GROUP: aml_dynamic,!,DynamicGraphNode
 --
@@ -1953,12 +2013,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS ! DynamicGraphNode)
+      (n IS ! DynamicGraphNode)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 --
 ALTERNATION GROUP: aml_dynamic,,Dynamic1
 --
@@ -2022,12 +2085,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS Dynamic1)
+      (n IS Dynamic1)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 --
 ALTERNATION GROUP: aml_dynamic,,DynamicGraphNode
 --
@@ -2093,12 +2159,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicGraphNode)
+      (n IS DynamicGraphNode)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,!,Dynamic1
 --
@@ -2166,12 +2235,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS ! Dynamic1)
+      (n IS ! Dynamic1)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,!,DynamicGraphNode
 --
@@ -2239,12 +2311,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS ! DynamicGraphNode)
+      (n IS ! DynamicGraphNode)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,,Dynamic1
 --
@@ -2308,12 +2383,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS Dynamic1)
+      (n IS Dynamic1)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,,DynamicGraphNode
 --
@@ -2377,12 +2455,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicGraphNode)
+      (n IS DynamicGraphNode)
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 ==
 
 select gt.* from
@@ -2485,13 +2566,16 @@ FROM
     aml_dynamic
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS ! Dynamic1]->
-      (a_4 IS (% | ! %))
+      -[e IS ! Dynamic1]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 --
 ALTERNATION GROUP: aml_dynamic,!,DynamicGraphEdge
 --
@@ -2589,13 +2673,16 @@ FROM
     aml_dynamic
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS ! DynamicGraphEdge]->
-      (a_4 IS (% | ! %))
+      -[e IS ! DynamicGraphEdge]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 --
 ALTERNATION GROUP: aml_dynamic,,Dynamic1
 --
@@ -2687,13 +2774,16 @@ FROM
     aml_dynamic
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS Dynamic1]->
-      (a_4 IS (% | ! %))
+      -[e IS Dynamic1]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 --
 ALTERNATION GROUP: aml_dynamic,,DynamicGraphEdge
 --
@@ -2787,13 +2877,16 @@ FROM
     aml_dynamic
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS DynamicGraphEdge]->
-      (a_4 IS (% | ! %))
+      -[e IS DynamicGraphEdge]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS one;
+     aml_dynamic_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,!,Dynamic1
 --
@@ -2889,13 +2982,16 @@ FROM
     aml_dynamic_multi
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS ! Dynamic1]->
-      (a_4 IS (% | ! %))
+      -[e IS ! Dynamic1]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_5 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,!,DynamicGraphEdge
 --
@@ -2991,13 +3087,16 @@ FROM
     aml_dynamic_multi
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS ! DynamicGraphEdge]->
-      (a_4 IS (% | ! %))
+      -[e IS ! DynamicGraphEdge]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_5 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,,Dynamic1
 --
@@ -3089,13 +3188,16 @@ FROM
     aml_dynamic_multi
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS Dynamic1]->
-      (a_4 IS (% | ! %))
+      -[e IS Dynamic1]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_5 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 --
 ALTERNATION GROUP: aml_dynamic_multi,,DynamicGraphEdge
 --
@@ -3187,13 +3289,16 @@ FROM
     aml_dynamic_multi
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS DynamicGraphEdge]->
-      (a_4 IS (% | ! %))
+      -[e IS DynamicGraphEdge]->
+      (a_3 IS (% | ! %))
     RETURN
-      1 AS a_5
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_5 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.one;
 ==
 
 # Mixing up different dynamic labels in label expression filter
@@ -3290,12 +3395,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
+      (n IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS entity_code;
+     aml_dynamic_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 --
 ALTERNATION GROUP: aml_dynamic,IS
 --
@@ -3384,12 +3492,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
+      (n IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS entity_code;
+     aml_dynamic_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,:
 --
@@ -3478,12 +3589,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
+      (n IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS entity_code;
+     aml_dynamic_multi_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,IS
 --
@@ -3572,12 +3686,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
+      (n IS (DynamicLabelUnknown |(Dynamic1 & ! Dynamic2)))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS entity_code;
+     aml_dynamic_multi_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 ==
 
 # Mixing up static and dynamic label in label expression filter
@@ -3662,12 +3779,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (DynamicLabelUnknown | %))
+      (n IS (DynamicLabelUnknown | %))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS entity_code;
+     aml_dynamic_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 --
 ALTERNATION GROUP: aml_dynamic,Entity
 --
@@ -3747,12 +3867,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (DynamicLabelUnknown | Entity))
+      (n IS (DynamicLabelUnknown | Entity))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS entity_code;
+     aml_dynamic_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,%
 --
@@ -3828,12 +3951,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (DynamicLabelUnknown | %))
+      (n IS (DynamicLabelUnknown | %))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS entity_code;
+     aml_dynamic_multi_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,Entity
 --
@@ -3913,12 +4039,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (DynamicLabelUnknown | Entity))
+      (n IS (DynamicLabelUnknown | Entity))
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS entity_code;
+     aml_dynamic_multi_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 ==
 
 ###############################################################################
@@ -4013,14 +4142,17 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person
+      (n IS Person
       WHERE
-        (a_2.age) = CAST(10 AS UINT32))
+        (n.age) = CAST(10 AS UINT32))
     RETURN
-      a_2.age AS a_3
+      n.age AS person_age
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS person_age;
+     aml_1.person_age
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.person_age;
 ==
 
 # Static property specification in a dynamic element table
@@ -4113,14 +4245,17 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS Entity
+      (n IS Entity
       WHERE
-        (a_2.code) = 10)
+        (n.code) = 10)
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS entity_code;
+     aml_dynamic_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -4205,14 +4340,17 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS Entity
+      (n IS Entity
       WHERE
-        (a_2.code) = 10)
+        (n.code) = 10)
     RETURN
-      a_2.code AS a_3
+      n.code AS entity_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS entity_code;
+     aml_dynamic_multi_1.entity_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.entity_code;
 ==
 
 # Dynamic property specification on a non-dynamic graph element
@@ -4301,12 +4439,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS ! DynamicGraphNode { dynamic_property1 : 10 })
+      (n IS ! DynamicGraphNode { dynamic_property1 : 10 })
     RETURN
-      1 AS a_3
+      1 AS one
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS one;
+     aml_dynamic_multi_1.one
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.one;
 ==
 
 # Dynamic property specification in a dynamic element table with a matching
@@ -4391,12 +4532,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_bool
 --
@@ -4472,12 +4616,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_bool })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_bool })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_int32
 --
@@ -4553,12 +4700,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_int32 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_int32 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,CAST(10 AS UINT64)
 --
@@ -4634,12 +4784,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64) })
+      (n IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64) })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_float
 --
@@ -4715,12 +4868,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_float })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_float })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_double
 --
@@ -4796,12 +4952,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_double })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_double })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,"abc"
 --
@@ -4877,12 +5036,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : "abc" })
+      (n IS DynamicLabel1 { dynamic_property1 : "abc" })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,10
 --
@@ -4958,12 +5120,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_bool
 --
@@ -5039,12 +5204,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_bool })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_bool })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_int32
 --
@@ -5120,12 +5288,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_int32 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_int32 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,CAST(10 AS UINT64)
 --
@@ -5201,12 +5372,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64) })
+      (n IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64) })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_float
 --
@@ -5282,12 +5456,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_float })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_float })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_double
 --
@@ -5363,12 +5540,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_double })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_double })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,"abc"
 --
@@ -5444,12 +5624,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : "abc" })
+      (n IS DynamicLabel1 { dynamic_property1 : "abc" })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 ==
 
 # Grouping on dynamic property of node. Regression test for b/408015891
@@ -5534,15 +5717,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1)
+      (n IS DynamicLabel1)
     RETURN
-      a_2.dynamic_property1 AS a_3,
-      COUNT(*) AS a_4
-    GROUP BY a_3
+      n.dynamic_property1 AS dynamic_property1,
+      COUNT(*) AS total
+    GROUP BY dynamic_property1
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_property1,
-     aml_dynamic_1.a_4 AS total;
+     aml_dynamic_1.dynamic_property1,
+     aml_dynamic_1.total;
 --
 ALTERNATION GROUPS:
     -[n:DynamicLabel1]->,
@@ -5648,16 +5831,16 @@ FROM
     aml_dynamic
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS DynamicLabel1]->
-      (a_4 IS (% | ! %))
+      -[n IS DynamicLabel1]->
+      (a_3 IS (% | ! %))
     RETURN
-      a_3.dynamic_property1 AS a_5,
-      COUNT(*) AS a_6
-    GROUP BY a_5
+      n.dynamic_property1 AS dynamic_property1,
+      COUNT(*) AS total
+    GROUP BY dynamic_property1
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS dynamic_property1,
-     aml_dynamic_1.a_6 AS total;
+     aml_dynamic_1.dynamic_property1,
+     aml_dynamic_1.total;
 ==
 
 # Order by dynamic property. Regression test for b/408015891.
@@ -5752,13 +5935,13 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1)
+      (n IS DynamicLabel1)
     RETURN
-      a_2.dynamic_property1 AS a_3
-    ORDER BY a_2.dynamic_property1
+      n.dynamic_property1 AS dynamic_property1
+    ORDER BY n.dynamic_property1
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_property1;
+     aml_dynamic_1.dynamic_property1;
 --
 ALTERNATION GROUP: (n:DynamicLabel1),GROUP BY n.dynamic_property1
 --
@@ -5839,13 +6022,13 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1)
+      (n IS DynamicLabel1)
     RETURN DISTINCT
-      a_2.dynamic_property1 AS a_3
-    ORDER BY a_3
+      n.dynamic_property1 AS dynamic_property1
+    ORDER BY dynamic_property1
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_property1;
+     aml_dynamic_1.dynamic_property1;
 --
 ALTERNATION GROUP: -[n:DynamicLabel1]->,
 --
@@ -5960,14 +6143,14 @@ FROM
     aml_dynamic
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS DynamicLabel1]->
-      (a_4 IS (% | ! %))
+      -[n IS DynamicLabel1]->
+      (a_3 IS (% | ! %))
     RETURN
-      a_3.dynamic_property1 AS a_5
-    ORDER BY a_3.dynamic_property1
+      n.dynamic_property1 AS dynamic_property1
+    ORDER BY n.dynamic_property1
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS dynamic_property1;
+     aml_dynamic_1.dynamic_property1;
 --
 ALTERNATION GROUP: -[n:DynamicLabel1]->,GROUP BY n.dynamic_property1
 --
@@ -6076,14 +6259,14 @@ FROM
     aml_dynamic
     MATCH
       (a_2 IS (% | ! %))
-      -[a_3 IS DynamicLabel1]->
-      (a_4 IS (% | ! %))
+      -[n IS DynamicLabel1]->
+      (a_3 IS (% | ! %))
     RETURN DISTINCT
-      a_3.dynamic_property1 AS a_5
-    ORDER BY a_5
+      n.dynamic_property1 AS dynamic_property1
+    ORDER BY dynamic_property1
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS dynamic_property1;
+     aml_dynamic_1.dynamic_property1;
 ==
 
 # Dynamic property specification in a dynamic element table with an unexpected
@@ -6191,12 +6374,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : 10, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : 10, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_bool
 --
@@ -6282,12 +6468,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_bool, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_bool, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_int32
 --
@@ -6373,12 +6562,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_int32, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_int32, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,CAST(10 AS UINT64)
 --
@@ -6464,12 +6656,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64), code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64), code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_float
 --
@@ -6555,12 +6750,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_float, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_float, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,@test_param_double
 --
@@ -6646,12 +6844,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_double, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_double, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic,"abc"
 --
@@ -6737,12 +6938,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : "abc", code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : "abc", code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,10
 --
@@ -6828,12 +7032,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : 10, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : 10, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_bool
 --
@@ -6919,12 +7126,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_bool, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_bool, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_int32
 --
@@ -7010,12 +7220,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_int32, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_int32, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,CAST(10 AS UINT64)
 --
@@ -7101,12 +7314,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64), code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : CAST(10 AS UINT64), code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_float
 --
@@ -7192,12 +7408,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_float, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_float, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,@test_param_double
 --
@@ -7283,12 +7502,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : @test_param_double, code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : @test_param_double, code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi,"abc"
 --
@@ -7374,12 +7596,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1 { dynamic_property1 : "abc", code : 10 })
+      (n IS DynamicLabel1 { dynamic_property1 : "abc", code : 10 })
     RETURN
-      a_2.code AS a_3
+      n.code AS dynamic_labeled_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labeled_code;
+     aml_dynamic_multi_1.dynamic_labeled_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labeled_code;
 ==
 
 # Dynamic property access in a dynamic element table
@@ -7457,12 +7682,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS DynamicLabel1)
+      (n IS DynamicLabel1)
     RETURN
-      a_2.dynamic_property1 AS a_3
+      n.dynamic_property1 AS dynamic_property1
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_property1;
+     aml_dynamic_1.dynamic_property1
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_property1;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -7532,12 +7760,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS DynamicLabel1)
+      (n IS DynamicLabel1)
     RETURN
-      a_2.dynamic_property1 AS a_3
+      n.dynamic_property1 AS dynamic_property1
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_property1;
+     aml_dynamic_multi_1.dynamic_property1
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_property1;
 ==
 
 ###############################################################################
@@ -7652,21 +7883,28 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (n IS Person)
     COLUMNS(
-      a_2.age AS a_3,
-      a_2.birthday AS a_4,
-      a_2.data AS a_5,
-      a_2.id AS a_6,
-      a_2.name AS a_7
+      n.age AS age,
+      n.birthday AS birthday,
+      n.data AS data,
+      n.id AS id,
+      n.name AS name
     )
   ) AS aml_1
 |> SELECT
-     aml_1.a_3 AS age,
-     aml_1.a_4 AS birthday,
-     aml_1.a_5 AS data,
-     aml_1.a_6 AS id,
-     aml_1.a_7 AS name;
+     aml_1.age,
+     aml_1.birthday,
+     aml_1.data,
+     aml_1.id,
+     aml_1.name
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.age,
+     graphtablescan_2.birthday,
+     graphtablescan_2.data,
+     graphtablescan_2.id,
+     graphtablescan_2.name;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_DYNAMIC_ELEMENT_TYPE,+SQL_GRAPH_EXPOSE_GRAPH_ELEMENT]
@@ -7770,14 +8008,14 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS Person)
+      (n IS Person)
   ) AS aml_1
 |> SELECT
-     a_2.age AS age,
-     a_2.birthday AS birthday,
-     a_2.data AS data,
-     a_2.id AS id,
-     a_2.name AS name;
+     n.age,
+     n.birthday,
+     n.data,
+     n.id,
+     n.name;
 ==
 
 # Dot star property expansion on a dynamic graph element in select clause
@@ -7888,12 +8126,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %) { dynamic_property1 : 10 })
+      (n IS (% | ! %) { dynamic_property1 : 10 })
     RETURN
-      LABELS(a_2) AS a_3
+      LABELS(n) AS dynamic_labels
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS dynamic_labels;
+     aml_dynamic_1.dynamic_labels
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labels;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -7969,12 +8210,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %) { dynamic_property1 : 10 })
+      (n IS (% | ! %) { dynamic_property1 : 10 })
     RETURN
-      LABELS(a_2) AS a_3
+      LABELS(n) AS dynamic_labels
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS dynamic_labels;
+     aml_dynamic_multi_1.dynamic_labels
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.dynamic_labels;
 ==
 
 ###############################################################################
@@ -8057,12 +8301,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      PROPERTY_EXISTS(a_2, code) AS a_3
+      PROPERTY_EXISTS(n, code) AS has_property_code
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS has_property_code;
+     aml_dynamic_1.has_property_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.has_property_code;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -8134,12 +8381,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      PROPERTY_EXISTS(a_2, code) AS a_3
+      PROPERTY_EXISTS(n, code) AS has_property_code
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS has_property_code;
+     aml_dynamic_multi_1.has_property_code
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.has_property_code;
 ==
 
 # Undeclared dynamic property used with a dynamic graph element in PROPERTY_EXISTS
@@ -8219,12 +8469,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      PROPERTY_EXISTS(a_2, dynamic_property1) AS a_3
+      PROPERTY_EXISTS(n, dynamic_property1) AS v
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_3 AS v;
+     aml_dynamic_1.v
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.v;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -8296,12 +8549,15 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
-      (a_2 IS (% | ! %))
+      (n IS (% | ! %))
     RETURN
-      PROPERTY_EXISTS(a_2, dynamic_property1) AS a_3
+      PROPERTY_EXISTS(n, dynamic_property1) AS v
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_3 AS v;
+     aml_dynamic_multi_1.v
+|> AS graphtablescan_2
+|> SELECT
+     graphtablescan_2.v;
 ==
 
 ###############################################################################
@@ -8414,16 +8670,20 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN
-      PROPERTY_NAMES(a_2) AS a_5,
-      PROPERTY_NAMES(a_3) AS a_6
+      PROPERTY_NAMES(n) AS node_properties,
+      PROPERTY_NAMES(e) AS edge_properties
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS node_properties,
-     aml_1.a_6 AS edge_properties;
+     aml_1.node_properties,
+     aml_1.edge_properties
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_properties,
+     graphtablescan_3.edge_properties;
 ==
 
 # Dynamic graph element
@@ -8535,16 +8795,20 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN
-      PROPERTY_NAMES(a_2) AS a_5,
-      PROPERTY_NAMES(a_3) AS a_6
+      PROPERTY_NAMES(n) AS node_properties,
+      PROPERTY_NAMES(e) AS edge_properties
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS node_properties,
-     aml_dynamic_1.a_6 AS edge_properties;
+     aml_dynamic_1.node_properties,
+     aml_dynamic_1.edge_properties
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_properties,
+     graphtablescan_3.edge_properties;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -8648,16 +8912,20 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN
-      PROPERTY_NAMES(a_2) AS a_5,
-      PROPERTY_NAMES(a_3) AS a_6
+      PROPERTY_NAMES(n) AS node_properties,
+      PROPERTY_NAMES(e) AS edge_properties
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_5 AS node_properties,
-     aml_dynamic_multi_1.a_6 AS edge_properties;
+     aml_dynamic_multi_1.node_properties,
+     aml_dynamic_multi_1.edge_properties
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_properties,
+     graphtablescan_3.edge_properties;
 ==
 
 ###############################################################################
@@ -8775,16 +9043,20 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN
-      TO_JSON(a_2, stringify_wide_numbers  => false) AS a_5,
-      TO_JSON(a_3, stringify_wide_numbers  => false) AS a_6
+      TO_JSON(n, stringify_wide_numbers  => false) AS node_json,
+      TO_JSON(e, stringify_wide_numbers  => false) AS edge_json
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS node_json,
-     aml_dynamic_1.a_6 AS edge_json;
+     aml_dynamic_1.node_json,
+     aml_dynamic_1.edge_json
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_json,
+     graphtablescan_3.edge_json;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -8890,16 +9162,20 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN
-      TO_JSON(a_2, stringify_wide_numbers  => false) AS a_5,
-      TO_JSON(a_3, stringify_wide_numbers  => false) AS a_6
+      TO_JSON(n, stringify_wide_numbers  => false) AS node_json,
+      TO_JSON(e, stringify_wide_numbers  => false) AS edge_json
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_5 AS node_json,
-     aml_dynamic_multi_1.a_6 AS edge_json;
+     aml_dynamic_multi_1.node_json,
+     aml_dynamic_multi_1.edge_json
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_json,
+     graphtablescan_3.edge_json;
 ==
 
 ###############################################################################
@@ -9015,16 +9291,20 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN
-      TYPEOF(a_2) AS a_5,
-      TYPEOF(a_3) AS a_6
+      TYPEOF(n) AS node_type,
+      TYPEOF(e) AS edge_type
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS node_type,
-     aml_dynamic_1.a_6 AS edge_type;
+     aml_dynamic_1.node_type,
+     aml_dynamic_1.edge_type
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_type,
+     graphtablescan_3.edge_type;
 --
 ALTERNATION GROUP: aml_dynamic_multi
 --
@@ -9128,16 +9408,20 @@ FROM
   GRAPH_TABLE(
     aml_dynamic_multi
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN
-      TYPEOF(a_2) AS a_5,
-      TYPEOF(a_3) AS a_6
+      TYPEOF(n) AS node_type,
+      TYPEOF(e) AS edge_type
   ) AS aml_dynamic_multi_1
 |> SELECT
-     aml_dynamic_multi_1.a_5 AS node_type,
-     aml_dynamic_multi_1.a_6 AS edge_type;
+     aml_dynamic_multi_1.node_type,
+     aml_dynamic_multi_1.edge_type
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.node_type,
+     graphtablescan_3.edge_type;
 ==
 
 ###############################################################################
@@ -9254,14 +9538,17 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
+      (n IS (% | ! %))
+      -[e IS (% | ! %)]->
       (a_2 IS (% | ! %))
-      -[a_3 IS (% | ! %)]->
-      (a_4 IS (% | ! %))
     RETURN DISTINCT
-      a_2.dynamic_property AS a_5
+      n.dynamic_property AS dynamic_property
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS dynamic_property;
+     aml_dynamic_1.dynamic_property
+|> AS graphtablescan_3
+|> SELECT
+     graphtablescan_3.dynamic_property;
 ==
 
 [language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+SQL_GRAPH_DYNAMIC_ELEMENT_TYPE,+SQL_GRAPH_DYNAMIC_LABEL_PROPERTIES_IN_DDL,+SQL_GRAPH_RETURN_EXTENSIONS]
@@ -9481,26 +9768,26 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
+      (a_2 IS (% | ! %))
+      -[e_2 IS (% | ! %)]->
       (a_3 IS (% | ! %))
-      -[a_4 IS (% | ! %)]->
-      (a_5 IS (% | ! %))
     RETURN
-      a_4 AS a_2
+      e_2 AS e
     UNION ALL
     MATCH
-      (a_6 IS (% | ! %))
-      -[a_7 IS CONNECTION]->
-      (a_8 IS (% | ! %))
+      (a_4 IS (% | ! %))
+      -[e_3 IS CONNECTION]->
+      (a_5 IS (% | ! %))
     RETURN
-      a_7 AS a_2
+      e_3 AS e
     NEXT
     RETURN
-      a_2.category AS a_9,
-      a_2.dynamic_property AS a_10
+      e.category AS cat,
+      e.dynamic_property AS dynamic_property
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_9 AS cat,
-     aml_dynamic_1.a_10 AS dynamic_property;
+     aml_dynamic_1.cat,
+     aml_dynamic_1.dynamic_property;
 ==
 
 # Repro b/406227171
@@ -9650,19 +9937,19 @@ FROM
   GRAPH_TABLE(
     aml_dynamic
     MATCH
-      (a_3 IS (% | ! %))
+      (a_2 IS (% | ! %))
     RETURN
-      a_3 AS a_2
+      a_2 AS a
     UNION ALL
     MATCH
-      (a_4 IS Entity)
+      (a_3 IS Entity)
     RETURN
-      a_4 AS a_2
+      a_3 AS a
     NEXT
     RETURN
-      a_2.code AS a_5,
-      a_2.dynamic_property AS a_6
+      a.code AS code,
+      a.dynamic_property AS dynamic_property
   ) AS aml_dynamic_1
 |> SELECT
-     aml_dynamic_1.a_5 AS code,
-     aml_dynamic_1.a_6 AS dynamic_property;
+     aml_dynamic_1.code,
+     aml_dynamic_1.dynamic_property;

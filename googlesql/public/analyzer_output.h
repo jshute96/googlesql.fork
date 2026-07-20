@@ -29,6 +29,7 @@
 #include "googlesql/parser/parser_runtime_info.h"
 #include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/analyzer_output_properties.h"
+#include "googlesql/public/ast_node_resolved_info.h"
 #include "googlesql/public/id_string.h"
 #include "googlesql/public/language_options.h"
 #include "googlesql/public/options.pb.h"
@@ -163,7 +164,8 @@ class AnalyzerOutput {
       const std::vector<absl::Status>& deprecation_warnings,
       const QueryParametersMap& undeclared_parameters,
       const std::vector<const Type*>& undeclared_positional_parameters,
-      int max_column_id, bool has_graph_references = false);
+      int max_column_id, bool has_graph_references = false,
+      ASTNodeResolvedInfoMap ast_node_resolved_info_map = {});
   AnalyzerOutput(
       std::shared_ptr<IdStringPool> id_string_pool,
       std::shared_ptr<googlesql_base::UnsafeArena> arena,
@@ -173,7 +175,8 @@ class AnalyzerOutput {
       const std::vector<absl::Status>& deprecation_warnings,
       const QueryParametersMap& undeclared_parameters,
       const std::vector<const Type*>& undeclared_positional_parameters,
-      int max_column_id, bool has_graph_references = false);
+      int max_column_id, bool has_graph_references = false,
+      ASTNodeResolvedInfoMap ast_node_resolved_info_map = {});
   AnalyzerOutput(const AnalyzerOutput&) = delete;
   AnalyzerOutput& operator=(const AnalyzerOutput&) = delete;
   ~AnalyzerOutput();
@@ -254,6 +257,17 @@ class AnalyzerOutput {
 
   const AnalyzerRuntimeInfo& runtime_info() const { return runtime_info_; }
 
+  // Returns extra information the resolver learned about particular AST nodes,
+  // beyond what is captured in the resolved AST.  This is intended for query
+  // visualizer and similar tooling.  See ast_node_resolved_info.h.
+  //
+  // The ASTNode keys are owned by the parser output; they remain valid only
+  // while the parser AST is alive (which this AnalyzerOutput may own; see
+  // arena() and the parser_output ownership note above).
+  const ASTNodeResolvedInfoMap& ast_node_resolved_info_map() const {
+    return ast_node_resolved_info_map_;
+  }
+
  private:
   friend class AnalyzerOutputMutator;
 
@@ -286,6 +300,7 @@ class AnalyzerOutput {
   int max_column_id_;
   bool has_graph_references_ = false;
   AnalyzerRuntimeInfo runtime_info_;
+  ASTNodeResolvedInfoMap ast_node_resolved_info_map_;
 };
 }  // namespace googlesql
 

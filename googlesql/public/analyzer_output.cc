@@ -58,7 +58,8 @@ AnalyzerOutput::AnalyzerOutput(
     const std::vector<absl::Status>& deprecation_warnings,
     const QueryParametersMap& undeclared_parameters,
     const std::vector<const Type*>& undeclared_positional_parameters,
-    int max_column_id, bool has_graph_references)
+    int max_column_id, bool has_graph_references,
+    ASTNodeResolvedInfoMap ast_node_resolved_info_map)
     : id_string_pool_(std::move(id_string_pool)),
       arena_(std::move(arena)),
       statement_(std::move(statement)),
@@ -68,7 +69,8 @@ AnalyzerOutput::AnalyzerOutput(
       undeclared_parameters_(undeclared_parameters),
       undeclared_positional_parameters_(undeclared_positional_parameters),
       max_column_id_(max_column_id),
-      has_graph_references_(has_graph_references) {}
+      has_graph_references_(has_graph_references),
+      ast_node_resolved_info_map_(std::move(ast_node_resolved_info_map)) {}
 
 AnalyzerOutput::AnalyzerOutput(
     std::shared_ptr<IdStringPool> id_string_pool,
@@ -79,7 +81,8 @@ AnalyzerOutput::AnalyzerOutput(
     const std::vector<absl::Status>& deprecation_warnings,
     const QueryParametersMap& undeclared_parameters,
     const std::vector<const Type*>& undeclared_positional_parameters,
-    int max_column_id, bool has_graph_references)
+    int max_column_id, bool has_graph_references,
+    ASTNodeResolvedInfoMap ast_node_resolved_info_map)
     : id_string_pool_(std::move(id_string_pool)),
       arena_(std::move(arena)),
       expr_(std::move(expr)),
@@ -89,7 +92,8 @@ AnalyzerOutput::AnalyzerOutput(
       undeclared_parameters_(undeclared_parameters),
       undeclared_positional_parameters_(undeclared_positional_parameters),
       max_column_id_(max_column_id),
-      has_graph_references_(has_graph_references) {}
+      has_graph_references_(has_graph_references),
+      ast_node_resolved_info_map_(std::move(ast_node_resolved_info_map)) {}
 
 AnalyzerOutput::~AnalyzerOutput() = default;
 

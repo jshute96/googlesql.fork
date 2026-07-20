@@ -11605,6 +11605,20 @@ absl::Status Resolver::ResolveFunctionCallWithResolvedArguments(
       resolved_function_call->signature().result_type().original_kind(),
       __SignatureArgumentKind__switch_must_have_a_default__);
 
+  // Record info for query visualizer tooling: the function and its chosen
+  // concrete signature (including the return type).  Only recorded for explicit
+  // `func(...)` calls, not operators/other expressions that route through here.
+  if (ast_location->GetAsOrNull<ASTFunctionCall>() != nullptr) {
+    ASTNodeResolvedInfo& info = ast_node_resolved_info_map_[ast_location];
+    info.node_title = absl::StrCat("Function ", function->SQLName());
+    // The function name is already in the title, so the signature body is just
+    // the argument and return types (avoids odd forms like "COUNT(*)()").
+    info.function_call_info = FunctionCallInfo{
+        .signature = resolved_function_call->signature().DebugString(
+            /*function_name=*/"", /*verbose=*/false),
+    };
+  }
+
   if (function->IsDeprecated()) {
     GOOGLESQL_RETURN_IF_ERROR(AddDeprecationWarning(
         ast_location, DeprecationWarning::DEPRECATED_FUNCTION,

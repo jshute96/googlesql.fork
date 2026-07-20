@@ -64,6 +64,12 @@ class ExecuteQueryConfig {
   ExecuteQueryConfig& operator=(const ExecuteQueryConfig&) = delete;
 
   enum class ToolMode {
+    // Visualize the query: show the input SQL, the Resolved AST (in linear
+    // pipe form), and the SQLBuilder-regenerated SQL side by side, with
+    // correspondence highlighting between them.  Listed first so it is the
+    // first checkbox in the web UI.
+    kVisualize,
+
     // Parse the query, and print a debug string of the parsed AST.
     kParse,
 
@@ -142,6 +148,20 @@ class ExecuteQueryConfig {
   // tables output. If false, ASCII characters (e.g. "+---+") are used.
   void set_use_box_glyphs(bool value) { use_box_glyphs_ = value; }
   bool use_box_glyphs() const { return use_box_glyphs_; }
+
+  // If true, the resolved AST is printed in linear (pipe-style) mode instead
+  // of as a nested tree.
+  void set_linear_resolved_ast(bool value) { linear_resolved_ast_ = value; }
+  bool linear_resolved_ast() const { return linear_resolved_ast_; }
+
+  // If true, the resolved AST is printed both as a nested tree and in linear
+  // (pipe-style) mode, for easy comparison.
+  void set_linear_and_tree_resolved_ast(bool value) {
+    linear_and_tree_resolved_ast_ = value;
+  }
+  bool linear_and_tree_resolved_ast() const {
+    return linear_and_tree_resolved_ast_;
+  }
 
   // Defaults matches AnalyzerOptions default.
   const AnalyzerOptions& analyzer_options() const { return analyzer_options_; }
@@ -276,6 +296,10 @@ class ExecuteQueryConfig {
       SQLBuilder::TargetSyntaxMode::kStandard;
 
   bool use_box_glyphs_ = true;
+
+  bool linear_resolved_ast_ = false;
+
+  bool linear_and_tree_resolved_ast_ = false;
 
   AnalyzerOptions analyzer_options_;
 

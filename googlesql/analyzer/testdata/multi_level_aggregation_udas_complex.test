@@ -170,7 +170,7 @@ RETURNS DOUBLE AS (
   CORR(((CAST(key AS DOUBLE) + (CORR(CAST(key AS DOUBLE), CAST(value2 + (MAX(value1)) AS DOUBLE)
       GROUP BY key, struct_arg.f, value2))) + CAST(struct_arg.f.c AS DOUBLE)) + CAST((
       SELECT
-        key AS a_2
+        key
     ) AS DOUBLE), AVG((((value2 + (MIN(value1))) + (
         SELECT
           key + value2 AS a_1

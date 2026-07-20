@@ -140,12 +140,12 @@ SELECT
   5 AS a_2
 |> AS projectscan_3
 |> SELECT
-     a_1 AS a_1,
-     a_2 AS a_2
+     a_1,
+     a_2
 |> CALL TVF_ONE_RELATION_ARG_WITH_FIXED_OUTPUT() @{ hint = 1 } AS tvfscan_4
 |> SELECT
-     tvfscan_4.column_bool AS column_bool,
-     tvfscan_4.column_bytes AS column_bytes;
+     tvfscan_4.column_bool,
+     tvfscan_4.column_bytes;
 ==
 
 select true
@@ -491,16 +491,16 @@ FROM
     FROM
       KeyValue
     |> SELECT
-         KeyValue.Key AS a_1,
-         KeyValue.Value AS a_2
-    |> AS keyvalue_3
+         KeyValue.Key,
+         KeyValue.Value
+    |> AS keyvalue_1
     |> SELECT
-         a_1 AS Key,
-         a_2 AS Value
-  ), "abc") AS tvfscan_4
+         Key,
+         Value
+  ), "abc") AS tvfscan_2
 |> SELECT
-     tvfscan_4.column_bool AS column_bool,
-     tvfscan_4.column_bytes AS column_bytes;
+     tvfscan_2.column_bool,
+     tvfscan_2.column_bytes;
 ==
 
 # This TVF expects TABLE<int64 `int64`, string `string`> with named columns.
@@ -1693,22 +1693,22 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> SELECT
-     a_1 AS Key,
-     a_2 AS Value
+     Key,
+     Value
 |> CALL TVF_TABLE_OPTIONAL_SCALAR_NAMED_TABLE(10, (
      SELECT
-       20 AS a_4
-     |> AS projectscan_5
+       20 AS a_2
+     |> AS projectscan_3
      |> SELECT
-          a_4 AS a_4
-   )) AS tvfscan_6
+          a_2
+   )) AS tvfscan_4
 |> SELECT
-     tvfscan_6.column_bool AS column_bool,
-     tvfscan_6.column_bytes AS column_bytes;
+     tvfscan_4.column_bool,
+     tvfscan_4.column_bytes;
 ==
 
 # It works to pass the optional table named after the optional scalar.

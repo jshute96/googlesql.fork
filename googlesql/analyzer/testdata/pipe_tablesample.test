@@ -379,20 +379,15 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   TestTable
-|> SELECT
-     TestTable.key AS a_1
-|> AS testtable_2
-|> EXTEND
-     testtable_2.a_1 AS a_3
 |> AGGREGATE
-     COUNT(*) AS a_4
-   GROUP BY a_3
+     COUNT(*) AS c
+   GROUP BY TestTable.key AS key_2
 |> LIMIT 10
-|> AS limitoffsetscan_5
+|> AS limitoffsetscan_1
 |> TABLESAMPLE bernoulli(10 ROWS)
 |> SELECT
-     limitoffsetscan_5.a_3 AS key,
-     limitoffsetscan_5.a_4 AS c;
+     limitoffsetscan_1.key_2 AS key,
+     limitoffsetscan_1.c;
 --
 ALTERNATION GROUP: LIMIT 10, WITH WEIGHT ww
 --
@@ -451,21 +446,16 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   TestTable
-|> SELECT
-     TestTable.key AS a_1
-|> AS testtable_2
-|> EXTEND
-     testtable_2.a_1 AS a_3
 |> AGGREGATE
-     COUNT(*) AS a_4
-   GROUP BY a_3
+     COUNT(*) AS c
+   GROUP BY TestTable.key AS key_2
 |> LIMIT 10
-|> AS limitoffsetscan_5
-|> TABLESAMPLE bernoulli(10 ROWS) WITH WEIGHT AS a_6
+|> AS limitoffsetscan_1
+|> TABLESAMPLE bernoulli(10 ROWS) WITH WEIGHT AS ww
 |> SELECT
-     limitoffsetscan_5.a_3 AS key,
-     limitoffsetscan_5.a_4 AS c,
-     a_6 AS ww;
+     limitoffsetscan_1.key_2 AS key,
+     limitoffsetscan_1.c,
+     ww;
 --
 ALTERNATION GROUP: EXTEND 123,
 --
@@ -528,25 +518,20 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   TestTable
-|> SELECT
-     TestTable.key AS a_1
-|> AS testtable_2
-|> EXTEND
-     testtable_2.a_1 AS a_3
 |> AGGREGATE
-     COUNT(*) AS a_4
-   GROUP BY a_3
-|> AS aggregatescan_5
+     COUNT(*) AS c
+   GROUP BY TestTable.key AS key_2
+|> AS aggregatescan_1
 |> SELECT
-     aggregatescan_5.a_3 AS a_3,
-     aggregatescan_5.a_4 AS a_4,
-     123 AS a_6
-|> AS projectscan_7
+     aggregatescan_1.key_2,
+     aggregatescan_1.c,
+     123 AS a_2
+|> AS projectscan_3
 |> TABLESAMPLE bernoulli(10 ROWS)
 |> SELECT
-     projectscan_7.a_3 AS key,
-     projectscan_7.a_4 AS c,
-     projectscan_7.a_6 AS a_6;
+     projectscan_3.key_2 AS key,
+     projectscan_3.c,
+     projectscan_3.a_2;
 --
 ALTERNATION GROUP: EXTEND 123, WITH WEIGHT ww
 --
@@ -613,23 +598,18 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   TestTable
-|> SELECT
-     TestTable.key AS a_1
-|> AS testtable_2
-|> EXTEND
-     testtable_2.a_1 AS a_3
 |> AGGREGATE
-     COUNT(*) AS a_4
-   GROUP BY a_3
-|> AS aggregatescan_5
+     COUNT(*) AS c
+   GROUP BY TestTable.key AS key_2
+|> AS aggregatescan_1
 |> SELECT
-     aggregatescan_5.a_3 AS a_3,
-     aggregatescan_5.a_4 AS a_4,
-     123 AS a_6
-|> AS projectscan_7
-|> TABLESAMPLE bernoulli(10 ROWS) WITH WEIGHT AS a_8
+     aggregatescan_1.key_2,
+     aggregatescan_1.c,
+     123 AS a_2
+|> AS projectscan_3
+|> TABLESAMPLE bernoulli(10 ROWS) WITH WEIGHT AS ww
 |> SELECT
-     projectscan_7.a_3 AS key,
-     projectscan_7.a_4 AS c,
-     projectscan_7.a_6 AS a_6,
-     a_8 AS ww;
+     projectscan_3.key_2 AS key,
+     projectscan_3.c,
+     projectscan_3.a_2,
+     ww;

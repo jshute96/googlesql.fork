@@ -24,10 +24,18 @@ QueryStmt
 ==
 
 # Other newlines inside multi-line strings.
-select '''abcdef
-ghi''',
-r'''abcdef
-ghi'''
+select '''abc
+
+
+def
+
+ghi''',
+r'''abc
+
+
+def
+
+ghi'''
 --
 QueryStmt
 +-output_column_list=

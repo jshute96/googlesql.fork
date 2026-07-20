@@ -1107,6 +1107,12 @@ absl::Status Resolver::ResolveStatement(
 
   GOOGLESQL_RETURN_IF_ERROR(FinishResolveStatement(statement, stmt.get()));
 
+  // Record info for query visualizer tooling: every statement gets a node
+  // titled with its statement kind. (Statement-specific bodies, e.g. a query
+  // statement's output columns, are added by the specific resolve methods.)
+  ast_node_resolved_info_map_[statement].node_title =
+      statement->GetNodeKindString();
+
   *output = std::move(stmt);
   return absl::OkStatus();
 }
@@ -1204,6 +1210,26 @@ absl::Status Resolver::ResolveQueryStatement(
     *output_stmt = MakeResolvedTerminalQueryStmt(std::move(resolved_scan));
   } else {
     GOOGLESQL_RET_CHECK(*output_name_list != nullptr);
+
+    // Record the output columns for query visualizer tooling.
+    const NameList& output = **output_name_list;
+    StatementInfo stmt_info;
+    stmt_info.is_value_table = output.is_value_table();
+    if (stmt_info.is_value_table) {
+      if (!output.columns().empty()) {
+        stmt_info.value_table_type =
+            output.columns()[0].column().type()->ShortTypeName(product_mode());
+      }
+    } else {
+      for (const NamedColumn& col : output.columns()) {
+        stmt_info.output_columns.push_back(
+            {col.name().ToString(),
+             col.column().type()->ShortTypeName(product_mode())});
+      }
+    }
+    ast_node_resolved_info_map_[query_stmt].statement_info =
+        std::move(stmt_info);
+
     *output_stmt = MakeResolvedQueryStmt(
         MakeOutputColumnList(**output_name_list),
         (*output_name_list)->is_value_table(), std::move(resolved_scan));

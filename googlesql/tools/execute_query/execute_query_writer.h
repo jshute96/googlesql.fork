@@ -26,9 +26,30 @@
 #include "googlesql/resolved_ast/resolved_node.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 
 namespace googlesql {
+
+// Bundle of the three representations rendered by the "visualize" tool mode:
+// the input SQL, the Resolved AST (in linear pipe form), and the
+// SQLBuilder-regenerated SQL.  Plain-text fields are used by text output; the
+// `_html` fields are used by web output and may be empty if rendering failed.
+struct VisualizationData {
+  std::string input_sql;
+  std::string resolved_ast_text;
+  std::string sqlbuilder_sql;
+  // Post-rewrite Resolved AST, populated only when applying the configured
+  // rewriters changes the tree.  Shown as a separate read-only section (it can
+  // be transformed in ways disconnected from the input SQL, so it carries no
+  // cross-pane correspondence).
+  std::string post_rewrite_ast_text;
+
+  std::string input_sql_html;
+  std::string resolved_ast_html;
+  std::string sqlbuilder_sql_html;
+  std::string post_rewrite_ast_html;
+};
 
 class ExecuteQueryWriter {
  public:
@@ -49,6 +70,24 @@ class ExecuteQueryWriter {
   virtual absl::Status parsed(absl::string_view parse_debug_string) {
     return WriteOperationString("parsed", parse_debug_string);
   }
+
+  // Experimental HTML renderings of the SQL with the parse tree expressed as
+  // nested <div> elements: `original_html` preserves the original text
+  // (parser/html_formatter.h); `boxed_html` uses a computed pretty-printed
+  // layout (parser/box_formatter.h). This is deliberately not routed through
+  // WriteOperationString: it is only meaningful in web mode, and the default is
+  // a no-op so other writers ignore it.
+  virtual absl::Status formatted_sql_html(absl::string_view original_html,
+                                          absl::string_view boxed_html) {
+    return absl::OkStatus();
+  }
+
+  // Experimental HTML "query viewer" for analyze mode: the box-formatted query
+  // (parser/box_formatter.h) with per-AST-node resolver info (input/output
+  // NameLists) attached as hover boxes. Web-only; default no-op.
+  virtual absl::Status formatted_analyzed_html(absl::string_view html) {
+    return absl::OkStatus();
+  }
   // Note: This is being abused in some cases to send text directly as output.
   // This doesn't work as expected in web mode.  At most one of those outputs
   // shows up and it goes in the "Unparsed" section.
@@ -66,6 +105,22 @@ class ExecuteQueryWriter {
   }
   virtual absl::Status unanalyze(absl::string_view unanalyze_string) {
     return WriteOperationString("unanalyze", unanalyze_string);
+  }
+
+  // Output for the "visualize" tool mode.  The default (text) rendering prints
+  // the three representations as labeled sections; web mode overrides this to
+  // populate the side-by-side visualizer panes.
+  virtual absl::Status visualized(const VisualizationData& data) {
+    std::string out =
+        absl::StrCat("==== Input SQL ====\n", data.input_sql, "\n\n",
+                     "==== Resolved AST (linear) ====\n",
+                     data.resolved_ast_text, "\n\n",
+                     "==== SQLBuilder SQL ====\n", data.sqlbuilder_sql, "\n");
+    if (!data.post_rewrite_ast_text.empty()) {
+      absl::StrAppend(&out, "\n==== Post-rewrite Resolved AST (linear) ====\n",
+                      data.post_rewrite_ast_text, "\n");
+    }
+    return WriteOperationString("visualized", out);
   }
 
   virtual absl::Status explained(const ResolvedNode& ast,
@@ -128,7 +183,9 @@ absl::Status PrintResults(std::unique_ptr<EvaluatorTableIterator> iter,
 // stream.
 class ExecuteQueryStreamWriter : public ExecuteQueryWriter {
  public:
-  explicit ExecuteQueryStreamWriter(std::ostream&, bool use_box_glyphs = false);
+  explicit ExecuteQueryStreamWriter(std::ostream&, bool use_box_glyphs = false,
+                                    bool linear_resolved_ast = false,
+                                    bool linear_and_tree_resolved_ast = false);
   ExecuteQueryStreamWriter(const ExecuteQueryStreamWriter&) = delete;
   ExecuteQueryStreamWriter& operator=(const ExecuteQueryStreamWriter&) = delete;
 
@@ -158,6 +215,8 @@ class ExecuteQueryStreamWriter : public ExecuteQueryWriter {
  private:
   std::ostream& stream_;
   bool use_box_glyphs_;
+  bool linear_resolved_ast_;
+  bool linear_and_tree_resolved_ast_;
 };
 
 }  // namespace googlesql

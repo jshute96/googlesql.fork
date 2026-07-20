@@ -392,8 +392,8 @@ CREATE TABLE t AS
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS Key,
-     KeyValue.Value AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 ==
 
 
@@ -414,8 +414,8 @@ CREATE TABLE t AS
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS Key,
-     KeyValue.Value AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 ==
 
 # CTAS with redundant column list (same as SELECT output). Expectation: column
@@ -442,8 +442,8 @@ CREATE TABLE t AS
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS Key,
-     KeyValue.Value AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 ==
 
 # CTAS with column list that is different than the output from SELECT - requires
@@ -477,12 +477,12 @@ CREATE TABLE t AS
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS projectscan_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS projectscan_1
 |> SELECT
-     CAST(projectscan_3.a_1 AS INT32) AS Key1,
-     projectscan_3.a_2 AS Value1;
+     CAST(projectscan_1.Key AS INT32) AS Key1,
+     projectscan_1.Value AS Value1;
 ==
 
 # CTAS with column list that has additional information. Expectation: column
@@ -517,8 +517,8 @@ CREATE TABLE t
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS Key,
-     KeyValue.Value AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 ==
 
 # CTAS with both column list and table constraints. Expectation: columns
@@ -566,12 +566,12 @@ CREATE TABLE t
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS projectscan_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS projectscan_1
 |> SELECT
-     CAST(projectscan_3.a_1 AS INT32) AS Key1,
-     projectscan_3.a_2 AS Value1;
+     CAST(projectscan_1.Key AS INT32) AS Key1,
+     projectscan_1.Value AS Value1;
 ==
 
 # CTAS with both column list and table constraints, and some columns have
@@ -619,12 +619,12 @@ CREATE TABLE t
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS projectscan_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS projectscan_1
 |> SELECT
-     CAST(projectscan_3.a_1 AS INT32) AS Key1,
-     projectscan_3.a_2 AS Value1;
+     CAST(projectscan_1.Key AS INT32) AS Key1,
+     projectscan_1.Value AS Value1;
 ==
 
 # CTAS with only table constraints. Expectation: column definitions are printed
@@ -664,8 +664,8 @@ CREATE TABLE t
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS Key,
-     KeyValue.Value AS Value;
+     KeyValue.Key,
+     KeyValue.Value;
 ==
 
 # Create index without storing clause.
@@ -726,14 +726,9 @@ CREATE MATERIALIZED VIEW mv PARTITION BY c1 CLUSTER BY c2 AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.string AS a_2,
-     SimpleTypes.timestamp AS a_3
-|> AS simpletypes_4
-|> SELECT
-     simpletypes_4.a_3 AS c1,
-     simpletypes_4.a_2 AS c2,
-     simpletypes_4.a_1 AS c3;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2,
+     SimpleTypes.int32 AS c3;
 ==
 
 # CMV with PARTITION BY and CLUSTER BY and OPTIONS
@@ -767,14 +762,9 @@ CREATE MATERIALIZED VIEW mv PARTITION BY c1 CLUSTER BY c2 OPTIONS(abc = "xyz") A
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.string AS a_2,
-     SimpleTypes.timestamp AS a_3
-|> AS simpletypes_4
-|> SELECT
-     simpletypes_4.a_3 AS c1,
-     simpletypes_4.a_2 AS c2,
-     simpletypes_4.a_1 AS c3;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2,
+     SimpleTypes.int32 AS c3;
 ==
 
 # CMV with PARTITION BY and CLUSTER BY on computed columns
@@ -808,14 +798,9 @@ CREATE MATERIALIZED VIEW mv PARTITION BY c1 CLUSTER BY c3 AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.string AS a_2,
-     SimpleTypes.timestamp AS a_3
-|> AS simpletypes_4
-|> SELECT
-     TIMESTAMP_ADD(simpletypes_4.a_3, INTERVAL 1 MINUTE) AS c1,
-     simpletypes_4.a_2 AS c2,
-     CAST(simpletypes_4.a_1 AS INT64) + 1 AS c3;
+     TIMESTAMP_ADD(SimpleTypes.timestamp, INTERVAL 1 MINUTE) AS c1,
+     SimpleTypes.string AS c2,
+     CAST(SimpleTypes.int32 AS INT64) + 1 AS c3;
 ==
 
 # CMV with PARTITION BY and CLUSTER BY on computed expressions
@@ -850,14 +835,9 @@ CREATE MATERIALIZED VIEW mv PARTITION BY TIMESTAMP_ADD(c1, INTERVAL 1 MINUTE) CL
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.string AS a_2,
-     SimpleTypes.timestamp AS a_3
-|> AS simpletypes_4
-|> SELECT
-     simpletypes_4.a_3 AS c1,
-     simpletypes_4.a_2 AS c2,
-     simpletypes_4.a_1 AS c3;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2,
+     SimpleTypes.int32 AS c3;
 ==
 
 # CV / CMV without column list
@@ -888,12 +868,8 @@ CREATE VIEW mv AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.timestamp AS a_2
-|> AS simpletypes_3
-|> SELECT
-     simpletypes_3.a_2 AS timestamp,
-     simpletypes_3.a_1 AS string;
+     SimpleTypes.timestamp,
+     SimpleTypes.string;
 --
 ALTERNATION GROUP: materialized
 --
@@ -918,12 +894,8 @@ CREATE MATERIALIZED VIEW mv AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.timestamp AS a_2
-|> AS simpletypes_3
-|> SELECT
-     simpletypes_3.a_2 AS timestamp,
-     simpletypes_3.a_1 AS string;
+     SimpleTypes.timestamp,
+     SimpleTypes.string;
 ==
 
 # CV / CMV with column list
@@ -954,12 +926,8 @@ CREATE VIEW mv(c1, c2) AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.timestamp AS a_2
-|> AS simpletypes_3
-|> SELECT
-     simpletypes_3.a_2 AS c1,
-     simpletypes_3.a_1 AS c2;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2;
 --
 ALTERNATION GROUP: materialized
 --
@@ -984,12 +952,8 @@ CREATE MATERIALIZED VIEW mv(c1, c2) AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.timestamp AS a_2
-|> AS simpletypes_3
-|> SELECT
-     simpletypes_3.a_2 AS c1,
-     simpletypes_3.a_1 AS c2;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2;
 ==
 
 # CV / CMV without column list and explicit column name feature disabled
@@ -1019,12 +983,8 @@ CREATE VIEW mv AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.timestamp AS a_2
-|> AS simpletypes_3
-|> SELECT
-     simpletypes_3.a_2 AS c1,
-     simpletypes_3.a_1 AS c2;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2;
 --
 ALTERNATION GROUP: materialized
 --
@@ -1049,12 +1009,8 @@ CREATE MATERIALIZED VIEW mv AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.timestamp AS a_2
-|> AS simpletypes_3
-|> SELECT
-     simpletypes_3.a_2 AS c1,
-     simpletypes_3.a_1 AS c2;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2;
 ==
 
 # CV / CMV with column list with options
@@ -1087,14 +1043,9 @@ CREATE VIEW tt(c1 OPTIONS(description = "col1"), c2, c3) AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.date AS a_2,
-     SimpleTypes.timestamp AS a_3
-|> AS simpletypes_4
-|> SELECT
-     simpletypes_4.a_3 AS c1,
-     simpletypes_4.a_1 AS c2,
-     simpletypes_4.a_2 AS c3;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2,
+     SimpleTypes.date AS c3;
 --
 ALTERNATION GROUP: materialized
 --
@@ -1121,14 +1072,9 @@ CREATE MATERIALIZED VIEW tt(c1 OPTIONS(description = "col1"), c2, c3) AS
 FROM
   SimpleTypes
 |> SELECT
-     SimpleTypes.string AS a_1,
-     SimpleTypes.date AS a_2,
-     SimpleTypes.timestamp AS a_3
-|> AS simpletypes_4
-|> SELECT
-     simpletypes_4.a_3 AS c1,
-     simpletypes_4.a_1 AS c2,
-     simpletypes_4.a_2 AS c3;
+     SimpleTypes.timestamp AS c1,
+     SimpleTypes.string AS c2,
+     SimpleTypes.date AS c3;
 ==
 
 # CREATE TABLE CLONE
