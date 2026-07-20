@@ -34,10 +34,10 @@
 #include "googlesql/resolved_ast/resolved_node.h"
 #include "googlesql/resolved_ast/resolved_node_kind.pb.h"
 #include "absl/memory/memory.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -204,6 +204,18 @@ absl::StatusOr<bool> IsConstantExpression(const ResolvedExpr* expr) {
       }
       return true;
     }
+    case RESOLVED_MAKE_MAP: {
+      const ResolvedMakeMap* make_map = expr->GetAs<ResolvedMakeMap>();
+      for (const auto& entry : make_map->entry_list()) {
+        GOOGLESQL_ASSIGN_OR_RETURN(bool key_is_const, IsConstantExpression(entry->key()));
+        GOOGLESQL_ASSIGN_OR_RETURN(bool val_is_const,
+                         IsConstantExpression(entry->value()));
+        if (!key_is_const || !val_is_const) {
+          return false;
+        }
+      }
+      return true;
+    }
 
     case RESOLVED_GRAPH_IS_LABELED_PREDICATE:
       // Only the operand needs to be evaluated for constness. The label-expr
@@ -214,6 +226,7 @@ absl::StatusOr<bool> IsConstantExpression(const ResolvedExpr* expr) {
           expr->GetAs<ResolvedGraphIsLabeledPredicate>()->expr());
     case RESOLVED_GRAPH_GET_ELEMENT_PROPERTY:
     case RESOLVED_GRAPH_MAKE_ELEMENT:
+    case RESOLVED_GRAPH_INSERT_ELEMENT:
     // See above reasoning for subquery + aggregation
     case RESOLVED_ARRAY_AGGREGATE:
       return false;
@@ -295,8 +308,12 @@ ExprResolutionInfo::ExprResolutionInfo(
     QueryResolutionInfo* query_resolution_info_in,
     const NameScope* name_scope_in, ExprResolutionInfoOptions options)
     : name_scope(name_scope_in),
-      aggregate_name_scope(name_scope_in),
-      analytic_name_scope(name_scope_in),
+      aggregate_name_scope(options.aggregate_name_scope
+                               ? options.aggregate_name_scope
+                               : name_scope_in),
+      analytic_name_scope(options.analytic_name_scope
+                              ? options.analytic_name_scope
+                              : name_scope_in),
       allows_aggregation(options.allows_aggregation.value_or(false)),
       allows_analytic(options.allows_analytic.value_or(false)),
       is_graph_measure_expression(options.is_graph_measure_expression),
@@ -317,18 +334,6 @@ ExprResolutionInfo::ExprResolutionInfo(
   ABSL_DCHECK(options.name_scope == nullptr)
       << "Pass name_scope in the required argument, not in options";
   Subscribe(name_scope);
-}
-
-ExprResolutionInfo::ExprResolutionInfo(
-    QueryResolutionInfo* query_resolution_info, const NameScope* name_scope_in,
-    const NameScope* aggregate_name_scope_in,
-    const NameScope* analytic_name_scope_in, ExprResolutionInfoOptions options)
-    : ExprResolutionInfo(query_resolution_info, name_scope_in, options) {
-  // Hack because I can't use initializer syntax and a delegated constructor.
-  const_cast<const NameScope*&>(this->aggregate_name_scope) =
-      aggregate_name_scope_in;
-  const_cast<const NameScope*&>(this->analytic_name_scope) =
-      analytic_name_scope_in;
 }
 
 ExprResolutionInfo::ExprResolutionInfo(const NameScope* name_scope_in,
@@ -458,24 +463,6 @@ ExprResolutionInfo::ExprResolutionInfo(ExprResolutionInfo* parent)
       nearest_enclosing_physical_nav_op(
           parent->nearest_enclosing_physical_nav_op) {
   Subscribe(name_scope);
-}
-
-ExprResolutionInfo::ExprResolutionInfo(
-    const NameScope* name_scope_in, const NameScope* aggregate_name_scope_in,
-    const NameScope* analytic_name_scope_in, bool allows_aggregation_in,
-    bool allows_analytic_in, bool use_post_grouping_columns_in,
-    const char* clause_name_in, QueryResolutionInfo* query_resolution_info_in,
-    const ASTExpression* top_level_ast_expr_in, IdString column_alias_in)
-    : ExprResolutionInfo(
-          query_resolution_info_in, name_scope_in, aggregate_name_scope_in,
-          analytic_name_scope_in,
-          {.allows_aggregation = allows_aggregation_in,
-           .allows_analytic = allows_analytic_in,
-           .use_post_grouping_columns = use_post_grouping_columns_in,
-           .clause_name = clause_name_in,
-           .top_level_ast_expr = top_level_ast_expr_in,
-           .column_alias = column_alias_in}) {
-  ABSL_DCHECK(clause_name != nullptr);
 }
 
 ExprResolutionInfo::ExprResolutionInfo(const NameScope* name_scope_in,

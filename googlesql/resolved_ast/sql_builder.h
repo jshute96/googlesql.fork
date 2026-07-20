@@ -428,6 +428,8 @@ class SQLBuilder : public ResolvedASTVisitor {
 
   // Visit methods for types of ResolvedStatement.
   absl::Status VisitResolvedQueryStmt(const ResolvedQueryStmt* node) override;
+  absl::Status VisitResolvedTerminalQueryStmt(
+      const ResolvedTerminalQueryStmt* node) override;
   absl::Status VisitResolvedGeneralizedQueryStmt(
       const ResolvedGeneralizedQueryStmt* node) override;
   absl::Status VisitResolvedMultiStmt(const ResolvedMultiStmt* node) override;
@@ -459,6 +461,8 @@ class SQLBuilder : public ResolvedASTVisitor {
       const ResolvedCreateTableAsSelectStmt* node, bool generate_as_pipe);
   absl::Status VisitResolvedCreateViewStmt(
       const ResolvedCreateViewStmt* node) override;
+  absl::Status VisitResolvedCreateLiveTableStmt(
+      const ResolvedCreateLiveTableStmt* node) override;
   absl::Status VisitResolvedCreateMaterializedViewStmt(
       const ResolvedCreateMaterializedViewStmt* node) override;
   absl::Status VisitResolvedCreateApproxViewStmt(
@@ -582,6 +586,8 @@ class SQLBuilder : public ResolvedASTVisitor {
       const ResolvedExpressionColumn* node) override;
   absl::Status VisitResolvedCatalogColumnRef(
       const ResolvedCatalogColumnRef* node) override;
+  absl::Status VisitResolvedFunctionRef(
+      const ResolvedFunctionRef* node) override;
   absl::Status VisitResolvedLiteral(const ResolvedLiteral* node) override;
   absl::Status VisitResolvedConstant(const ResolvedConstant* node) override;
   absl::Status VisitResolvedFunctionCall(
@@ -593,6 +599,7 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::Status VisitResolvedInlineLambda(
       const ResolvedInlineLambda* node) override;
   absl::Status VisitResolvedSequence(const ResolvedSequence* node) override;
+  absl::Status VisitResolvedModel(const ResolvedModel* node) override;
   absl::Status VisitResolvedGetProtoField(
       const ResolvedGetProtoField* node) override;
   absl::Status VisitResolvedFlatten(const ResolvedFlatten* node) override;
@@ -618,6 +625,9 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::Status VisitResolvedMakeProto(const ResolvedMakeProto* node) override;
   absl::Status VisitResolvedMakeProtoField(
       const ResolvedMakeProtoField* node) override;
+  absl::Status VisitResolvedMakeMap(const ResolvedMakeMap* node) override;
+  absl::Status VisitResolvedMakeMapEntry(
+      const ResolvedMakeMapEntry* node) override;
   absl::Status VisitResolvedMakeStruct(const ResolvedMakeStruct* node) override;
   absl::Status VisitResolvedGetStructField(
       const ResolvedGetStructField* node) override;
@@ -700,8 +710,6 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::Status VisitResolvedPivotScan(const ResolvedPivotScan* node) override;
   absl::Status VisitResolvedUnpivotScan(
       const ResolvedUnpivotScan* node) override;
-  absl::Status VisitResolvedGroupRowsScan(
-      const ResolvedGroupRowsScan* node) override;
   absl::Status VisitResolvedDescribeScan(
       const ResolvedDescribeScan* node) override;
   absl::Status VisitResolvedStaticDescribeScan(
@@ -709,6 +717,7 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::Status VisitResolvedAssertScan(const ResolvedAssertScan* node) override;
   absl::Status VisitResolvedLogScan(const ResolvedLogScan* node) override;
   absl::Status VisitResolvedPipeIfScan(const ResolvedPipeIfScan* node) override;
+  absl::Status VisitResolvedFinishScan(const ResolvedFinishScan* node) override;
   absl::Status VisitResolvedPipeForkScan(
       const ResolvedPipeForkScan* node) override;
   absl::Status VisitResolvedPipeTeeScan(
@@ -729,6 +738,11 @@ class SQLBuilder : public ResolvedASTVisitor {
       const ResolvedSubpipelineStmt* node) override;
   absl::Status VisitResolvedStatementWithPipeOperatorsStmt(
       const ResolvedStatementWithPipeOperatorsStmt* node) override;
+  absl::Status VisitResolvedWithinBoundExpr(
+      const ResolvedWithinBoundExpr* node) override;
+  absl::Status VisitResolvedWithinBounds(
+      const ResolvedWithinBounds* node) override;
+  absl::Status VisitResolvedAlignScan(const ResolvedAlignScan* node) override;
 
   // Visit methods for analytic functions related nodes.
   absl::Status VisitResolvedAnalyticFunctionGroup(
@@ -764,6 +778,8 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::Status VisitResolvedGraphPathScan(
       const ResolvedGraphPathScan* node) override;
   absl::Status VisitResolvedGraphScan(const ResolvedGraphScan* node) override;
+  absl::Status VisitResolvedGraphInsertScan(
+      const ResolvedGraphInsertScan* node) override;
   absl::Status VisitResolvedGraphCallScan(
       const ResolvedGraphCallScan* node) override;
   absl::Status VisitResolvedGraphGetElementProperty(
@@ -777,6 +793,9 @@ class SQLBuilder : public ResolvedASTVisitor {
   absl::Status MakeGraphLabelNaryExpressionString(
       absl::string_view op, const ResolvedGraphLabelNaryExpr* node,
       std::string& output);
+  absl::Status ProcessGraphInsertElementLabelsAndProperties(
+      const ResolvedGraphInsertElement* element, bool is_anonymous_var,
+      std::string& element_filler_sql);
   absl::Status VisitResolvedGraphWildCardLabel(
       const ResolvedGraphWildCardLabel* node) override;
   absl::Status VisitResolvedArrayAggregate(
@@ -847,10 +866,20 @@ class SQLBuilder : public ResolvedASTVisitor {
                                         std::string& output_sql);
   absl::Status ProcessGraphPathPatternQuantifier(
       const ResolvedGraphPathPatternQuantifier* node, std::string& output_sql);
+  // Appends `GRAPH <graph_name> ` to `output_sql`.
+  // If `has_space_before_graph_keyword` is true, prepends a leading space,
+  // resulting in ` GRAPH <graph_name> `.
   void AppendGraphReference(const ResolvedGraphTableScan* node,
+                            bool has_space_before_graph_keyword,
                             std::string& output_sql);
-  absl::Status ProcessResolvedGraphSubquery(const ResolvedGraphTableScan* node,
-                                            std::string& output_sql);
+
+  // Processes a resolver Graph query statement or a nested GQL subquery,
+  // generating GQL string component starting with the graph reference prefix.
+  // If `has_space_before_graph_keyword` is true, prepends a space to the
+  // graph reference keyword.
+  absl::Status ProcessResolvedGraphQuery(const ResolvedGraphTableScan* node,
+                                         bool has_space_before_graph_keyword,
+                                         std::string& output_sql);
 
   // Helper method to process the input project scan in an OrderByScan.
   absl::Status ProcessResolvedGqlProjectScanFromOrderBy(
@@ -1631,7 +1660,7 @@ class SQLBuilder : public ResolvedASTVisitor {
    public:
     PendingColumnsAutoRestorer(
         SQLBuilder& sql_builder,
-        const std::vector<std::unique_ptr<const ResolvedColumnRef>>&
+        absl::Span<const std::unique_ptr<const ResolvedColumnRef>>
             columns_to_expose);
 
     // Destructor restoring the previous state.
@@ -1666,6 +1695,9 @@ class GqlReturnOpSQLBuilder : public SQLBuilder {
       int* max_seen_alias_id, const SQLBuilderOptions& options,
       const CopyableState& state);
 
+  // Returns the aliases for the output columns in the semantic order of
+  // output_column_list_. Assumes that output_column_to_alias_ has a mapping
+  // for all columns in output_column_list_.
   std::vector<std::string> GetOutputColumnAliases();
 
   std::string GetReturnColumnExpr(const ResolvedColumn& column);

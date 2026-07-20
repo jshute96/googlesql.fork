@@ -111,6 +111,7 @@
 #include "googlesql/base/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -126,7 +127,7 @@
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/stl_util.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
+#include "googlesql/base/status_builder.h"
 
 namespace googlesql {
 
@@ -1017,6 +1018,20 @@ absl::Status SQLBuilder::VisitResolvedCatalogColumnRef(
   PushQueryFragment(node, ToIdentifierLiteral(node->column()->Name()));
   return absl::OkStatus();
 }
+
+absl::Status SQLBuilder::VisitResolvedFunctionRef(
+    const ResolvedFunctionRef* node) {
+  // We prepend "FUNCTION " to the unparsed function name because currently
+  // ResolvedFunctionRef is only used to represent UDF lambda parameters,
+  // which require the FUNCTION keyword at the call site.
+  // TODO: If ResolvedFunctionRef is generalized to represent other
+  // function references in the future, this prefix might need to be
+  // conditional.
+  PushQueryFragment(
+      node,
+      absl::StrCat("FUNCTION ", ToIdentifierLiteral(node->function()->Name())));
+  return absl::OkStatus();
+}
 absl::Status SQLBuilder::VisitResolvedLiteral(const ResolvedLiteral* node) {
   GOOGLESQL_ASSIGN_OR_RETURN(
       const std::string result,
@@ -1152,9 +1167,17 @@ absl::Status SQLBuilder::VisitResolvedFunctionCall(
         GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                          ProcessNode(argument->inline_lambda()));
         inputs.push_back(result->GetSQL());
+      } else if (argument->function_ref() != nullptr) {
+        GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                         ProcessNode(argument->function_ref()));
+        inputs.push_back(result->GetSQL());
       } else if (argument->sequence() != nullptr) {
         GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                          ProcessNode(argument->sequence()));
+        inputs.push_back(result->GetSQL());
+      } else if (argument->model() != nullptr) {
+        GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                         ProcessNode(argument->model()));
         inputs.push_back(result->GetSQL());
       } else {
         GOOGLESQL_RET_CHECK_FAIL() << "Unexpected function call argument: "
@@ -1216,6 +1239,13 @@ absl::Status SQLBuilder::VisitResolvedSequence(const ResolvedSequence* node) {
   return absl::OkStatus();
 }
 
+absl::Status SQLBuilder::VisitResolvedModel(const ResolvedModel* node) {
+  ABSL_DCHECK(node->model());
+  const std::string model_alias = ToIdentifierLiteral(node->model()->Name());
+  PushQueryFragment(node, absl::StrCat("MODEL ", model_alias));
+  return absl::OkStatus();
+}
+
 static bool IsFirstOrLast(const Function* function) {
   if (!function->IsGoogleSQLBuiltin() || function->NumSignatures() != 1) {
     return false;
@@ -1228,7 +1258,6 @@ absl::Status SQLBuilder::VisitResolvedAggregateFunctionCall(
     const ResolvedAggregateFunctionCall* node) {
   bool allow_chained_call = true;
   std::string arguments_suffix;
-  std::string with_group_rows;
 
   // Handle multi-level aggregation.
   std::string group_by_modifiers;
@@ -1326,8 +1355,6 @@ absl::Status SQLBuilder::VisitResolvedAggregateFunctionCall(
   GOOGLESQL_ASSIGN_OR_RETURN(std::string text,
                    GetFunctionCallSQL(node, std::move(inputs), arguments_suffix,
                                       allow_chained_call));
-
-  absl::StrAppend(&text, with_group_rows);
 
   PushQueryFragment(node, text);
 
@@ -1713,6 +1740,15 @@ absl::Status SQLBuilder::VisitResolvedFlatten(const ResolvedFlatten* node) {
                      ProcessNode(get_field.get()));
     absl::StrAppend(&text, get_field_fragment->GetSQL());
   }
+
+  if (node->depth() != nullptr) {
+    GOOGLESQL_RET_CHECK(node->depth()->Is<ResolvedLiteral>());
+    GOOGLESQL_RET_CHECK(node->depth()->GetAs<ResolvedLiteral>()->value().is_valid());
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> depth_fragment,
+                     ProcessNode(node->depth()));
+    absl::StrAppend(&text, ", depth => ", depth_fragment->GetSQL());
+  }
+
   absl::StrAppend(&text, ")");
   PushQueryFragment(node, text);
   return absl::OkStatus();
@@ -1836,11 +1872,16 @@ absl::Status SQLBuilder::VisitResolvedCast(const ResolvedCast* node) {
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                    ProcessNode(node->expr()));
 
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      std::string type_name,
-      node->type()->TypeNameWithModifiers(
-          node->type_modifiers(), options_.language_options.product_mode(),
-          options_.use_external_float32));
+  TypeModifiers type_modifiers = node->type_modifiers();
+  if (!options_.language_options.LanguageFeatureEnabled(
+          FEATURE_COLLATION_IN_EXPLICIT_CAST)) {
+    type_modifiers.release_collation();
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string type_name,
+                   node->type()->TypeNameWithModifiers(
+                       type_modifiers, options_.language_options.product_mode(),
+                       options_.use_external_float32));
   if (TypeIsOrContainsGraphElement(node->type())) {
     // Cast to graph element or container types with graph elements
     // is not supported in SQL so drop the cast. This cast
@@ -1870,7 +1911,7 @@ absl::Status SQLBuilder::VisitResolvedCast(const ResolvedCast* node) {
 
 SQLBuilder::PendingColumnsAutoRestorer::PendingColumnsAutoRestorer(
     SQLBuilder& sql_builder,
-    const std::vector<std::unique_ptr<const ResolvedColumnRef>>&
+    absl::Span<const std::unique_ptr<const ResolvedColumnRef>>
         columns_to_expose)
     : sql_builder_(sql_builder) {
   previous_pending_columns_.swap(sql_builder.mutable_pending_columns());
@@ -1921,6 +1962,69 @@ absl::Status SQLBuilder::VisitResolvedSubqueryExpr(
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                        ProcessNode(node->in_expr()));
       absl::StrAppend(&text, "((", result->GetSQL(), ") IN");
+      break;
+    }
+    case ResolvedSubqueryExpr::EQ_ANY:
+    case ResolvedSubqueryExpr::EQ_ALL:
+    case ResolvedSubqueryExpr::NE_ANY:
+    case ResolvedSubqueryExpr::NE_ALL:
+    case ResolvedSubqueryExpr::LT_ANY:
+    case ResolvedSubqueryExpr::LT_ALL:
+    case ResolvedSubqueryExpr::LE_ANY:
+    case ResolvedSubqueryExpr::LE_ALL:
+    case ResolvedSubqueryExpr::GT_ANY:
+    case ResolvedSubqueryExpr::GT_ALL:
+    case ResolvedSubqueryExpr::GE_ANY:
+    case ResolvedSubqueryExpr::GE_ALL: {
+      GOOGLESQL_RET_CHECK(node->in_expr() != nullptr)
+          << "ResolvedSubqueryExpr of quantified comparison type does not "
+             "have an associated in_expr:\n"
+          << node->DebugString();
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(node->in_expr()));
+      absl::string_view quantified_comparison;
+      switch (node->subquery_type()) {
+        case ResolvedSubqueryExpr::EQ_ANY:
+          quantified_comparison = "= ANY";
+          break;
+        case ResolvedSubqueryExpr::EQ_ALL:
+          quantified_comparison = "= ALL";
+          break;
+        case ResolvedSubqueryExpr::NE_ANY:
+          quantified_comparison = "!= ANY";
+          break;
+        case ResolvedSubqueryExpr::NE_ALL:
+          quantified_comparison = "!= ALL";
+          break;
+        case ResolvedSubqueryExpr::LT_ANY:
+          quantified_comparison = "< ANY";
+          break;
+        case ResolvedSubqueryExpr::LT_ALL:
+          quantified_comparison = "< ALL";
+          break;
+        case ResolvedSubqueryExpr::LE_ANY:
+          quantified_comparison = "<= ANY";
+          break;
+        case ResolvedSubqueryExpr::LE_ALL:
+          quantified_comparison = "<= ALL";
+          break;
+        case ResolvedSubqueryExpr::GT_ANY:
+          quantified_comparison = "> ANY";
+          break;
+        case ResolvedSubqueryExpr::GT_ALL:
+          quantified_comparison = "> ALL";
+          break;
+        case ResolvedSubqueryExpr::GE_ANY:
+          quantified_comparison = ">= ANY";
+          break;
+        case ResolvedSubqueryExpr::GE_ALL:
+          quantified_comparison = ">= ALL";
+          break;
+        default:
+          GOOGLESQL_RET_CHECK_FAIL();
+      }
+      absl::StrAppend(&text, "((", result->GetSQL(), ") ",
+                      quantified_comparison);
       break;
     }
     case ResolvedSubqueryExpr::LIKE_ANY: {
@@ -2309,12 +2413,19 @@ absl::Status SQLBuilder::VisitResolvedOption(const ResolvedOption* node) {
     case ResolvedOptionEnums::SUB_ASSIGN:
       assignment_operator_string = "-=";
       break;
-    default:
+    case ResolvedOptionEnums::FROM:
+      assignment_operator_string = "FROM ";
+      break;
+    case ResolvedOptionEnums::DEFAULT_ASSIGN:
       assignment_operator_string = "=";
       break;
   }
-  absl::StrAppend(&text, ToIdentifierLiteral(node->name()),
-                  assignment_operator_string);
+  if (node->assignment_op() == ResolvedOptionEnums::FROM) {
+    absl::StrAppend(&text, assignment_operator_string);
+  } else {
+    absl::StrAppend(&text, ToIdentifierLiteral(node->name()),
+                    assignment_operator_string);
+  }
 
   // If we have a CAST, strip it off and just print the value.  CASTs are
   // not allowed as part of the hint syntax so they must have been added
@@ -2421,6 +2532,19 @@ absl::Status SQLBuilder::VisitResolvedMakeProtoField(
 
   PushQueryFragment(node, text);
   return absl::OkStatus();
+}
+
+absl::Status SQLBuilder::VisitResolvedMakeMap(const ResolvedMakeMap* node) {
+  // TODO: b/490428363 - Implement SQLBuilder for MAP literal.
+  return absl::UnimplementedError(
+      "ResolvedMakeMap is not supported in SQLBuilder yet.");
+}
+
+absl::Status SQLBuilder::VisitResolvedMakeMapEntry(
+    const ResolvedMakeMapEntry* node) {
+  // TODO: b/490428363 - Implement SQLBuilder for MAP literal.
+  return absl::UnimplementedError(
+      "ResolvedMakeMapEntry is not supported in SQLBuilder yet.");
 }
 
 absl::Status SQLBuilder::VisitResolvedMakeStruct(
@@ -2549,7 +2673,8 @@ absl::Status SQLBuilder::VisitResolvedGetJsonField(
 
 absl::Status SQLBuilder::VisitResolvedGetRowField(
     const ResolvedGetRowField* node) {
-  GOOGLESQL_RET_CHECK(node->expr()->type()->IsRow()) << node->type()->DebugString();
+  GOOGLESQL_RET_CHECK(node->expr()->type()->IsRowOrTable())
+      << node->type()->DebugString();
 
   std::string text;
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
@@ -3195,6 +3320,9 @@ absl::Status SQLBuilder::VisitResolvedPivotScan(const ResolvedPivotScan* node) {
         absl::StrCat(pivot_expr_alias, "_", pivot_value_alias);
   }
 
+  // Mark as accessed.
+  node->pivot_value_collation();
+
   for (const auto& groupby_expr : node->group_by_list()) {
     const ResolvedColumn& output_column = groupby_expr->column();
     const ResolvedColumn& input_column =
@@ -3256,6 +3384,139 @@ absl::Status SQLBuilder::VisitResolvedUnpivotScan(
       GetColumnAlias(node->label_column()),
       absl::StrJoin(unpivot_in_column_groups, ",")));
   PushSQLForQueryExpression(node, query_expr.release());
+
+  return absl::OkStatus();
+}
+
+static absl::StatusOr<absl::string_view> GetBoundKindString(
+    ResolvedWithinBoundExpr::BoundKind bound_kind) {
+  switch (bound_kind) {
+    case ResolvedWithinBoundExpr::UNBOUNDED_PRECEDING:
+      return " UNBOUNDED PRECEDING";
+    case ResolvedWithinBoundExpr::UNBOUNDED_FOLLOWING:
+      return " UNBOUNDED FOLLOWING";
+    case ResolvedWithinBoundExpr::PERIOD_PRECEDING:
+      return " PERIOD PRECEDING";
+    case ResolvedWithinBoundExpr::PERIOD_FOLLOWING:
+      return " PERIOD FOLLOWING";
+    case ResolvedWithinBoundExpr::INTERVAL_PRECEDING:
+      return " PRECEDING";
+    case ResolvedWithinBoundExpr::INTERVAL_FOLLOWING:
+      return " FOLLOWING";
+    case ResolvedWithinBoundExpr::TIMESTAMP:
+      return "";
+    case ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP:
+    case ResolvedWithinBoundExpr::NOT_SET:
+      GOOGLESQL_RET_CHECK_FAIL() << "Unexpected bound kind: "
+                       << ResolvedWithinBoundExpr::BoundKindToString(
+                              bound_kind);
+  }
+}
+
+absl::Status SQLBuilder::VisitResolvedWithinBoundExpr(
+    const ResolvedWithinBoundExpr* node) {
+  std::string sql;
+  if (node->expr() != nullptr) {
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> fragment,
+                     ProcessNode(node->expr()));
+    sql = fragment->GetSQL();
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(absl::string_view bound_kind,
+                   GetBoundKindString(node->bound_kind()));
+  absl::StrAppend(&sql, bound_kind);
+  PushQueryFragment(node, sql);
+  return absl::OkStatus();
+}
+
+absl::Status SQLBuilder::VisitResolvedWithinBounds(
+    const ResolvedWithinBounds* node) {
+  std::string sql = "RANGE";
+  if (node->lower_bound()->bound_kind() !=
+      ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP) {
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> lower,
+                     ProcessNode(node->lower_bound()));
+    absl::StrAppend(&sql, " FROM ", lower->GetSQL());
+  } else {
+    node->lower_bound()->MarkFieldsAccessed();
+  }
+
+  if (node->upper_bound()->bound_kind() !=
+      ResolvedWithinBoundExpr::ANCHOR_TIMESTAMP) {
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> upper,
+                     ProcessNode(node->upper_bound()));
+    absl::StrAppend(&sql, " TO ", upper->GetSQL());
+  } else {
+    node->upper_bound()->MarkFieldsAccessed();
+  }
+
+  PushQueryFragment(node, sql);
+  return absl::OkStatus();
+}
+
+absl::Status SQLBuilder::VisitResolvedAlignScan(const ResolvedAlignScan* node) {
+  // Generate SQL for the input scan.
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input,
+                   ProcessNode(node->input_scan()));
+  std::unique_ptr<QueryExpression> query_expr =
+      std::move(input->query_expression);
+  GOOGLESQL_RETURN_IF_ERROR(WrapQueryExpression(node->input_scan(), query_expr.get()));
+
+  std::string align = " ALIGN (";
+
+  // TIMESTAMP
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> timestamp_fragment,
+                   ProcessNode(node->timestamp_column()));
+  absl::StrAppend(&align, "\n  TIMESTAMP ", timestamp_fragment->GetSQL());
+
+  // PERIOD
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> period_fragment,
+                   ProcessNode(node->period()));
+  absl::StrAppend(&align, "\n  PERIOD ", period_fragment->GetSQL());
+
+  // ORIGIN
+  if (node->origin() != nullptr) {
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> origin_fragment,
+                     ProcessNode(node->origin()));
+    absl::StrAppend(&align, "\n  ORIGIN ", origin_fragment->GetSQL());
+  }
+
+  // OUTPUT WITHIN
+  if (node->output_within() != nullptr) {
+    absl::StrAppend(&align, "\n  OUTPUT WITHIN ");
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> within,
+                     ProcessNode(node->output_within()));
+    absl::StrAppend(&align, within->GetSQL());
+  }
+
+  // PARTITION BY
+  if (node->partition_by_list_size() > 0) {
+    absl::StrAppend(&align, "\n  PARTITION BY ");
+    for (int i = 0; i < node->partition_by_list_size(); ++i) {
+      if (i > 0) absl::StrAppend(&align, ", ");
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> partition_fragment,
+                       ProcessNode(node->partition_by_list(i)));
+      absl::StrAppend(&align, partition_fragment->GetSQL());
+    }
+  }
+
+  // TODO: b/477116035 - Add SQL for METRICS clauses.
+  absl::StrAppend(&align, "\n)");
+
+  std::string scan_alias = GetScanAlias(node);
+  GOOGLESQL_RET_CHECK(!scan_alias.empty());
+  absl::StrAppend(&align, " AS ", scan_alias);
+
+  GOOGLESQL_RET_CHECK(query_expr->TrySetAlignClause(align));
+  PushSQLForQueryExpression(node, query_expr.release());
+
+  // Set the correct alias for the aligned timestamp column to match the alias
+  // of the input timestamp column.
+  googlesql_base::InsertOrUpdate(&mutable_computed_column_alias(),
+                      node->aligned_timestamp_column().column_id(),
+                      GetColumnAlias(node->timestamp_column()->column()));
+
+  SetPathForColumnList(node->column_list(), scan_alias);
 
   return absl::OkStatus();
 }
@@ -3930,76 +4191,6 @@ absl::Status SQLBuilder::VisitResolvedAnalyticScan(
   }
 
   PushSQLForQueryExpression(node, query_expression.release());
-  return absl::OkStatus();
-}
-
-absl::Status SQLBuilder::VisitResolvedGroupRowsScan(
-    const ResolvedGroupRowsScan* node) {
-  auto query_expression =
-      std::make_unique<QueryExpression>(this->options_.target_syntax_mode);
-
-  std::string from = "GROUP_ROWS()";
-
-  if (node->hint_list_size() > 0) {
-    absl::StrAppend(&from, " ");
-    GOOGLESQL_RETURN_IF_ERROR(AppendHintsIfPresent(node->hint_list(), &from));
-  }
-
-  const std::string group_rows_alias = GetScanAlias(node);
-  absl::StrAppend(&from, " AS ", group_rows_alias);
-
-  GOOGLESQL_RET_CHECK(query_expression->TrySetFromClause(from));
-
-  std::map<int64_t, const ResolvedExpr*> col_to_expr_map;
-  for (const auto& col : node->input_column_list()) {
-    googlesql_base::InsertIfNotPresent(&col_to_expr_map, col->column().column_id(),
-                            col->expr());
-    if (col->expr()->Is<ResolvedMakeStruct>()) {
-      const ResolvedMakeStruct* make_struct =
-          col->expr()->GetAs<ResolvedMakeStruct>();
-
-      const StructType* struct_type = make_struct->type()->AsStruct();
-      if (struct_type->num_fields() != make_struct->field_list_size()) {
-        return ::googlesql_base::InvalidArgumentErrorBuilder()
-               << "In GROUP_ROWS(): the number of fields of ResolvedMakeStruct "
-                  "and its corresponding StructType, do not match\n:"
-               << node->DebugString() << "\nStructType:\n"
-               << struct_type->DebugString();
-      }
-      for (int i = 0; i < struct_type->num_fields(); ++i) {
-        // Dummy access the column to satisfy the final
-        // CheckFieldsAccessed() on a statement level before building the sql.
-        make_struct->field_list(i)->GetAs<ResolvedColumnRef>()->column();
-      }
-      continue;
-    }
-    // Define new aliases for all columns to repoint them to group_rows_alias.
-    const ResolvedColumnRef* ref = col->expr()->GetAs<ResolvedColumnRef>();
-    std::string alias;
-
-    // Filter operator might decide to reset the column path to the original
-    // column name even when the column has already an associated internal
-    // alias. We take this case into account to keep generated query valid.
-    std::string current_path = GetColumnPath(ref->column());
-    bool aliased_to_self = absl::EndsWith(current_path, ref->column().name());
-    if (!aliased_to_self &&
-        googlesql_base::ContainsKey(computed_column_alias(), ref->column().column_id())) {
-      alias = GetColumnAlias(ref->column());
-    } else {
-      alias = ref->column().name();
-    }
-    SetPathForColumn(ref->column(), absl::StrCat(group_rows_alias, ".",
-                                                 ToIdentifierLiteral(alias)));
-  }
-  SQLAliasPairList select_list;
-  GOOGLESQL_RETURN_IF_ERROR(GetSelectList(node->column_list(), col_to_expr_map, node,
-                                query_expression.get(), &select_list));
-
-  GOOGLESQL_RET_CHECK(query_expression->TrySetSelectClause(select_list,
-                                                 /*select_hints=*/""));
-
-  PushSQLForQueryExpression(node, query_expression.release());
-
   return absl::OkStatus();
 }
 
@@ -6289,8 +6480,26 @@ absl::Status SQLBuilder::VisitResolvedQueryStmt(const ResolvedQueryStmt* node) {
   return absl::OkStatus();
 }
 
+absl::Status SQLBuilder::VisitResolvedTerminalQueryStmt(
+    const ResolvedTerminalQueryStmt* node) {
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                   ProcessNode(node->query()));
+  PushQueryFragment(node, result->GetSQL());
+  return absl::OkStatus();
+}
+
 absl::Status SQLBuilder::VisitResolvedGeneralizedQueryStmt(
     const ResolvedGeneralizedQueryStmt* node) {
+  if (node->query()->Is<ResolvedGraphTableScan>()) {
+    std::string sql;
+    GOOGLESQL_RETURN_IF_ERROR(ProcessResolvedGraphQuery(
+        node->query()->GetAs<ResolvedGraphTableScan>(),
+        /*has_space_before_graph_keyword=*/false, sql));
+    PushQueryFragment(node, sql);
+    node->MarkFieldsAccessed();
+    return absl::OkStatus();
+  }
+
   // A generalized query uses pipe operators like FORK that cannot appear inside
   // a subquery, so the whole statement must be rendered in pipe syntax. This
   // requires the SQLBuilder to be in Pipe target syntax mode.
@@ -6523,6 +6732,9 @@ absl::Status SQLBuilder::GetCreateStatementPrefix(
     }
     if (create_index->is_vector()) {
       absl::StrAppend(sql, "VECTOR ");
+    }
+    if (create_index->is_ai()) {
+      absl::StrAppend(sql, "AI ");
     }
   } else {
     switch (node->create_scope()) {
@@ -7303,6 +7515,9 @@ absl::Status SQLBuilder::VisitResolvedCreateIndexStmt(
       cols.push_back("ALL COLUMNS");
     }
   }
+  if (node->index_auto_columns()) {
+    cols.push_back("AUTO COLUMNS");
+  }
   absl::StrAppend(&sql, absl::StrJoin(cols, ","), ") ");
 
   if (!node->storing_expression_list().empty()) {
@@ -7324,10 +7539,16 @@ absl::Status SQLBuilder::VisitResolvedCreateIndexStmt(
     GOOGLESQL_RETURN_IF_ERROR(GetPartitionByListString(node->partition_by_list(), &sql));
   }
 
+  if (node->connection() != nullptr) {
+    absl::StrAppend(
+        &sql, " WITH CONNECTION ",
+        ToIdentifierLiteral(node->connection()->connection()->Name()), " ");
+  }
+
   GOOGLESQL_ASSIGN_OR_RETURN(const std::string options_string,
                    GetHintListString(node->option_list()));
   if (!options_string.empty()) {
-    absl::StrAppend(&sql, "OPTIONS(", options_string, ") ");
+    absl::StrAppend(&sql, " OPTIONS(", options_string, ") ");
   }
 
   PushQueryFragment(node, sql);
@@ -7337,6 +7558,72 @@ absl::Status SQLBuilder::VisitResolvedCreateIndexStmt(
 absl::Status SQLBuilder::VisitResolvedCreateViewStmt(
     const ResolvedCreateViewStmt* node) {
   return GetCreateViewStatement(node, node->is_value_table(), "VIEW");
+}
+
+absl::Status SQLBuilder::VisitResolvedCreateLiveTableStmt(
+    const ResolvedCreateLiveTableStmt* node) {
+  // Dummy access on the fields so as to pass the final CheckFieldsAccessed()
+  // on a statement level before building the sql.
+  for (const auto& output_col : node->output_column_list()) {
+    output_col->MarkFieldsAccessed();
+  }
+
+  node->is_value_table();
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryExpression> query_expression,
+                   ProcessQuery(node->query(), node->output_column_list()));
+
+  if (node->is_value_table()) {
+    GOOGLESQL_RET_CHECK_EQ(query_expression->SelectList().size(), 1);
+    query_expression->SetSelectAsModifier(" AS VALUE");
+  }
+
+  bool process_column_definitions =
+      (node->primary_key() != nullptr || !node->foreign_key_list().empty() ||
+       !node->check_constraint_list().empty());
+  if (!process_column_definitions) {
+    for (const auto& column_def : node->column_definition_list()) {
+      column_def->name();  // Mark accessed.
+      column_def->type();  // Mark accessed.
+      if (column_def->annotations() != nullptr || column_def->is_hidden() ||
+          column_def->generated_column_info() != nullptr ||
+          column_def->default_value() != nullptr) {
+        process_column_definitions = true;
+        break;
+      }
+    }
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string sql,
+                   ProcessCreateTableStmtBase(node, process_column_definitions,
+                                              "LIVE TABLE"));
+
+  if (!node->partition_by_list().empty()) {
+    absl::StrAppend(&sql, " PARTITION BY ");
+    GOOGLESQL_RETURN_IF_ERROR(GetPartitionByListString(node->partition_by_list(), &sql));
+  }
+
+  if (!node->cluster_by_list().empty()) {
+    absl::StrAppend(&sql, " CLUSTER BY ");
+    GOOGLESQL_RETURN_IF_ERROR(GetPartitionByListString(node->cluster_by_list(), &sql));
+  }
+
+  if (node->connection() != nullptr) {
+    const std::string connection_alias =
+        ToIdentifierLiteral(node->connection()->connection()->Name());
+    absl::StrAppend(&sql, " WITH CONNECTION ", connection_alias, " ");
+  }
+
+  if (!node->option_list().empty()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(const std::string options_string,
+                     GetHintListString(node->option_list()));
+    absl::StrAppend(&sql, " OPTIONS(", options_string, ")");
+  }
+
+  absl::StrAppend(&sql, " AS\n", query_expression->GetSQLQuery());
+  PushQueryFragment(node, sql);
+
+  return absl::OkStatus();
 }
 
 absl::Status SQLBuilder::VisitResolvedCreateMaterializedViewStmt(
@@ -8287,6 +8574,9 @@ absl::Status SQLBuilder::VisitResolvedDropIndexStmt(
       break;
     case ResolvedDropIndexStmt::INDEX_VECTOR:
       absl::StrAppend(&sql, "DROP VECTOR INDEX");
+      break;
+    case ResolvedDropIndexStmt::INDEX_AI:
+      absl::StrAppend(&sql, "DROP AI INDEX");
       break;
     case ResolvedDropIndexStmt::INDEX_DEFAULT:
       GOOGLESQL_RET_CHECK_FAIL() << "unsupported index type";
@@ -10109,10 +10399,10 @@ absl::Status SQLBuilder::VisitResolvedUpdateConstructor(
         op_string = ":";
         break;
       case ResolvedUpdateFieldItem::UPDATE_MANY:
-        op_string = ":*";
+        op_string = "*:";
         break;
       case ResolvedUpdateFieldItem::UPDATE_SINGLE_NO_CREATION:
-        op_string = ":?";
+        op_string = "?:";
         break;
     }
     absl::StrAppend(&update_field_item_sql, field_path_sql, op_string,
@@ -10774,32 +11064,40 @@ absl::Status SQLBuilder::ProcessGqlSubquery(const ResolvedSubqueryExpr* node,
                    ->input_scan()
                    ->Is<ResolvedGraphLinearScan>();
       };
-  if (node->subquery_type() == ResolvedSubqueryExpr::SCALAR &&
-      node->subquery()->Is<ResolvedLimitOffsetScan>() &&
-      has_graph_linear_scan(
-          node->subquery()->GetAs<ResolvedLimitOffsetScan>()->input_scan())) {
+  if (node->subquery_type() == ResolvedSubqueryExpr::SCALAR) {
+    const ResolvedLimitOffsetScan* limit_offset = nullptr;
+    const ResolvedGraphTableScan* graph_table_scan = nullptr;
+    if (node->subquery()->Is<ResolvedLimitOffsetScan>() &&
+        has_graph_linear_scan(
+            node->subquery()->GetAs<ResolvedLimitOffsetScan>()->input_scan())) {
+      limit_offset = node->subquery()->GetAs<ResolvedLimitOffsetScan>();
+      graph_table_scan =
+          limit_offset->input_scan()->GetAs<ResolvedGraphTableScan>();
+    } else if (has_graph_linear_scan(node->subquery())) {
+      graph_table_scan = node->subquery()->GetAs<ResolvedGraphTableScan>();
+    }
+
     // This is a `VALUE { GQL subquery }`.
-    std::string graph_subquery;
-    GOOGLESQL_RETURN_IF_ERROR(
-        ProcessResolvedGraphSubquery(node->subquery()
-                                         ->GetAs<ResolvedLimitOffsetScan>()
-                                         ->input_scan()
-                                         ->GetAs<ResolvedGraphTableScan>(),
-                                     graph_subquery));
-    absl::StrAppend(&output_sql, "VALUE");
-    const ResolvedLimitOffsetScan* limit_offset =
-        node->subquery()->GetAs<ResolvedLimitOffsetScan>();
-    if (limit_offset->limit() != nullptr) {
-      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
-                       ProcessNode(limit_offset->limit()));
-      absl::StrAppend(&graph_subquery, " LIMIT ", result->GetSQL());
+    // The subquery possibly ends with a LIMIT clause.
+    if (graph_table_scan != nullptr) {
+      std::string graph_subquery;
+      GOOGLESQL_RETURN_IF_ERROR(ProcessResolvedGraphQuery(
+          graph_table_scan, /*has_space_before_graph_keyword=*/true,
+          graph_subquery));
+      if (limit_offset != nullptr) {
+        if (limit_offset->limit() != nullptr) {
+          GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                           ProcessNode(limit_offset->limit()));
+          absl::StrAppend(&graph_subquery, " LIMIT ", result->GetSQL());
+        }
+        if (limit_offset->offset() != nullptr) {
+          // Ignore OFFSET because GQL doesn't support LIMIT followed by OFFSET.
+          limit_offset->offset()->MarkFieldsAccessed();
+        }
+      }
+      absl::StrAppend(&output_sql, "VALUE {", graph_subquery, "}");
+      return absl::OkStatus();
     }
-    if (limit_offset->offset() != nullptr) {
-      // Ignore OFFSET because GQL doesn't support LIMIT followed by OFFSET.
-      limit_offset->offset()->MarkFieldsAccessed();
-    }
-    absl::StrAppend(&output_sql, "{", graph_subquery, "}");
-    return absl::OkStatus();
   }
   if (!has_graph_linear_scan(node->subquery())) {
     // Tree structure is not a GQL subquery, return.
@@ -10854,6 +11152,7 @@ absl::Status SQLBuilder::ProcessGqlSubquery(const ResolvedSubqueryExpr* node,
     node->subquery()->MarkFieldsAccessed();
     std::string graph_reference;
     AppendGraphReference(node->subquery()->GetAs<ResolvedGraphTableScan>(),
+                         /*has_space_before_graph_keyword=*/true,
                          graph_reference);
     absl::StrAppend(&output_sql, "{", graph_reference, exists_partial_form_sql,
                     "}");
@@ -10862,8 +11161,9 @@ absl::Status SQLBuilder::ProcessGqlSubquery(const ResolvedSubqueryExpr* node,
 
   // Not an `EXISTS partial form`, fallback to the regular GQL subquery.
   std::string graph_subquery;
-  GOOGLESQL_RETURN_IF_ERROR(ProcessResolvedGraphSubquery(
-      node->subquery()->GetAs<ResolvedGraphTableScan>(), graph_subquery));
+  GOOGLESQL_RETURN_IF_ERROR(ProcessResolvedGraphQuery(
+      node->subquery()->GetAs<ResolvedGraphTableScan>(),
+      /*has_space_before_graph_keyword=*/true, graph_subquery));
   absl::StrAppend(&output_sql, "{", graph_subquery, "}");
   return absl::OkStatus();
 }
@@ -10954,6 +11254,10 @@ absl::Status SQLBuilder::ProcessResolvedGqlLinearScanIgnoringLastReturn(
       GOOGLESQL_RETURN_IF_ERROR(
           ProcessResolvedGqlSampleOp(scan->GetAs<ResolvedSampleScan>(), sql));
     } else if (scan->Is<ResolvedGraphCallScan>()) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
+                       ProcessNode(scan));
+      absl::StrAppend(&sql, result->GetSQL());
+    } else if (scan->Is<ResolvedGraphInsertScan>()) {
       GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> result,
                        ProcessNode(scan));
       absl::StrAppend(&sql, result->GetSQL());
@@ -11064,8 +11368,24 @@ absl::Status SQLBuilder::ProcessResolvedGqlLinearOp(
   GOOGLESQL_RETURN_IF_ERROR(
       ProcessResolvedGqlLinearScanIgnoringLastReturn(node, sql, unused));
 
-  GOOGLESQL_RETURN_IF_ERROR(CollapseResolvedGqlReturnScans(
-      node->scan_list().back().get(), output_column_to_alias, sql, columns));
+  // The last scan in the linear scan list represents the terminal GQL DML
+  // operation (e.g. GQL INSERT) or GQL RETURN clause.
+  const ResolvedScan* last_scan = node->scan_list().back().get();
+  if (last_scan->Is<ResolvedFinishScan>()) {
+    // A ResolvedFinishScan does not have GQL syntax and represents a terminal
+    // GQL DML operation with no output columns. Thus, we only append the SQL
+    // for the DML operation.
+    const ResolvedFinishScan* finish_scan =
+        last_scan->GetAs<ResolvedFinishScan>();
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input_fragment,
+                     ProcessNode(finish_scan->input_scan()));
+    absl::StrAppend(&sql, input_fragment->GetSQL());
+  } else {
+    // Otherwise, collapse the trailing scans to produce a RETURN (or WITH)
+    // clause with output column aliases.
+    GOOGLESQL_RETURN_IF_ERROR(CollapseResolvedGqlReturnScans(
+        last_scan, output_column_to_alias, sql, columns));
+  }
 
   absl::StrAppend(&output_sql, sql);
   return absl::OkStatus();
@@ -11093,9 +11413,14 @@ GqlReturnOpSQLBuilder::GqlReturnOpSQLBuilder(
 
 std::vector<std::string> GqlReturnOpSQLBuilder::GetOutputColumnAliases() {
   std::vector<std::string> aliases;
-  for (auto iter = output_column_to_alias_.begin();
-       iter != output_column_to_alias_.end(); ++iter) {
-    aliases.push_back(iter->second);
+  aliases.reserve(output_column_list_.size());
+  for (const ResolvedColumn& col : output_column_list_) {
+    auto it = output_column_to_alias_.find(col);
+    ABSL_DCHECK(it != output_column_to_alias_.end())
+        << "Column alias not found for column ID: " << col.column_id();
+    if (it != output_column_to_alias_.end()) {
+      aliases.push_back(it->second);
+    }
   }
   return aliases;
 }
@@ -11379,13 +11704,8 @@ absl::Status SQLBuilder::VisitResolvedGraphTableScan(
   std::string from;
 
   absl::StrAppend(&from, " GRAPH_TABLE ( ");
-  if (node->property_graph()->NamePath().empty()) {
-    absl::StrAppend(&from, ToIdentifierLiteral(node->property_graph()->Name()));
-  } else {
-    std::string graph_name =
-        IdentifierPathToString(node->property_graph()->NamePath());
-    absl::StrAppend(&from, graph_name);
-  }
+  absl::StrAppend(&from,
+                  IdentifierPathToString(node->property_graph()->NamePath()));
 
   std::string table_alias =
       MakeNonconflictingAlias(node->property_graph()->Name());
@@ -11612,15 +11932,20 @@ absl::Status SQLBuilder::ProcessGraphPathPatternQuantifier(
 }
 
 void SQLBuilder::AppendGraphReference(const ResolvedGraphTableScan* node,
+                                      bool has_space_before_graph_keyword,
                                       std::string& output_sql) {
   // TODO: allow graph reference to be omitted.
-  absl::StrAppend(&output_sql, " GRAPH ",
-                  ToIdentifierLiteral(node->property_graph()->Name()), " ");
+  std::string graph_name =
+      IdentifierPathToString(node->property_graph()->NamePath());
+  absl::StrAppend(&output_sql,
+                  has_space_before_graph_keyword ? " GRAPH " : "GRAPH ",
+                  graph_name, " ");
 }
 
-absl::Status SQLBuilder::ProcessResolvedGraphSubquery(
-    const ResolvedGraphTableScan* node, std::string& output_sql) {
-  AppendGraphReference(node, output_sql);
+absl::Status SQLBuilder::ProcessResolvedGraphQuery(
+    const ResolvedGraphTableScan* node, bool has_space_before_graph_keyword,
+    std::string& output_sql) {
+  AppendGraphReference(node, has_space_before_graph_keyword, output_sql);
   std::string gql;
   GOOGLESQL_RET_CHECK(node->input_scan()->Is<ResolvedGraphLinearScan>());
   GOOGLESQL_RET_CHECK(node->shape_expr_list().empty());
@@ -11757,6 +12082,144 @@ absl::Status SQLBuilder::VisitResolvedGraphScan(const ResolvedGraphScan* node) {
     absl::StrAppend(&sql, " WHERE ", result->GetSQL());
   }
   PushQueryFragment(node, sql);
+  return absl::OkStatus();
+}
+
+absl::Status SQLBuilder::VisitResolvedGraphInsertScan(
+    const ResolvedGraphInsertScan* node) {
+  absl::flat_hash_map<ResolvedColumn, const ResolvedGraphInsertElement*>
+      insert_elements;
+  for (const auto& cc : node->insert_node_list()) {
+    insert_elements[cc->column()] =
+        cc->expr()->GetAs<ResolvedGraphInsertElement>();
+  }
+  for (const auto& cc : node->insert_edge_list()) {
+    insert_elements[cc->column()] =
+        cc->expr()->GetAs<ResolvedGraphInsertElement>();
+  }
+
+  std::vector<std::string> path_sqls;
+  std::string current_path;
+  absl::flat_hash_set<ResolvedColumn> printed_columns;
+  for (int i = 0; i < node->path_element_list_size(); ++i) {
+    const ResolvedColumn& col = node->path_element_list(i);
+    bool is_node = col.type()->AsGraphElement()->IsNode();
+
+    // Check if we need to start a new path.
+    // A path starts if it's the first element, or if the current element is a
+    // node and the previous element was also a node (meaning they are disjoint
+    // paths in GQL INSERT).
+    if (i > 0 && is_node &&
+        node->path_element_list(i - 1).type()->AsGraphElement()->IsNode()) {
+      path_sqls.push_back(current_path);
+      current_path.clear();
+    }
+
+    // Get the alias for the element variable, if it's not an anonymous
+    // variable.
+    bool is_anonymous_var = IsInternalAlias(col.name());
+    std::string element_filler_sql;
+    if (!is_anonymous_var) {
+      element_filler_sql = GetColumnAlias(col);
+    }
+
+    // Check if this is a newly inserted element (in `insert_node_list` or
+    // `insert_edge_list`) or an existing variable from the incoming working
+    // table.
+    const ResolvedGraphInsertElement* insert_element = nullptr;
+    if (auto it = insert_elements.find(col); it != insert_elements.end()) {
+      insert_element = it->second;
+    }
+
+    // This is a newly inserted element. Append label specification and property
+    // specification.
+    if (insert_element != nullptr && printed_columns.insert(col).second) {
+      GOOGLESQL_RETURN_IF_ERROR(ProcessGraphInsertElementLabelsAndProperties(
+          insert_element, is_anonymous_var, element_filler_sql));
+    }
+
+    GOOGLESQL_RET_CHECK(!element_filler_sql.empty())
+        << "Element filler must always be present";
+
+    // Wrap with parentheses/brackets/arrows depending on node or edge.
+    if (is_node) {
+      absl::StrAppend(&current_path, "(", element_filler_sql, ")");
+    } else {
+      // This is an edge. We need to determine the direction of the edge.
+      // An edge at index i must be between node at index (i - 1) and (i + 1).
+      GOOGLESQL_RET_CHECK_GT(i, 0);
+      GOOGLESQL_RET_CHECK_LT(i + 1, node->path_element_list_size());
+      const ResolvedColumn& prev_node = node->path_element_list(i - 1);
+      const ResolvedColumn& next_node = node->path_element_list(i + 1);
+
+      // Check orientation:
+      // An edge variable must be in `insert_edge_list` because it's always a
+      // newly inserted element.
+      GOOGLESQL_RET_CHECK_NE(insert_element, nullptr);
+      GOOGLESQL_RET_CHECK(insert_element->source_node() != nullptr);
+      GOOGLESQL_RET_CHECK(insert_element->dest_node() != nullptr);
+      const ResolvedColumn& source_col =
+          insert_element->source_node()->column();
+      const ResolvedColumn& dest_col = insert_element->dest_node()->column();
+
+      // If source_col is next_node, the arrow orientation is LEFT (<-[e]-).
+      // If source_col is prev_node, the arrow orientation is RIGHT (-[e]->).
+      if (source_col == next_node) {
+        GOOGLESQL_RET_CHECK(dest_col == prev_node)
+            << "Edge destination must be the previous node for a left-directed "
+               "edge";
+        absl::StrAppend(&current_path, "<-[", element_filler_sql, "]-");
+      } else {
+        GOOGLESQL_RET_CHECK(source_col == prev_node)
+            << "Edge source must be the previous node for a right-directed "
+               "edge";
+        GOOGLESQL_RET_CHECK(dest_col == next_node) << "Edge destination must be the next "
+                                            "node for a right-directed edge";
+        absl::StrAppend(&current_path, "-[", element_filler_sql, "]->");
+      }
+    }
+  }
+
+  GOOGLESQL_RET_CHECK(!current_path.empty())
+      << "INSERT path must have at least one element";
+  path_sqls.push_back(current_path);
+
+  std::string sql = absl::StrCat(" INSERT ", absl::StrJoin(path_sqls, ", "));
+  PushQueryFragment(node, sql);
+  node->MarkFieldsAccessed();
+  return absl::OkStatus();
+}
+
+absl::Status SQLBuilder::ProcessGraphInsertElementLabelsAndProperties(
+    const ResolvedGraphInsertElement* element, bool is_anonymous_var,
+    std::string& element_filler_sql) {
+  // Append label specification syntax: IS Label1 & Label2 & ...
+  if (!element->label_list().empty()) {
+    std::vector<std::string> label_identifiers;
+    label_identifiers.reserve(element->label_list().size());
+    for (const auto& label : element->label_list()) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> label_fragment,
+                       ProcessNode(label.get()));
+      label_identifiers.push_back(label_fragment->GetSQL());
+    }
+    absl::StrAppend(&element_filler_sql, is_anonymous_var ? "" : " ", "IS ",
+                    absl::StrJoin(label_identifiers, " & "));
+  }
+
+  // Append property specification syntax: {prop1: val1, prop2: val2, ...}
+  if (!element->property_list().empty()) {
+    std::vector<std::string> prop_specs;
+    prop_specs.reserve(element->property_list().size());
+    for (const auto& prop_item : element->property_list()) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> val_fragment,
+                       ProcessNode(prop_item->property_value()));
+      prop_specs.push_back(
+          absl::StrCat(ToIdentifierLiteral(prop_item->property_name()), ": ",
+                       val_fragment->GetSQL()));
+    }
+    absl::StrAppend(&element_filler_sql, is_anonymous_var ? "" : " ", "{",
+                    absl::StrJoin(prop_specs, ", "), "}");
+  }
   return absl::OkStatus();
 }
 
@@ -12335,6 +12798,27 @@ absl::Status SQLBuilder::VisitResolvedPipeForkOrTeeScan(
   absl::StrAppend(&op, subpipelines_sql);
 
   return FinishPipeOperatorScan(node, pipe_sql, is_operator_chain, op);
+}
+
+absl::Status SQLBuilder::VisitResolvedFinishScan(
+    const ResolvedFinishScan* node) {
+  // Generate SQL for the input scan.
+  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input,
+                   ProcessNode(node->input_scan()));
+  std::unique_ptr<QueryExpression> query_expr =
+      std::move(input->query_expression);
+
+  GOOGLESQL_RETURN_IF_ERROR(
+      MaybeWrapStandardQueryAsPipeQuery(node->input_scan(), query_expr.get()));
+
+  // Construct the SQL for the pipe operator as follows:
+  // <input_scan> |> FINISH
+  std::string finish_sql =
+      absl::StrCat(query_expr->GetSQLQuery(TargetSyntaxMode::kPipe),
+                   QueryExpression::kPipe, "FINISH");
+
+  PushQueryFragment(node, finish_sql);
+  return absl::OkStatus();
 }
 
 absl::Status SQLBuilder::VisitResolvedPipeForkScan(

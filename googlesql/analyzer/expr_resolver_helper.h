@@ -23,7 +23,6 @@
 #include <utility>
 #include <vector>
 
-#include "googlesql/base/logging.h"
 #include "googlesql/analyzer/name_scope.h"
 #include "googlesql/analyzer/query_resolver_helper.h"
 #include "googlesql/parser/parse_tree.h"
@@ -32,6 +31,7 @@
 #include "googlesql/public/with_modifier_mode.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "googlesql/resolved_ast/resolved_column.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "googlesql/base/ret_check.h"
 
@@ -112,12 +112,13 @@ class FlattenState {
   // but also causes the active flatten to propagate back to parent after
   // destruction so a child ExprResolutionInfo can essentially share
   // FlattenState.
-  void SetParent(FlattenState* parent) {
-    ABSL_DCHECK(parent_ == nullptr) << "Parent shouldn't be set more than once";
-    ABSL_CHECK(parent);
+  absl::Status SetParent(FlattenState* parent) {
+    GOOGLESQL_RET_CHECK(parent_ == nullptr) << "Parent shouldn't be set more than once";
+    GOOGLESQL_RET_CHECK(parent != nullptr);
     parent_ = parent;
     can_flatten_ = parent->can_flatten_;
     active_flatten_ = parent->active_flatten_;
+    return absl::OkStatus();
   }
 
   // Helper to allow restoring original `can_flatten` state when desired.
@@ -223,12 +224,6 @@ struct ExprResolutionInfo {
   ExprResolutionInfo(QueryResolutionInfo* query_resolution_info,
                      const NameScope* name_scope_in,
                      ExprResolutionInfoOptions options);
-  // This constructor allows setting alternate aggregate and analytic scopes.
-  ExprResolutionInfo(QueryResolutionInfo* query_resolution_info,
-                     const NameScope* name_scope_in,
-                     const NameScope* aggregate_name_scope_in,
-                     const NameScope* analytic_name_scope_in,
-                     ExprResolutionInfoOptions options);
 
   // Construct an ExprResolutionInfo inheriting default options from
   // a parent expression, with overrides in `options`.
@@ -236,21 +231,6 @@ struct ExprResolutionInfo {
   explicit ExprResolutionInfo(ExprResolutionInfo* parent);
   ExprResolutionInfo(ExprResolutionInfo* parent,
                      ExprResolutionInfoOptions options);
-
-  // Construct an ExprResolutionInfo with this common set of args, used
-  // for resolving clauses in many places is resolver_query.cc.
-  // We have this shorthand rather than using the Options object because
-  // this exact set of options is very common.
-  // Prefer using Options rather than adding more optional args here.
-  ExprResolutionInfo(const NameScope* name_scope_in,
-                     const NameScope* aggregate_name_scope_in,
-                     const NameScope* analytic_name_scope_in,
-                     bool allows_aggregation_in, bool allows_analytic_in,
-                     bool use_post_grouping_columns_in,
-                     const char* clause_name_in,
-                     QueryResolutionInfo* query_resolution_info_in,
-                     const ASTExpression* top_level_ast_expr_in = nullptr,
-                     IdString column_alias_in = IdString());
 
   // Construct a ExprResolutionInfo from `parent`, setting the namescope to
   // `post_grouping_name_scope` and the `QueryResolutionInfo` to
@@ -503,6 +483,13 @@ class ResolvedTVFArg {
     return std::move(descriptor_);
   }
 
+  const std::vector<ResolvedColumn>& GetPassthroughColumns() const {
+    return passthrough_columns_;
+  }
+  void SetPassthroughColumns(std::vector<ResolvedColumn> columns) {
+    passthrough_columns_ = std::move(columns);
+  }
+
  private:
   enum {
     UNDEFINED,
@@ -527,6 +514,9 @@ class ResolvedTVFArg {
   // Indicates whether this is a relation created as a pipe CALL input table.
   // Can only be true if type_ is SCAN.
   bool is_pipe_input_table_ = false;
+
+  // Cached passthrough columns for the scan.
+  std::vector<ResolvedColumn> passthrough_columns_;
 };
 
 // Computes the default alias to use for an expression.

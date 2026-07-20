@@ -15,9 +15,13 @@
 //
 
 #include "absl/status/status.h"
+#include <string>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "absl/strings/cord.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
 
 using testing::HasSubstr;
 
@@ -202,7 +206,7 @@ TEST(Status, EraseWorks) {
 
 void VisitAndAssertEquals(const absl::Status& status,
                           absl::string_view find_type_url,
-                          const absl::optional<absl::Cord>& expected) {
+                          const std::optional<absl::Cord>& expected) {
   bool already_seen = false;
   status.ForEachPayload([&already_seen, find_type_url, expected](
                             absl::string_view type_url,
@@ -218,7 +222,7 @@ void VisitAndAssertEquals(const absl::Status& status,
 
 TEST(Status, ForEachPayloadEmptyPayload) {
   absl::Status a = absl::Status(absl::StatusCode::kCancelled, "msg");
-  VisitAndAssertEquals(a, "type_a", absl::nullopt);
+  VisitAndAssertEquals(a, "type_a", std::nullopt);
 }
 
 TEST(Status, ForEachPayload_Multiple) {
