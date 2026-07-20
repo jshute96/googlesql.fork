@@ -74,6 +74,9 @@ class DefaultAnnotationSpec : public AnnotationSpec {
   absl::Status CheckAndPropagateForMakeStruct(
       const ResolvedMakeStruct& make_struct,
       StructAnnotationMap* result_annotation_map) override;
+  absl::Status CheckAndPropagateForMakeMap(
+      const ResolvedMakeMap& make_map,
+      StructAnnotationMap* result_annotation_map) override;
 
   // Drops all annotations as we are casting to a new type. Subclasses can
   // override this behavior if they want to annotate the output.
@@ -123,28 +126,38 @@ class DefaultAnnotationSpec : public AnnotationSpec {
 
   // Propagates the annotation from `annotation_map` across all contained types
   // to achieve the a merged annotation "supertype" per-templated arg kind,
-  // e.g. ARG_TYPE_ANY_1, ARG_ARRAY_TYPE_ANY_1, etc, to reconcile annotations
-  // of the related "group" scattered across the arguments.
-  // `type` is used only to create AnnotationMaps as we build up the result.
+  // e.g. ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ARRAY_ANY_1, etc, to
+  // reconcile annotations of the related "group" scattered across the
+  // arguments. `type` is used only to create AnnotationMaps as we build up the
+  // result.
   //
   // This function is the core of the templated propagation algorithm. It is
   // called twice, representing 2 passes:
   // 1. In the first pass, we merge annotation maps from all the arguments and
-  //    into the appropriate argument kind slots (e.g. ARG_TYPE_ANY_1, etc.),
-  //    based on the argument's original kind and its related component
-  //    argument kinds (e.g. ARG_ARRAY_TYPE_ANY_3 needs to also merge its
-  //    child annotation map into the slot for ARG_TYPE_ANY_3).
+  //    into the appropriate argument kind slots (e.g. ARG_KIND_EXPR_ANY_1,
+  //    etc.), based on the argument's original kind and its related component
+  //    argument kinds (e.g. ARG_KIND_EXPR_ARRAY_ANY_3 needs to also merge
+  //    its child annotation map into the slot for ARG_KIND_EXPR_ANY_3).
   // 2. In the second pass, we simply retrieve (and build up, as necessary)
   //    the AnnotationMap merged for the argument kind slot corresponding to
   //    the output's original argument kind.
   //
   //   Returns the merged AnnotationMap at the current level. This is used both
   //   to link parent StructAnnotationMap (e.g. that of ARG_ARRAY_ANY_1) to its
-  //   child AnnotationMap (the one merged for ARG_TYPE_ANY_1).
+  //   child AnnotationMap (the one merged for ARG_KIND_EXPR_ANY_1).
   absl::StatusOr<const AnnotationMap*> PropagateThroughCompositeType(
       AnnotatedType annotated_type, SignatureArgumentKind original_kind,
       absl::flat_hash_map<SignatureArgumentKind,
                           std::unique_ptr<AnnotationMap>>& merging_map) const;
+
+ private:
+  absl::Status PropagateForPathExtraction(
+      const ResolvedFunctionCallBase& function_call,
+      GraphElementType::ElementKind element_kind,
+      AnnotationMap* dest_map) const;
+  absl::Status PropagateForPathCreation(
+      const ResolvedFunctionCallBase& function_call,
+      AnnotationMap* result_annotation_map) const;
 };
 
 // Helper function to retrieve argument `i` from `function_call`, removing

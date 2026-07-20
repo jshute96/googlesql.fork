@@ -55,8 +55,10 @@
 #include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "googlesql/base/check.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
@@ -68,7 +70,6 @@
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_builder.h"
-#include "googlesql/base/status_macros.h"
 #include "googlesql/base/clock.h"
 
 namespace googlesql {
@@ -1701,6 +1702,15 @@ absl::Status SimpleCatalog::GetProcedures(
   return absl::OkStatus();
 }
 
+absl::Status SimpleCatalog::GetPropertyGraphs(
+    absl::flat_hash_set<const PropertyGraph*>* output) const {
+  GOOGLESQL_RET_CHECK_NE(output, nullptr);
+  GOOGLESQL_RET_CHECK(output->empty());
+  absl::MutexLock lock(mutex_);
+  InsertValuesFromMap(property_graphs_, output);
+  return absl::OkStatus();
+}
+
 std::vector<std::string> SimpleCatalog::table_names() const {
   absl::MutexLock l(&mutex_);
   std::vector<std::string> table_names;
@@ -1859,6 +1869,16 @@ SimpleTable::SimpleTable(absl::string_view name,
   }
 }
 
+SimpleTable::SimpleTable(absl::string_view name,
+                         std::vector<std::unique_ptr<const Column>> columns,
+                         const int64_t serialization_id)
+    : name_(name), id_(serialization_id) {
+  for (std::unique_ptr<const Column>& column : columns) {
+    absl::Status status = AddColumn(std::move(column));
+    GOOGLESQL_DCHECK_OK(status);
+  }
+}
+
 // TODO: Consider changing the implicit name of the
 // value table column to match the table name, rather than hardcoding
 // this to "value".  Generally this should not be user-facing, but there
@@ -1995,14 +2015,12 @@ void SimpleTable::SetContents(absl::Span<const std::vector<Value>> rows) {
       GOOGLESQL_RET_CHECK_LT(column_idx, column_major_contents_.size());
       column_values.push_back(column_major_contents_[column_idx]);
     }
-    std::unique_ptr<EvaluatorTableIterator> iter(
-        new SimpleEvaluatorTableIterator(
-            columns, column_values, num_rows_,
-            /*end_status=*/absl::OkStatus(), /*filter_column_idxs=*/
-            absl::flat_hash_set<int>(column_idxs.begin(), column_idxs.end()),
-            /*cancel_cb=*/[]() {},
-            /*set_deadline_cb=*/[](absl::Time t) {}, googlesql_base::Clock::RealClock()));
-    return iter;
+    return SimpleEvaluatorTableIterator::Create(
+        columns, column_values, num_rows_,
+        /*end_status=*/absl::OkStatus(), /*filter_column_idxs=*/
+        absl::flat_hash_set<int>(column_idxs.begin(), column_idxs.end()),
+        /*cancel_cb=*/[]() {},
+        /*set_deadline_cb=*/[](absl::Time t) {}, googlesql_base::Clock::RealClock());
   };
 
   SetEvaluatorTableIteratorFactory(factory);

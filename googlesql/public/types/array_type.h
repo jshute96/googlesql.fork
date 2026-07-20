@@ -33,7 +33,6 @@
 namespace googlesql {
 
 // An array type.
-// Arrays of arrays are not supported.
 class LanguageOptions;
 class TypeFactory;
 class TypeParameterValue;
@@ -127,7 +126,7 @@ class ArrayType : public ListBackedType {
       const FormatValueContentOptions& options) const override;
 
  private:
-  ArrayType(const TypeFactoryBase* factory, const Type* element_type);
+  ArrayType(const TypeFactoryBase& factory, const Type* element_type);
   ~ArrayType() override;
 
   bool SupportsGroupingImpl(const LanguageOptions& language_options,
@@ -136,6 +135,9 @@ class ArrayType : public ListBackedType {
   bool SupportsPartitioningImpl(
       const LanguageOptions& language_options,
       const Type** no_partitioning_type) const override;
+
+  bool SupportsReturningImpl(const LanguageOptions& language_options,
+                             const Type** no_returning_type) const override;
 
   absl::Status SerializeToProtoAndDistinctFileDescriptorsImpl(
       const BuildFileDescriptorSetMapOptions& options, TypeProto* type_proto,

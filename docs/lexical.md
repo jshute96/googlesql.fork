@@ -175,17 +175,14 @@ mytable
 
 ## Column names
 
-A column name represents the name of a column in a table.
-
-+ Column names can be quoted identifiers or unquoted identifiers.
-+ If unquoted, identifiers support dashed identifiers when referenced in a
-  `FROM` or `TABLE` clause.
+A column name represents the name of a column in a table. Column names can be
+quoted identifiers or unquoted identifiers.
 
 Examples:
 
 ```none
 columnA
-column-a
+`column-a`
 `287column`
 ```
 
@@ -596,7 +593,12 @@ Examples:
 -123
 ```
 
-An integer literal is interpreted as an `INT64`.
+In the absence of other context, an integer literal can take either type
+`INT64` or `UINT64`. The type is determined by the
+integer value. Values in the range of `-2^63` to `(2^63)-1` are `INT64`.
+Values in the range `2^63` to `2^64-1` are `UINT64`. If the value
+is outside the range of both `INT64` and
+`UINT64`, an error is produced.
 
 Coercion (implicit casting) of integer literals to other integer types can occur
 if casting doesn't result in truncation. For example, if the integer 55 of type
@@ -703,8 +705,8 @@ Examples:
 [1, 2, 3]
 ['x', 'y', 'xy']
 ARRAY[1, 2, 3]
-ARRAY<string>['x', 'y', 'xy']
-ARRAY<int64>[]
+ARRAY<STRING>['x', 'y', 'xy']
+ARRAY<INT64>[]
 []
 ```
 
@@ -1236,6 +1238,11 @@ GoogleSQL follows these rules for case sensitivity:
     </tr>
     <tr>
       <td>Field names</td>
+      <td>No</td>
+      <td>&nbsp;</td>
+    </tr>
+    <tr>
+      <td>Constant variables</td>
       <td>No</td>
       <td>&nbsp;</td>
     </tr>

@@ -17,11 +17,13 @@
 #include "googlesql/public/function_signature.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "googlesql/base/enum_utils.h"
 #include "googlesql/common/function_signature_testutil.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "googlesql/proto/function.pb.h"
@@ -31,9 +33,12 @@
 #include "googlesql/public/options.pb.h"
 #include "googlesql/public/table_valued_function.h"
 #include "googlesql/public/type.h"
+#include "googlesql/public/type_parameters.pb.h"
+#include "googlesql/public/types/collation.h"
 #include "googlesql/public/types/type.h"
 #include "googlesql/public/types/type_deserializer.h"
 #include "googlesql/public/types/type_factory.h"
+#include "googlesql/public/types/type_parameters.h"
 #include "googlesql/public/value.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -42,7 +47,6 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/types/span.h"
-#include "googlesql/base/status.h"
 
 namespace googlesql {
 
@@ -66,7 +70,7 @@ TEST(FunctionSignatureTests, FunctionArgumentTypeTests) {
   ASSERT_TRUE(fixed_type_int32.IsConcrete());
   GOOGLESQL_EXPECT_OK(fixed_type_int32.IsValid(ProductMode::PRODUCT_EXTERNAL));
   ASSERT_THAT(fixed_type_int32.type(), NotNull());
-  ASSERT_EQ(ARG_TYPE_FIXED, fixed_type_int32.kind());
+  ASSERT_EQ(ARG_KIND_EXPR_FIXED, fixed_type_int32.kind());
   ASSERT_FALSE(fixed_type_int32.repeated());
   ASSERT_FALSE(fixed_type_int32.optional());
   EXPECT_EQ("INT32", fixed_type_int32.UserFacingNameWithCardinality(
@@ -87,7 +91,7 @@ TEST(FunctionSignatureTests, FunctionArgumentTypeTests) {
   ASSERT_TRUE(repeating_fixed_type_int32.IsConcrete());
   GOOGLESQL_EXPECT_OK(repeating_fixed_type_int32.IsValid(ProductMode::PRODUCT_EXTERNAL));
   ASSERT_THAT(repeating_fixed_type_int32.type(), NotNull());
-  ASSERT_EQ(ARG_TYPE_FIXED, repeating_fixed_type_int32.kind());
+  ASSERT_EQ(ARG_KIND_EXPR_FIXED, repeating_fixed_type_int32.kind());
   ASSERT_TRUE(repeating_fixed_type_int32.repeated());
   EXPECT_EQ("[INT32, ...]",
             repeating_fixed_type_int32.UserFacingNameWithCardinality(
@@ -112,7 +116,7 @@ TEST(FunctionSignatureTests, FunctionArgumentTypeTests) {
   ASSERT_TRUE(optional_fixed_type_int32.IsConcrete());
   GOOGLESQL_EXPECT_OK(optional_fixed_type_int32.IsValid(ProductMode::PRODUCT_EXTERNAL));
   ASSERT_THAT(optional_fixed_type_int32.type(), NotNull());
-  ASSERT_EQ(ARG_TYPE_FIXED, optional_fixed_type_int32.kind());
+  ASSERT_EQ(ARG_KIND_EXPR_FIXED, optional_fixed_type_int32.kind());
   ASSERT_FALSE(optional_fixed_type_int32.repeated());
   ASSERT_TRUE(optional_fixed_type_int32.optional());
   EXPECT_EQ("[INT32]",
@@ -143,30 +147,30 @@ TEST(FunctionSignatureTests, FunctionArgumentTypeTests) {
     }
   }
 
-  FunctionArgumentType proto_any_type(ARG_PROTO_ANY);
+  FunctionArgumentType proto_any_type(ARG_KIND_EXPR_PROTO_ANY);
   ASSERT_FALSE(proto_any_type.IsConcrete());
   ASSERT_THAT(proto_any_type.type(), IsNull());
-  ASSERT_EQ(ARG_PROTO_ANY, proto_any_type.kind());
+  ASSERT_EQ(ARG_KIND_EXPR_PROTO_ANY, proto_any_type.kind());
   ASSERT_FALSE(proto_any_type.repeated());
 
-  FunctionArgumentType struct_any_type(ARG_STRUCT_ANY);
+  FunctionArgumentType struct_any_type(ARG_KIND_EXPR_STRUCT_ANY);
   ASSERT_FALSE(struct_any_type.IsConcrete());
   ASSERT_THAT(struct_any_type.type(), IsNull());
-  ASSERT_EQ(ARG_STRUCT_ANY, struct_any_type.kind());
+  ASSERT_EQ(ARG_KIND_EXPR_STRUCT_ANY, struct_any_type.kind());
   ASSERT_FALSE(struct_any_type.repeated());
 
-  FunctionArgumentType enum_any_type(ARG_ENUM_ANY);
+  FunctionArgumentType enum_any_type(ARG_KIND_EXPR_ENUM_ANY);
   ASSERT_FALSE(enum_any_type.IsConcrete());
   ASSERT_THAT(enum_any_type.type(), IsNull());
-  ASSERT_EQ(ARG_ENUM_ANY, enum_any_type.kind());
+  ASSERT_EQ(ARG_KIND_EXPR_ENUM_ANY, enum_any_type.kind());
   ASSERT_FALSE(enum_any_type.repeated());
 
-  FunctionArgumentType void_type(ARG_TYPE_VOID);
+  FunctionArgumentType void_type(ARG_KIND_VOID);
   ASSERT_FALSE(void_type.IsConcrete());
   void_type.set_num_occurrences(1);
   ASSERT_TRUE(void_type.IsConcrete());
   ASSERT_THAT(void_type.type(), IsNull());
-  ASSERT_EQ(ARG_TYPE_VOID, void_type.kind());
+  ASSERT_EQ(ARG_KIND_VOID, void_type.kind());
   ASSERT_FALSE(void_type.repeated());
 }
 
@@ -265,35 +269,35 @@ TEST(FunctionSignatureTests, FunctionArgumentTypeWithDefaultValues) {
       optional_fixed_type_int32_null.IsValid(ProductMode::PRODUCT_EXTERNAL));
   TestDefaultValueAfterSerialization(optional_fixed_type_int32_null);
 
-  FunctionArgumentType templated_type_non_null(ARG_TYPE_ANY_1,
+  FunctionArgumentType templated_type_non_null(ARG_KIND_EXPR_ANY_1,
                                                valid_optional_arg_type_option);
   EXPECT_TRUE(templated_type_non_null.GetDefault().value().Equals(
       values::Int32(10086)));
   GOOGLESQL_EXPECT_OK(templated_type_non_null.IsValid(ProductMode::PRODUCT_EXTERNAL));
   TestDefaultValueAfterSerialization(templated_type_non_null);
 
-  FunctionArgumentType templated_type_null(ARG_TYPE_ANY_1,
+  FunctionArgumentType templated_type_null(ARG_KIND_EXPR_ANY_1,
                                            valid_optional_arg_type_option_null);
   EXPECT_TRUE(
       templated_type_null.GetDefault().value().Equals(values::NullInt32()));
   GOOGLESQL_EXPECT_OK(templated_type_null.IsValid(ProductMode::PRODUCT_EXTERNAL));
   TestDefaultValueAfterSerialization(templated_type_null);
 
-  FunctionArgumentType relation_type(ARG_TYPE_RELATION,
+  FunctionArgumentType relation_type(ARG_KIND_RELATION,
                                      valid_optional_arg_type_option_null);
   EXPECT_THAT(
       relation_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
       StatusIs(absl::StatusCode::kInvalidArgument,
                HasSubstr("ANY TABLE argument cannot have a default value")));
 
-  FunctionArgumentType model_type(ARG_TYPE_MODEL,
+  FunctionArgumentType model_type(ARG_KIND_MODEL,
                                   valid_optional_arg_type_option_null);
   EXPECT_THAT(
       model_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
       StatusIs(absl::StatusCode::kInvalidArgument,
                HasSubstr("ANY MODEL argument cannot have a default value")));
 
-  FunctionArgumentType connection_type(ARG_TYPE_CONNECTION,
+  FunctionArgumentType connection_type(ARG_KIND_CONNECTION,
                                        valid_optional_arg_type_option_null);
   EXPECT_THAT(
       connection_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
@@ -301,13 +305,258 @@ TEST(FunctionSignatureTests, FunctionArgumentTypeWithDefaultValues) {
           absl::StatusCode::kInvalidArgument,
           HasSubstr("ANY CONNECTION argument cannot have a default value")));
 
-  FunctionArgumentType descriptor_type(ARG_TYPE_DESCRIPTOR,
+  FunctionArgumentType descriptor_type(ARG_KIND_DESCRIPTOR,
                                        valid_optional_arg_type_option_null);
   EXPECT_THAT(
       descriptor_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
       StatusIs(
           absl::StatusCode::kInvalidArgument,
           HasSubstr("ANY DESCRIPTOR argument cannot have a default value")));
+}
+
+TEST(FunctionSignatureTests, FunctionArgumentTypeWithDefaultTypeModifiers) {
+  TypeFactory factory;
+  Collation collation = Collation::MakeScalar("und:ci");
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(TypeParameters(), collation);
+
+  // Type modifiers is initialized to empty.
+  FunctionArgumentType arg_type(factory.get_int32(),
+                                FunctionArgumentTypeOptions(),
+                                /*num_occurrences=*/1);
+  ASSERT_TRUE(arg_type.type_modifiers().has_value());
+  EXPECT_TRUE(arg_type.type_modifiers()->IsEmpty());
+}
+
+TEST(FunctionSignatureTests, FunctionArgumentTypeWithTypeModifiers) {
+  TypeFactory factory;
+  Collation collation = Collation::MakeScalar("und:ci");
+  StringTypeParametersProto string_type_param_proto;
+  string_type_param_proto.set_max_length(123);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters type_param,
+      TypeParameters::MakeStringTypeParameters(string_type_param_proto));
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(type_param, collation);
+
+  FunctionArgumentType arg_type(factory.get_string(),
+                                FunctionArgumentTypeOptions(),
+                                /*num_occurrences=*/1, type_modifiers);
+
+  ASSERT_TRUE(arg_type.type_modifiers().has_value());
+  EXPECT_TRUE(arg_type.type_modifiers()->Equals(type_modifiers));
+
+  // Test serialization / deserialization.
+  FileDescriptorSetMap fdset_map;
+  FunctionArgumentTypeProto proto;
+  GOOGLESQL_ASSERT_OK(arg_type.Serialize(&fdset_map, &proto));
+
+  std::vector<const google::protobuf::DescriptorPool*> pools;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<FunctionArgumentType> deserialized_arg_type,
+      FunctionArgumentType::Deserialize(proto,
+                                        TypeDeserializer(&factory, pools)));
+
+  ASSERT_TRUE(deserialized_arg_type->type_modifiers().has_value());
+  EXPECT_TRUE(deserialized_arg_type->type_modifiers()->Equals(type_modifiers));
+}
+
+TEST(FunctionSignatureTests, FunctionArgumentTypeWithTypeModifiers_Validation) {
+  TypeFactory factory;
+  Collation collation = Collation::MakeScalar("und:ci");
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(TypeParameters(), collation);
+
+  // Test that type modifiers are not allowed if kind is not
+  // ARG_KIND_EXPR_FIXED.
+  for (auto kind :
+       googlesql_base::EnumerateEnumValues<SignatureArgumentKind>()) {
+    if (kind == ARG_KIND_EXPR_FIXED ||
+        // FunctionArgumentType with ARG_KIND_LAMBDA constructed directly is not
+        // allowed. So skip it too.
+        kind == ARG_KIND_LAMBDA) {
+      continue;
+    }
+    FunctionArgumentType invalid_arg_type(kind, FunctionArgumentTypeOptions(),
+                                          /*num_occurrences=*/1,
+                                          type_modifiers);
+    EXPECT_THAT(
+        invalid_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+        StatusIs(absl::StatusCode::kInvalidArgument,
+                 AllOf(HasSubstr("TypeModifiers are only applicable for kind "
+                                 "ARG_KIND_EXPR_FIXED"),
+                       HasSubstr(invalid_arg_type.DebugString()))));
+  }
+
+  // Test that type modifiers must be present if the kind is
+  // ARG_KIND_EXPR_FIXED.
+  {
+    FunctionArgumentType invalid_arg_type(factory.get_int32(),
+                                          FunctionArgumentTypeOptions(),
+                                          /*num_occurrences=*/1, std::nullopt);
+    EXPECT_THAT(
+        invalid_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+        StatusIs(absl::StatusCode::kInvalidArgument,
+                 AllOf(HasSubstr("TypeModifiers must be present for kind "
+                                 "ARG_KIND_EXPR_FIXED"),
+                       HasSubstr(invalid_arg_type.DebugString()))));
+  }
+}
+
+TEST(FunctionSignatureTests,
+     FunctionArgumentTypeWithTypeModifiers_InvalidTypeParameters) {
+  TypeFactory factory;
+  StringTypeParametersProto string_type_param_proto;
+  string_type_param_proto.set_max_length(123);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters type_param,
+      TypeParameters::MakeStringTypeParameters(string_type_param_proto));
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(type_param, Collation());
+
+  FunctionArgumentType invalid_arg_type(factory.get_int64(),
+                                        FunctionArgumentTypeOptions(),
+                                        /*num_occurrences=*/1, type_modifiers);
+  EXPECT_THAT(invalid_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("INT64 does not support type parameters: "
+                                 "INT64 type_parameters:(max_length=123)")));
+}
+
+TEST(FunctionSignatureTests,
+     FunctionArgumentTypeWithTypeModifiers_InvalidCollation) {
+  TypeFactory factory;
+  Collation collation = Collation::MakeScalar("und:ci");
+  NumericTypeParametersProto numeric_type_param_proto;
+  numeric_type_param_proto.set_precision(10);
+  numeric_type_param_proto.set_scale(5);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters type_param,
+      TypeParameters::MakeNumericTypeParameters(numeric_type_param_proto));
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(type_param, collation);
+  FunctionArgumentType invalid_arg_type(factory.get_numeric(),
+                                        FunctionArgumentTypeOptions(),
+                                        /*num_occurrences=*/1, type_modifiers);
+  EXPECT_THAT(
+      invalid_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr(
+                   "Collation must have compatible structure with the argument "
+                   "type: NUMERIC type_parameters:(precision=10,scale=5), "
+                   "collation:und:ci")));
+}
+
+TEST(FunctionSignatureTests,
+     FunctionArgumentTypeWithTypeModifiers_MismatchedNumberOfFields) {
+  TypeFactory factory;
+
+  // Create type STRUCT(f1 STRING).
+  const StructType* struct_type;
+  GOOGLESQL_ASSERT_OK(
+      factory.MakeStructType({{"f1", factory.get_string()}}, &struct_type));
+
+  // Create type modifiers [(max_length=123),(max_length=123)].
+  StringTypeParametersProto string_type_param_proto;
+  string_type_param_proto.set_max_length(123);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters type_param,
+      TypeParameters::MakeStringTypeParameters(string_type_param_proto));
+  TypeModifiers type_modifiers = TypeModifiers::MakeTypeModifiers(
+      TypeParameters::MakeTypeParametersWithChildList({type_param, type_param}),
+      Collation());
+
+  FunctionArgumentType invalid_arg_type(struct_type,
+                                        FunctionArgumentTypeOptions(),
+                                        /*num_occurrences=*/1, type_modifiers);
+  EXPECT_THAT(
+      invalid_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+      StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          AllOf(HasSubstr("RET_CHECK failure"),
+                HasSubstr(
+                    "type_parameters.num_children() == num_fields() (2 vs. 1) "
+                    ": STRUCT<f1 STRING> "
+                    "type_parameters:[(max_length=123),(max_length=123)]"))));
+}
+
+TEST(FunctionSignatureTests, InvalidTypeModifiersInTVFSchemaColumn) {
+  TypeFactory factory;
+  StringTypeParametersProto string_type_param_proto;
+  string_type_param_proto.set_max_length(123);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters type_param,
+      TypeParameters::MakeStringTypeParameters(string_type_param_proto));
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(type_param, Collation());
+
+  FunctionArgumentType relation_arg_type(
+      googlesql::FunctionArgumentType::RelationWithSchema(
+          googlesql::TVFRelation(
+              {googlesql::TVFSchemaColumn("c", googlesql::types::Int64Type(),
+                                          false, false, type_modifiers)}),
+          /*extra_relation_input_columns_allowed=*/false));
+
+  EXPECT_THAT(relation_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Type parameters must have compatible "
+                                 "structure with the column type: c "
+                                 "INT64 type_parameters:(max_length=123)")));
+}
+
+TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeWithTypeModifiers) {
+  TypeFactory factory;
+  NumericTypeParametersProto numeric_type_param_proto;
+  numeric_type_param_proto.set_precision(10);
+  numeric_type_param_proto.set_scale(5);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters type_param,
+      TypeParameters::MakeNumericTypeParameters(numeric_type_param_proto));
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(type_param, Collation());
+  FunctionArgumentType arg_type(factory.get_numeric(),
+                                FunctionArgumentTypeOptions(),
+                                /*num_occurrences=*/1, type_modifiers);
+  EXPECT_THAT(arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+              absl_testing::IsOk());
+
+  // Type modifiers are not allowed in lambda argument types.
+  FunctionArgumentType lambda_arg_type =
+      FunctionArgumentType::Lambda({arg_type}, ARG_KIND_EXPR_ANY_1);
+  EXPECT_THAT(
+      lambda_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+      StatusIs(absl::StatusCode::kInternal,
+               HasSubstr("ARG_KIND_EXPR_FIXED lambda argument must have "
+                         "empty type modifiers")));
+
+  lambda_arg_type =
+      FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, arg_type);
+  EXPECT_THAT(
+      lambda_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+      StatusIs(absl::StatusCode::kInternal,
+               HasSubstr("ARG_KIND_EXPR_FIXED lambda argument must have "
+                         "empty type modifiers")));
+
+  // Templated arguments cannot have empty type modifiers either (must be
+  // std::nullopt).
+  FunctionArgumentType templated_arg_with_empty_modifiers(
+      ARG_KIND_EXPR_ANY_1, FunctionArgumentTypeOptions(), /*num_occurrences=*/1,
+      TypeModifiers());
+  lambda_arg_type = FunctionArgumentType::Lambda(
+      {templated_arg_with_empty_modifiers}, ARG_KIND_EXPR_ANY_2);
+  EXPECT_THAT(
+      lambda_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+      StatusIs(absl::StatusCode::kInternal,
+               HasSubstr("Non ARG_KIND_EXPR_FIXED lambda argument cannot "
+                         "have type modifiers")));
+
+  lambda_arg_type = FunctionArgumentType::Lambda(
+      {ARG_KIND_EXPR_ANY_2}, templated_arg_with_empty_modifiers);
+  EXPECT_THAT(
+      lambda_arg_type.IsValid(ProductMode::PRODUCT_EXTERNAL),
+      StatusIs(absl::StatusCode::kInternal,
+               HasSubstr("Non ARG_KIND_EXPR_FIXED lambda argument cannot "
+                         "have type modifiers")));
 }
 
 TEST(FunctionSignatureTests, FunctionSignatureWithDefaultValues) {
@@ -375,9 +624,9 @@ TEST(FunctionSignatureTests, FunctionSignatureWithDefaultValues) {
 TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
   TypeFactory factory;
   FunctionArgumentType lambda_zero_args =
-      FunctionArgumentType::Lambda({}, ARG_TYPE_ANY_1);
+      FunctionArgumentType::Lambda({}, ARG_KIND_EXPR_ANY_1);
   ASSERT_TRUE(lambda_zero_args.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_zero_args.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_zero_args.kind());
   ASSERT_FALSE(lambda_zero_args.IsConcrete());
   ASSERT_TRUE(lambda_zero_args.IsTemplated());
   ASSERT_FALSE(lambda_zero_args.repeated());
@@ -386,36 +635,36 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
 
   // Single function-type argument argument types
   FunctionArgumentType lambda_any_type =
-      FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, ARG_TYPE_ANY_2);
+      FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_2);
   ASSERT_TRUE(lambda_any_type.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_any_type.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_any_type.kind());
   ASSERT_FALSE(lambda_any_type.IsConcrete());
   ASSERT_TRUE(lambda_any_type.IsTemplated());
   ASSERT_FALSE(lambda_any_type.repeated());
   ASSERT_THAT(lambda_any_type.type(), IsNull());
 
   FunctionArgumentType lambda_array_any_type = FunctionArgumentType::Lambda(
-      {ARG_ARRAY_TYPE_ANY_1}, ARG_ARRAY_TYPE_ANY_2);
+      {ARG_KIND_EXPR_ARRAY_ANY_1}, ARG_KIND_EXPR_ARRAY_ANY_2);
   ASSERT_TRUE(lambda_array_any_type.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_array_any_type.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_array_any_type.kind());
   ASSERT_FALSE(lambda_array_any_type.IsConcrete());
   ASSERT_TRUE(lambda_array_any_type.IsTemplated());
   ASSERT_FALSE(lambda_array_any_type.repeated());
   ASSERT_THAT(lambda_array_any_type.type(), IsNull());
 
   FunctionArgumentType lambda_non_templated_body_type =
-      FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, factory.get_bool());
+      FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, factory.get_bool());
   ASSERT_TRUE(lambda_non_templated_body_type.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_non_templated_body_type.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_non_templated_body_type.kind());
   ASSERT_FALSE(lambda_non_templated_body_type.IsConcrete());
   ASSERT_TRUE(lambda_non_templated_body_type.IsTemplated());
   ASSERT_FALSE(lambda_non_templated_body_type.repeated());
   ASSERT_THAT(lambda_non_templated_body_type.type(), IsNull());
 
   FunctionArgumentType lambda_non_templated_arg_type =
-      FunctionArgumentType::Lambda({factory.get_int64()}, ARG_TYPE_ANY_1);
+      FunctionArgumentType::Lambda({factory.get_int64()}, ARG_KIND_EXPR_ANY_1);
   ASSERT_TRUE(lambda_non_templated_arg_type.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_non_templated_arg_type.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_non_templated_arg_type.kind());
   ASSERT_FALSE(lambda_non_templated_arg_type.IsConcrete());
   ASSERT_TRUE(lambda_non_templated_arg_type.IsTemplated());
   ASSERT_FALSE(lambda_non_templated_arg_type.repeated());
@@ -424,7 +673,7 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
   FunctionArgumentType lambda_non_templated_arg_body_type =
       FunctionArgumentType::Lambda({factory.get_int64()}, factory.get_bool());
   ASSERT_TRUE(lambda_non_templated_arg_body_type.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_non_templated_arg_body_type.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_non_templated_arg_body_type.kind());
   ASSERT_FALSE(lambda_non_templated_arg_body_type.IsConcrete());
   ASSERT_FALSE(lambda_non_templated_arg_body_type.IsTemplated());
   ASSERT_FALSE(lambda_non_templated_arg_body_type.repeated());
@@ -434,12 +683,12 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
   FunctionArgumentType lambda_any_type_multi_args =
       FunctionArgumentType::Lambda(
           {
-              ARG_TYPE_ANY_1,
-              ARG_TYPE_ANY_2,
+              ARG_KIND_EXPR_ANY_1,
+              ARG_KIND_EXPR_ANY_2,
           },
-          ARG_TYPE_ANY_2);
+          ARG_KIND_EXPR_ANY_2);
   ASSERT_TRUE(lambda_any_type_multi_args.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_any_type_multi_args.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_any_type_multi_args.kind());
   ASSERT_FALSE(lambda_any_type_multi_args.IsConcrete());
   ASSERT_TRUE(lambda_any_type_multi_args.IsTemplated());
   ASSERT_FALSE(lambda_any_type_multi_args.repeated());
@@ -448,12 +697,12 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
   FunctionArgumentType lambda_array_any_type_multi_args =
       FunctionArgumentType::Lambda(
           {
-              ARG_ARRAY_TYPE_ANY_1,
-              ARG_ARRAY_TYPE_ANY_2,
+              ARG_KIND_EXPR_ARRAY_ANY_1,
+              ARG_KIND_EXPR_ARRAY_ANY_2,
           },
-          ARG_ARRAY_TYPE_ANY_2);
+          ARG_KIND_EXPR_ARRAY_ANY_2);
   ASSERT_TRUE(lambda_array_any_type_multi_args.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_array_any_type_multi_args.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_array_any_type_multi_args.kind());
   ASSERT_FALSE(lambda_array_any_type_multi_args.IsConcrete());
   ASSERT_TRUE(lambda_array_any_type_multi_args.IsTemplated());
   ASSERT_FALSE(lambda_array_any_type_multi_args.repeated());
@@ -462,12 +711,12 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
   FunctionArgumentType lambda_non_templated_body_type_multi_args =
       FunctionArgumentType::Lambda(
           {
-              ARG_TYPE_ANY_1,
-              ARG_TYPE_ANY_1,
+              ARG_KIND_EXPR_ANY_1,
+              ARG_KIND_EXPR_ANY_1,
           },
           factory.get_bool());
   ASSERT_TRUE(lambda_non_templated_body_type_multi_args.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_non_templated_body_type_multi_args.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_non_templated_body_type_multi_args.kind());
   ASSERT_FALSE(lambda_non_templated_body_type_multi_args.IsConcrete());
   ASSERT_TRUE(lambda_non_templated_body_type_multi_args.IsTemplated());
   ASSERT_FALSE(lambda_non_templated_body_type_multi_args.repeated());
@@ -479,9 +728,9 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
               factory.get_bool(),
               factory.get_int64(),
           },
-          ARG_TYPE_ANY_1);
+          ARG_KIND_EXPR_ANY_1);
   ASSERT_TRUE(lambda_non_templated_arg_type_multi_args.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_non_templated_arg_type_multi_args.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_non_templated_arg_type_multi_args.kind());
   ASSERT_FALSE(lambda_non_templated_arg_type_multi_args.IsConcrete());
   ASSERT_TRUE(lambda_non_templated_arg_type_multi_args.IsTemplated());
   ASSERT_FALSE(lambda_non_templated_arg_type_multi_args.repeated());
@@ -495,7 +744,7 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeAttributesTests) {
           },
           factory.get_bool());
   ASSERT_TRUE(lambda_non_templated_arg_body_type_multi_args.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA,
+  ASSERT_EQ(ARG_KIND_LAMBDA,
             lambda_non_templated_arg_body_type_multi_args.kind());
   ASSERT_FALSE(lambda_non_templated_arg_body_type_multi_args.IsConcrete());
   ASSERT_FALSE(lambda_non_templated_arg_body_type_multi_args.IsTemplated());
@@ -513,7 +762,7 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeConcreteArgsTests) {
           },
           FunctionArgumentType(types::BoolType(), 1));
   ASSERT_TRUE(lambda_concrete_arg_body_type_multi_args.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_concrete_arg_body_type_multi_args.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_concrete_arg_body_type_multi_args.kind());
   ASSERT_TRUE(lambda_concrete_arg_body_type_multi_args.IsConcrete());
   ASSERT_FALSE(lambda_concrete_arg_body_type_multi_args.repeated());
   ASSERT_THAT(lambda_concrete_arg_body_type_multi_args.type(), IsNull());
@@ -526,7 +775,7 @@ TEST(FunctionSignatureTests, LambdaFunctionWithOptionsTests) {
       {FunctionArgumentType(types::Int64Type(), 1)},
       FunctionArgumentType(types::Int64Type(), 1), options);
   ASSERT_TRUE(lambda_with_options.IsLambda());
-  ASSERT_EQ(ARG_TYPE_LAMBDA, lambda_with_options.kind());
+  ASSERT_EQ(ARG_KIND_LAMBDA, lambda_with_options.kind());
   ASSERT_TRUE(lambda_with_options.options().has_argument_name());
   ASSERT_EQ(lambda_with_options.options().argument_name(), "my_lambda");
 }
@@ -594,7 +843,7 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeSerializationTest) {
   TestLambdaSerialization(
       FunctionArgumentType::Lambda(
           {
-              FunctionArgumentType(ARG_TYPE_ANY_1),
+              FunctionArgumentType(ARG_KIND_EXPR_ANY_1),
               FunctionArgumentType(type_factory.get_int64()),
           },
           FunctionArgumentType(types::BoolType())),
@@ -607,16 +856,57 @@ TEST(FunctionSignatureTests, LambdaFunctionArgumentTypeSerializationTest) {
               FunctionArgumentType(type_factory.get_string()),
               FunctionArgumentType(type_factory.get_int64()),
           },
-          FunctionArgumentType(ARG_TYPE_ANY_1)),
+          FunctionArgumentType(ARG_KIND_EXPR_ANY_1)),
       &type_factory);
 
   // Templated argument type and body type.
   TestLambdaSerialization(FunctionArgumentType::Lambda(
                               {
-                                  FunctionArgumentType(ARG_TYPE_ANY_1),
+                                  FunctionArgumentType(ARG_KIND_EXPR_ANY_1),
                               },
-                              FunctionArgumentType(ARG_TYPE_ANY_2)),
+                              FunctionArgumentType(ARG_KIND_EXPR_ANY_2)),
                           &type_factory);
+}
+
+TEST(FunctionSignatureTests,
+     DeclarativeTypesAreDeduplicatedAcrossTheSignatureWhenDeserializing) {
+  TypeFactory factory1;
+  const Type* declarative_type;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      declarative_type,
+      factory1.MakeDeclarativeType(DeclarativeTypeDescriptor()
+                                       .set_type_id({"N1", "mytype"})
+                                       .set_display_name("MyType")
+                                       .set_backing_type(types::Int64Type())));
+
+  FunctionArgumentTypeList arguments;
+  arguments.push_back(FunctionArgumentType(declarative_type, 1));
+  arguments.push_back(FunctionArgumentType(declarative_type, 1));
+
+  FunctionSignature signature(/*result_type=*/types::BoolType(), arguments,
+                              /*context_id=*/-1);
+
+  FileDescriptorSetMap file_descriptor_set_map;
+  FunctionSignatureProto proto;
+  GOOGLESQL_ASSERT_OK(signature.Serialize(&file_descriptor_set_map, &proto));
+
+  TypeFactory factory2;
+  TypeDeserializer type_deserializer(&factory2);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<FunctionSignature> deserialized_signature,
+      FunctionSignature::Deserialize(proto, type_deserializer));
+
+  ASSERT_EQ(deserialized_signature->arguments().size(), 2);
+  const Type* type1 = deserialized_signature->argument(0).type();
+  const Type* type2 = deserialized_signature->argument(1).type();
+
+  // Ensure the type was deduplicated.
+  ASSERT_NE(type1, nullptr);
+  ASSERT_NE(type2, nullptr);
+  EXPECT_EQ(type1, type2);
+  EXPECT_TRUE(type1->IsDeclarativeType());
+  EXPECT_EQ(type1->AsDeclarativeType()->ShortTypeName(PRODUCT_INTERNAL),
+            "MyType");
 }
 
 // The following helpers generate GoogleSQL function signatures for testing.
@@ -652,11 +942,11 @@ static FunctionSignature GetAddFunctionForFloat32(TypeFactory* factory) {
 // Model functions with function-type arguments like ARRAY_FILTER.
 static FunctionSignature GetArrayFilterFunction(TypeFactory* factory) {
   FunctionArgumentTypeList arguments;
-  arguments.push_back(FunctionArgumentType(ARG_ARRAY_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARRAY_ANY_1));
   arguments.push_back(FunctionArgumentType::Lambda(
-      {ARG_TYPE_ANY_1}, FunctionArgumentType(factory->get_bool())));
+      {ARG_KIND_EXPR_ANY_1}, FunctionArgumentType(factory->get_bool())));
   FunctionSignature array_filter_function(
-      FunctionArgumentType(ARG_ARRAY_TYPE_ANY_1), arguments, nullptr);
+      FunctionArgumentType(ARG_KIND_EXPR_ARRAY_ANY_1), arguments, nullptr);
   return array_filter_function;
 }
 
@@ -664,10 +954,10 @@ static FunctionSignature GetArrayFilterFunction(TypeFactory* factory) {
 static FunctionSignature GetIfThenFunction(TypeFactory* factory) {
   FunctionArgumentTypeList arguments;
   arguments.push_back(FunctionArgumentType(factory->get_bool()));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
   FunctionSignature if_then_else_signature(
-      FunctionArgumentType(ARG_TYPE_ANY_1), arguments, nullptr);
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1), arguments, nullptr);
   return if_then_else_signature;
 }
 
@@ -678,12 +968,12 @@ static FunctionSignature GetCaseWhenFunction(TypeFactory* factory) {
   FunctionArgumentTypeList arguments;
   arguments.push_back(FunctionArgumentType(factory->get_bool(),
                                            FunctionArgumentType::REPEATED));
-  arguments.push_back(
-      FunctionArgumentType(ARG_TYPE_ANY_1, FunctionArgumentType::REPEATED));
-  arguments.push_back(
-      FunctionArgumentType(ARG_TYPE_ANY_1, FunctionArgumentType::OPTIONAL));
-  FunctionSignature case_when_signature(FunctionArgumentType(ARG_TYPE_ANY_1),
-                                        arguments, nullptr);
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1,
+                                           FunctionArgumentType::REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1,
+                                           FunctionArgumentType::OPTIONAL));
+  FunctionSignature case_when_signature(
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1), arguments, nullptr);
   return case_when_signature;
 }
 
@@ -693,26 +983,28 @@ static FunctionSignature GetCaseWhenFunction(TypeFactory* factory) {
 static FunctionSignature GetCaseValueFunction(
     TypeFactory* factory, FunctionArgumentTypeList* arguments) {
   arguments->clear();
-  arguments->push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
-  arguments->push_back(FunctionArgumentType(ARG_TYPE_ANY_1,
+  arguments->push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
+  arguments->push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1,
                                             FunctionArgumentType::REPEATED));
-  arguments->push_back(FunctionArgumentType(ARG_TYPE_ANY_2,
+  arguments->push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_2,
                                             FunctionArgumentType::REPEATED));
-  arguments->push_back(FunctionArgumentType(ARG_TYPE_ANY_2,
+  arguments->push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_2,
                                             FunctionArgumentType::OPTIONAL));
-  FunctionSignature case_value_signature(FunctionArgumentType(ARG_TYPE_ANY_2),
-                                         *arguments, /*context_id=*/-1);
+  FunctionSignature case_value_signature(
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_2), *arguments,
+      /*context_id=*/-1);
   return case_value_signature;
 }
 
 // Test a function with VOID return type, and some argument options.
 static FunctionSignature GetVoidFunction(TypeFactory* factory) {
   FunctionSignature void_func(
-      ARG_TYPE_VOID,
+      ARG_KIND_VOID,
       {{types::BoolType()},
        {types::Int64Type(),
         FunctionArgumentTypeOptions().set_is_not_aggregate()},
-       {ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_must_be_non_null()}},
+       {ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_must_be_non_null()}},
       /*context_id=*/-1);
   return void_func;
 }
@@ -720,8 +1012,8 @@ static FunctionSignature GetVoidFunction(TypeFactory* factory) {
 static FunctionSignature GetConstantExpressionArgumentFunction(
     TypeFactory* factory) {
   FunctionSignature constant_expression_function(
-      FunctionArgumentType(ARG_TYPE_VOID),
-      {{ARG_TYPE_ANY_1,
+      FunctionArgumentType(ARG_KIND_VOID),
+      {{ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_must_be_constant_expression()}},
       /*context_id=*/-1);
   return constant_expression_function;
@@ -964,19 +1256,19 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Optional argument that is not last is invalid.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType(factory.get_int64()), arguments,
       /*context_id=*/-1);
   GOOGLESQL_EXPECT_OK(signature->IsValid(ProductMode::PRODUCT_EXTERNAL));
   GOOGLESQL_EXPECT_OK(signature->init_status());
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType(factory.get_int64()), arguments,
       /*context_id=*/-1);
   GOOGLESQL_EXPECT_OK(signature->IsValid(ProductMode::PRODUCT_EXTERNAL));
   GOOGLESQL_EXPECT_OK(signature->init_status());
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
   EXPECT_DEBUG_DEATH(
       signature.reset(
           new FunctionSignature(FunctionArgumentType(factory.get_int64()),
@@ -989,25 +1281,25 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Repeated arguments must be consecutive.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType(factory.get_int64()), arguments,
       /*context_id=*/-1);
   GOOGLESQL_EXPECT_OK(signature->IsValid(ProductMode::PRODUCT_EXTERNAL));
   GOOGLESQL_EXPECT_OK(signature->init_status());
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, REPEATED));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType(factory.get_int64()), arguments,
       /*context_id=*/-1);
   GOOGLESQL_EXPECT_OK(signature->IsValid(ProductMode::PRODUCT_EXTERNAL));
   GOOGLESQL_EXPECT_OK(signature->init_status());
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType(factory.get_int64()), arguments,
       /*context_id=*/-1);
   GOOGLESQL_EXPECT_OK(signature->IsValid(ProductMode::PRODUCT_EXTERNAL));
   GOOGLESQL_EXPECT_OK(signature->init_status());
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, REPEATED));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1022,8 +1314,8 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // 1 repeated, 1 optional
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, REPEATED));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL));
   EXPECT_DEBUG_DEATH(
       signature.reset(
           new FunctionSignature(FunctionArgumentType(factory.get_int64()),
@@ -1036,7 +1328,7 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   }
 
   // 1 repeated, 2 optional
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1048,10 +1340,10 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // 2 repeated, 2 optional
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, REPEATED));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, REPEATED));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1062,7 +1354,7 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   }
 
   // 2 repeated, 3 optional
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1073,8 +1365,8 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   }
 
   // num_occurrences must be the same value for all repeated arguments.
-  arguments.assign({{ARG_TYPE_ANY_1, REPEATED, 2},
-                    {ARG_TYPE_ANY_1, REPEATED, 1}});
+  arguments.assign(
+      {{ARG_KIND_EXPR_ANY_1, REPEATED, 2}, {ARG_KIND_EXPR_ANY_1, REPEATED, 1}});
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1086,7 +1378,7 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Repeated relation argument is invalid.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, REPEATED));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType(factory.get_int64()), arguments,
       /*context_id=*/-1);
@@ -1098,8 +1390,8 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Optional relation following any other optional argument is just fine.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, OPTIONAL));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType::AnyRelation(), arguments, /*context_id=*/-1);
   GOOGLESQL_EXPECT_OK(signature->IsValidForTableValuedFunction());
@@ -1111,7 +1403,7 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   arguments.clear();
   arguments.push_back(FunctionArgumentType(factory.get_int64(), REPEATED));
   arguments.push_back(FunctionArgumentType(factory.get_int64(), REPEATED));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, OPTIONAL));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType::AnyRelation(), arguments, /*context_id=*/-1);
 
@@ -1130,7 +1422,7 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   GOOGLESQL_EXPECT_OK(signature->init_status());
   EXPECT_EQ(signature->last_named_arg_index(), -1);
   EXPECT_EQ(signature->last_arg_index_with_default(), -1);
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, OPTIONAL));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType(factory.get_int64()), arguments,
       /*context_id=*/-1);
@@ -1138,7 +1430,7 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   GOOGLESQL_EXPECT_OK(signature->init_status());
   EXPECT_EQ(signature->last_named_arg_index(), -1);
   EXPECT_EQ(signature->last_arg_index_with_default(), -1);
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
   EXPECT_DEBUG_DEATH(
       signature.reset(
           new FunctionSignature(FunctionArgumentType(factory.get_int64()),
@@ -1153,8 +1445,8 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   // invalid.
   arguments.clear();
   arguments.push_back(FunctionArgumentType(factory.get_int64(), OPTIONAL));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, REPEATED));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, REPEATED));
   EXPECT_DEBUG_DEATH(
       signature.reset(
           new FunctionSignature(FunctionArgumentType(factory.get_int64()),
@@ -1167,11 +1459,12 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Optional STRUCT before named param is allowed.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_STRUCT_ANY, OPTIONAL));
-  arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_ARBITRARY, FunctionArgumentTypeOptions()
-                              .set_argument_name("foobar", kPositionalOrNamed)
-                              .set_cardinality(OPTIONAL)));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_STRUCT_ANY, OPTIONAL));
+  arguments.push_back(
+      FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
+                           FunctionArgumentTypeOptions()
+                               .set_argument_name("foobar", kPositionalOrNamed)
+                               .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType::AnyRelation(), arguments, /*context_id=*/-1);
 
@@ -1182,12 +1475,13 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Repeated STRUCT before named param is allowed.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_STRUCT_ANY, REPEATED));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ARBITRARY, REPEATED));
-  arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_ARBITRARY, FunctionArgumentTypeOptions()
-                              .set_argument_name("foobar", kPositionalOrNamed)
-                              .set_cardinality(OPTIONAL)));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_STRUCT_ANY, REPEATED));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY, REPEATED));
+  arguments.push_back(
+      FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
+                           FunctionArgumentTypeOptions()
+                               .set_argument_name("foobar", kPositionalOrNamed)
+                               .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType::AnyRelation(), arguments, /*context_id=*/-1);
 
@@ -1198,11 +1492,12 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Optional RELATION before named param is allowed.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, OPTIONAL));
-  arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_ARBITRARY, FunctionArgumentTypeOptions()
-                              .set_argument_name("foobar", kPositionalOrNamed)
-                              .set_cardinality(OPTIONAL)));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, OPTIONAL));
+  arguments.push_back(
+      FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
+                           FunctionArgumentTypeOptions()
+                               .set_argument_name("foobar", kPositionalOrNamed)
+                               .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType::AnyRelation(), arguments, /*context_id=*/-1);
 
@@ -1213,9 +1508,9 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Named optional RELATION is fine if it's the only named param.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ARBITRARY, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY, OPTIONAL));
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("foobar", kPositionalOrNamed)
                              .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
@@ -1229,9 +1524,9 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   // Named optional RELATION after required RELATION is fine if it's the only
   // named param.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION));
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("foobar", kPositionalOrNamed)
                              .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
@@ -1244,9 +1539,9 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Named optional RELATION after optional RELATION is allowed.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_RELATION, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_RELATION, OPTIONAL));
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("foobar", kPositionalOrNamed)
                              .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
@@ -1260,11 +1555,11 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   // Two named optional RELATIONS are allowed.
   arguments.clear();
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("foobar", kPositionalOrNamed)
                              .set_cardinality(OPTIONAL)));
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("barfoo", kPositionalOrNamed)
                              .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
@@ -1277,8 +1572,8 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Required Models not in the first position are fine.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ARBITRARY));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_MODEL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_MODEL));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType::AnyRelation(), arguments, /*context_id=*/-1);
 
@@ -1289,8 +1584,8 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Optional Models are fine, regardless of position.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ARBITRARY));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_MODEL, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_MODEL, OPTIONAL));
   signature = std::make_unique<FunctionSignature>(
       FunctionArgumentType::AnyRelation(), arguments, /*context_id=*/-1);
 
@@ -1301,10 +1596,10 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Named optional RELATION is fine after MODEL.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ARBITRARY));
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_MODEL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_MODEL));
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("foobar", kPositionalOrNamed)
                              .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
@@ -1317,9 +1612,9 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Named optional RELATION is allowed after optional MODEL.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_MODEL, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_MODEL, OPTIONAL));
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("barfoo", kPositionalOrNamed)
                              .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
@@ -1332,9 +1627,9 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Mandatory named RELATION is invalid.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_ARBITRARY, OPTIONAL));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY, OPTIONAL));
   arguments.push_back(FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions()
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions()
                              .set_argument_name("foobar", kNamedOnly)
                              .set_cardinality(OPTIONAL)));
   signature = std::make_unique<FunctionSignature>(
@@ -1346,17 +1641,19 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
   EXPECT_EQ(signature->last_arg_index_with_default(), -1);
 
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_ARRAY_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARRAY_ANY_1));
   arguments.push_back(
-      FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, factory.get_bool()));
+      FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, factory.get_bool()));
   // Templated function-type related to arguments.
   signature = std::make_unique<FunctionSignature>(
-      FunctionArgumentType(ARG_TYPE_ANY_1), arguments, /*context_id=*/-1);
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1), arguments,
+      /*context_id=*/-1);
 
   // Templated function-type not related.
   EXPECT_DEBUG_DEATH(
-      signature.reset(new FunctionSignature(
-          FunctionArgumentType(ARG_TYPE_ANY_2), arguments, /*context_id=*/-1)),
+      signature.reset(
+          new FunctionSignature(FunctionArgumentType(ARG_KIND_EXPR_ANY_2),
+                                arguments, /*context_id=*/-1)),
       "Result type template must match an argument type template");
   if (!GOOGLESQL_DEBUG_MODE) {
     EXPECT_FALSE(signature->IsValid(ProductMode::PRODUCT_EXTERNAL).ok());
@@ -1365,12 +1662,12 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // Templated argument of function-type not related to previous arguments.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_ARRAY_TYPE_ANY_1));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARRAY_ANY_1));
   arguments.push_back(
-      FunctionArgumentType::Lambda({ARG_TYPE_ANY_2}, factory.get_bool()));
+      FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_2}, factory.get_bool()));
   EXPECT_DEBUG_DEATH(
       signature.reset(new FunctionSignature(
-          FunctionArgumentType(ARG_ARRAY_TYPE_ANY_1), arguments,
+          FunctionArgumentType(ARG_KIND_EXPR_ARRAY_ANY_1), arguments,
           /*context_id=*/-1)),
       "Templated argument of function-type argument type must match an "
       "argument type before the function-type argument");
@@ -1423,7 +1720,7 @@ TEST(FunctionSignatureTests, FunctionSignatureValidityTests) {
 
   // VOID argument is invalid.
   arguments.clear();
-  arguments.push_back(FunctionArgumentType(ARG_TYPE_VOID));
+  arguments.push_back(FunctionArgumentType(ARG_KIND_VOID));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1442,10 +1739,10 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
   FunctionArgumentTypeList arguments;
   std::unique_ptr<FunctionSignature> signature;
 
-  arguments.emplace_back(ARG_ARRAY_TYPE_ANY_1);
+  arguments.emplace_back(ARG_KIND_EXPR_ARRAY_ANY_1);
   // Not supported arg type for function-type arguments.
-  arguments.emplace_back(
-      FunctionArgumentType::Lambda({ARG_TYPE_ARBITRARY}, factory.get_bool()));
+  arguments.emplace_back(FunctionArgumentType::Lambda({ARG_KIND_EXPR_ARBITRARY},
+                                                      factory.get_bool()));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1456,10 +1753,10 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
   }
 
   arguments.clear();
-  arguments.emplace_back(ARG_ARRAY_TYPE_ANY_1);
+  arguments.emplace_back(ARG_KIND_EXPR_ARRAY_ANY_1);
   // Not supported arg type for function-type body.
-  arguments.emplace_back(
-      FunctionArgumentType::Lambda({factory.get_bool()}, ARG_TYPE_ARBITRARY));
+  arguments.emplace_back(FunctionArgumentType::Lambda({factory.get_bool()},
+                                                      ARG_KIND_EXPR_ARBITRARY));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1469,12 +1766,12 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
     EXPECT_FALSE(signature->init_status().ok());
   }
 
-  // ARG_ARRAY_TYPE_ANY_1 not supported as function-type argument.
+  // ARG_KIND_EXPR_ARRAY_ANY_1 not supported as function-type argument.
   arguments.clear();
-  arguments.emplace_back(ARG_ARRAY_TYPE_ANY_1);
+  arguments.emplace_back(ARG_KIND_EXPR_ARRAY_ANY_1);
   // Not supported REPEATED options for function-type argument return type.
-  arguments.emplace_back(
-      FunctionArgumentType::Lambda({ARG_ARRAY_TYPE_ANY_1}, ARG_TYPE_ANY_1));
+  arguments.emplace_back(FunctionArgumentType::Lambda(
+      {ARG_KIND_EXPR_ARRAY_ANY_1}, ARG_KIND_EXPR_ANY_1));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1484,12 +1781,12 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
     EXPECT_FALSE(signature->init_status().ok());
   }
 
-  // ARG_ARRAY_TYPE_ANY_2 not supported as function-type argument.
+  // ARG_KIND_EXPR_ARRAY_ANY_2 not supported as function-type argument.
   arguments.clear();
-  arguments.emplace_back(ARG_ARRAY_TYPE_ANY_1);
+  arguments.emplace_back(ARG_KIND_EXPR_ARRAY_ANY_1);
   // Not supported REPEATED options for function-type body.
-  arguments.emplace_back(
-      FunctionArgumentType::Lambda({ARG_ARRAY_TYPE_ANY_2}, ARG_TYPE_ANY_1));
+  arguments.emplace_back(FunctionArgumentType::Lambda(
+      {ARG_KIND_EXPR_ARRAY_ANY_2}, ARG_KIND_EXPR_ANY_1));
   EXPECT_DEBUG_DEATH(signature.reset(new FunctionSignature(
                          FunctionArgumentType(factory.get_int64()), arguments,
                          /*context_id=*/-1)),
@@ -1505,10 +1802,11 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
       FunctionArgumentType::OPTIONAL;
 
   arguments.clear();
-  arguments.emplace_back(ARG_ARRAY_TYPE_ANY_1);
+  arguments.emplace_back(ARG_KIND_EXPR_ARRAY_ANY_1);
   // Not supported REPEATED options for function-type arguments.
   arguments.emplace_back(FunctionArgumentType::Lambda(
-      {FunctionArgumentType(ARG_TYPE_ANY_1, REPEATED)}, factory.get_bool()));
+      {FunctionArgumentType(ARG_KIND_EXPR_ANY_1, REPEATED)},
+      factory.get_bool()));
   EXPECT_DEBUG_DEATH(
       signature.reset(new FunctionSignature(
           FunctionArgumentType(factory.get_int64()), arguments,
@@ -1520,10 +1818,11 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
   }
 
   arguments.clear();
-  arguments.emplace_back(ARG_ARRAY_TYPE_ANY_1);
+  arguments.emplace_back(ARG_KIND_EXPR_ARRAY_ANY_1);
   // Not supported OPTIONAL options for function-type arguments.
   arguments.emplace_back(FunctionArgumentType::Lambda(
-      {FunctionArgumentType(ARG_TYPE_ANY_1, OPTIONAL)}, factory.get_bool()));
+      {FunctionArgumentType(ARG_KIND_EXPR_ANY_1, OPTIONAL)},
+      factory.get_bool()));
   EXPECT_DEBUG_DEATH(
       signature.reset(new FunctionSignature(
           FunctionArgumentType(factory.get_int64()), arguments,
@@ -1535,11 +1834,11 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
   }
 
   arguments.clear();
-  arguments.emplace_back(ARG_ARRAY_TYPE_ANY_1);
+  arguments.emplace_back(ARG_KIND_EXPR_ARRAY_ANY_1);
   // Not supported REPEATED options for function-type body.
   arguments.emplace_back(FunctionArgumentType::Lambda(
       {FunctionArgumentType(factory.get_bool())},
-      FunctionArgumentType(ARG_TYPE_ANY_1, REPEATED)));
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1, REPEATED)));
   EXPECT_DEBUG_DEATH(
       signature.reset(new FunctionSignature(
           FunctionArgumentType(factory.get_int64()), arguments,
@@ -1551,12 +1850,13 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
   }
 
   EXPECT_DEBUG_DEATH(
-      signature.reset(new FunctionSignature(
-          ARG_TYPE_ANY_1,
-          {ARG_TYPE_ANY_1,
-           FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, factory.get_bool()),
-           ARG_TYPE_ANY_1},
-          /*context_id=*/-1)),
+      signature.reset(
+          new FunctionSignature(ARG_KIND_EXPR_ANY_1,
+                                {ARG_KIND_EXPR_ANY_1,
+                                 FunctionArgumentType::Lambda(
+                                     {ARG_KIND_EXPR_ANY_1}, factory.get_bool()),
+                                 ARG_KIND_EXPR_ANY_1},
+                                /*context_id=*/-1)),
       "Templated argument kind used by function-type argument cannot be used "
       "by "
       "arguments to the right of the function-type using it");
@@ -1565,134 +1865,162 @@ TEST(FunctionSignatureTests, FunctionSignatureLambdaValidityTests) {
 TEST(FunctionArgumentTypeTests, TestTemplatedKindIsRelated) {
   TypeFactory type_factory;
   FunctionArgumentType arg_type_fixed(type_factory.get_int32());
-  FunctionArgumentType arg_type_any_1(ARG_TYPE_ANY_1);
-  FunctionArgumentType arg_type_any_2(ARG_TYPE_ANY_2);
-  FunctionArgumentType arg_array_type_any_1(ARG_ARRAY_TYPE_ANY_1);
-  FunctionArgumentType arg_array_type_any_2(ARG_ARRAY_TYPE_ANY_2);
-  FunctionArgumentType arg_proto_any(ARG_PROTO_ANY);
-  FunctionArgumentType arg_struct_any(ARG_STRUCT_ANY);
-  FunctionArgumentType arg_enum_any(ARG_ENUM_ANY);
+  FunctionArgumentType arg_type_any_1(ARG_KIND_EXPR_ANY_1);
+  FunctionArgumentType arg_type_any_2(ARG_KIND_EXPR_ANY_2);
+  FunctionArgumentType arg_array_type_any_1(ARG_KIND_EXPR_ARRAY_ANY_1);
+  FunctionArgumentType arg_array_type_any_2(ARG_KIND_EXPR_ARRAY_ANY_2);
+  FunctionArgumentType arg_proto_any(ARG_KIND_EXPR_PROTO_ANY);
+  FunctionArgumentType arg_struct_any(ARG_KIND_EXPR_STRUCT_ANY);
+  FunctionArgumentType arg_enum_any(ARG_KIND_EXPR_ENUM_ANY);
   FunctionArgumentType arg_type_any_1_lambda =
       FunctionArgumentType::Lambda({arg_type_any_1}, arg_type_any_1);
   FunctionArgumentType arg_type_any_2_lambda =
       FunctionArgumentType::Lambda({arg_type_any_2}, arg_type_any_2);
   FunctionArgumentType arg_array_type_any_2_lambda =
       FunctionArgumentType::Lambda({type_factory.get_int64()},
-                                   ARG_ARRAY_TYPE_ANY_2);
-  FunctionArgumentType arg_type_arbitrary(ARG_TYPE_ARBITRARY);
+                                   ARG_KIND_EXPR_ARRAY_ANY_2);
+  FunctionArgumentType arg_type_arbitrary(ARG_KIND_EXPR_ARBITRARY);
 
-  EXPECT_FALSE(arg_type_arbitrary.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+  EXPECT_FALSE(
+      arg_type_arbitrary.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 
-  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
-  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
+  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_FALSE(
+      arg_type_fixed.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
+  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(arg_type_fixed.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 
-  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_TRUE(arg_type_any_1.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
-  EXPECT_TRUE(arg_type_any_1.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
-  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
+  EXPECT_TRUE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_TRUE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
+  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
+  EXPECT_FALSE(
+      arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_2));
+  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(arg_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 
   // arg_type_any_1_lambda is has the same behavior as arg_type_any_1
-  EXPECT_FALSE(arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_TRUE(arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
+  EXPECT_FALSE(
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
   EXPECT_TRUE(
-      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_FALSE(arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
-  EXPECT_FALSE(
-      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(
-      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
-
-  EXPECT_FALSE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_TRUE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
   EXPECT_TRUE(
-      arg_array_type_any_1.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_FALSE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
   EXPECT_FALSE(
-      arg_array_type_any_1.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
+  EXPECT_FALSE(
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_2));
+  EXPECT_FALSE(
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(
+      arg_type_any_1_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 
-  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
-  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_TRUE(arg_type_any_2.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
-  EXPECT_TRUE(arg_type_any_2.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+  EXPECT_FALSE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
+  EXPECT_TRUE(arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_TRUE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
+  EXPECT_FALSE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
+  EXPECT_FALSE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_2));
+  EXPECT_FALSE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(
+      arg_array_type_any_1.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
+
+  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
+  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_FALSE(
+      arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
+  EXPECT_TRUE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
+  EXPECT_TRUE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_2));
+  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(arg_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 
   // arg_type_any_2_lambda is has the same behavior as arg_type_any_2
-  EXPECT_FALSE(arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_FALSE(arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
   EXPECT_FALSE(
-      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_TRUE(arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
+  EXPECT_FALSE(
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_FALSE(
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
   EXPECT_TRUE(
-      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_ENUM_ANY));
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
+  EXPECT_TRUE(
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_2));
   EXPECT_FALSE(
-      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(
+      arg_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 
-  EXPECT_FALSE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_FALSE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
   EXPECT_FALSE(
-      arg_array_type_any_2.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_TRUE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
+  EXPECT_FALSE(
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_FALSE(
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
+  EXPECT_TRUE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
   EXPECT_TRUE(
-      arg_array_type_any_2.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(arg_array_type_any_2.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_2));
+  EXPECT_FALSE(
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(
+      arg_array_type_any_2.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 
   // arg_array_type_any_2_lambda is has the same behavior as
   // arg_array_type_any_2
   EXPECT_FALSE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_FIXED));
+      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
   EXPECT_FALSE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
-  EXPECT_FALSE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
+      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_FALSE(arg_array_type_any_2_lambda.TemplatedKindIsRelated(
+      ARG_KIND_EXPR_ARRAY_ANY_1));
   EXPECT_TRUE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
-  EXPECT_TRUE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_FALSE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(
-      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+      arg_array_type_any_2_lambda.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
+  EXPECT_TRUE(arg_array_type_any_2_lambda.TemplatedKindIsRelated(
+      ARG_KIND_EXPR_ARRAY_ANY_2));
+  EXPECT_FALSE(arg_array_type_any_2_lambda.TemplatedKindIsRelated(
+      ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(arg_array_type_any_2_lambda.TemplatedKindIsRelated(
+      ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_FALSE(arg_array_type_any_2_lambda.TemplatedKindIsRelated(
+      ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(arg_array_type_any_2_lambda.TemplatedKindIsRelated(
+      ARG_KIND_EXPR_ARBITRARY));
 
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_TYPE_FIXED));
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_TYPE_ANY_1));
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_1));
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_TYPE_ANY_2));
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_ARRAY_TYPE_ANY_2));
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_PROTO_ANY));
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_STRUCT_ANY));
-  EXPECT_TRUE(arg_enum_any.TemplatedKindIsRelated(ARG_ENUM_ANY));
-  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_TYPE_ARBITRARY));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_FIXED));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_1));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_1));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_ANY_2));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_ARRAY_ANY_2));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_PROTO_ANY));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_STRUCT_ANY));
+  EXPECT_TRUE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_ENUM_ANY));
+  EXPECT_FALSE(arg_enum_any.TemplatedKindIsRelated(ARG_KIND_EXPR_ARBITRARY));
 }
 
 static void CheckConcreteArgumentType(
@@ -1871,31 +2199,32 @@ TEST(FunctionSignatureTests, TestConcreteArgumentType) {
 static std::vector<FunctionArgumentType> GetTemplatedArgumentTypes(
     TypeFactory* factory) {
   std::vector<FunctionArgumentType> templated_types;
-  templated_types.push_back(FunctionArgumentType(ARG_TYPE_ANY_1));
-  templated_types.push_back(FunctionArgumentType(ARG_TYPE_ANY_2));
-  templated_types.push_back(FunctionArgumentType(ARG_ARRAY_TYPE_ANY_1));
-  templated_types.push_back(FunctionArgumentType(ARG_ARRAY_TYPE_ANY_2));
-  templated_types.push_back(FunctionArgumentType(ARG_PROTO_ANY));
-  templated_types.push_back(FunctionArgumentType(ARG_STRUCT_ANY));
-  templated_types.push_back(FunctionArgumentType(ARG_ENUM_ANY));
-  templated_types.push_back(FunctionArgumentType(ARG_TYPE_ARBITRARY));
-  templated_types.push_back(FunctionArgumentType(ARG_TYPE_RELATION));
-  templated_types.push_back(FunctionArgumentType(ARG_TYPE_MODEL));
-  templated_types.push_back(FunctionArgumentType(ARG_TYPE_CONNECTION));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_1));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_ANY_2));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARRAY_ANY_1));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARRAY_ANY_2));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_PROTO_ANY));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_STRUCT_ANY));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_ENUM_ANY));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_RELATION));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_MODEL));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_CONNECTION));
+  templated_types.push_back(FunctionArgumentType(ARG_KIND_EXPR_STRING_ANY));
   templated_types.push_back(
-      FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, ARG_TYPE_ANY_2));
+      FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_2));
   templated_types.push_back(
-      FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, factory->get_bool()));
-  templated_types.push_back(
-      FunctionArgumentType::Lambda({factory->get_int64()}, ARG_TYPE_ANY_1));
+      FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, factory->get_bool()));
+  templated_types.push_back(FunctionArgumentType::Lambda({factory->get_int64()},
+                                                         ARG_KIND_EXPR_ANY_1));
   return templated_types;
 }
 
 static std::vector<FunctionArgumentType> GetNonTemplatedArgumentTypes(
     TypeFactory* factory) {
   std::vector<FunctionArgumentType> non_templated_types;
-  non_templated_types.push_back(FunctionArgumentType(ARG_TYPE_VOID));
-  // A few examples of ARG_TYPE_FIXED
+  non_templated_types.push_back(FunctionArgumentType(ARG_KIND_VOID));
+  // A few examples of ARG_KIND_EXPR_FIXED
   non_templated_types.push_back(FunctionArgumentType(factory->get_int32()));
   non_templated_types.push_back(FunctionArgumentType(factory->get_string()));
   non_templated_types.push_back(FunctionArgumentType::Lambda(
@@ -1919,43 +2248,44 @@ TEST(FunctionSignatureTests, TestIsTemplatedArgument) {
     // values.
     enum_size += SignatureArgumentKind_IsValid(i);
   }
-  ASSERT_EQ(33, enum_size);
+  ASSERT_EQ(34, enum_size);
 
   std::set<SignatureArgumentKind> templated_kinds;
-  templated_kinds.insert(ARG_TYPE_ANY_1);
-  templated_kinds.insert(ARG_TYPE_ANY_2);
-  templated_kinds.insert(ARG_TYPE_ANY_3);
-  templated_kinds.insert(ARG_TYPE_ANY_4);
-  templated_kinds.insert(ARG_TYPE_ANY_5);
-  templated_kinds.insert(ARG_ARRAY_TYPE_ANY_1);
-  templated_kinds.insert(ARG_ARRAY_TYPE_ANY_2);
-  templated_kinds.insert(ARG_ARRAY_TYPE_ANY_3);
-  templated_kinds.insert(ARG_ARRAY_TYPE_ANY_4);
-  templated_kinds.insert(ARG_ARRAY_TYPE_ANY_5);
-  templated_kinds.insert(ARG_PROTO_MAP_ANY);
-  templated_kinds.insert(ARG_PROTO_MAP_KEY_ANY);
-  templated_kinds.insert(ARG_PROTO_MAP_VALUE_ANY);
-  templated_kinds.insert(ARG_MAP_TYPE_ANY_1_2);
-  templated_kinds.insert(ARG_PROTO_ANY);
-  templated_kinds.insert(ARG_STRUCT_ANY);
-  templated_kinds.insert(ARG_ENUM_ANY);
-  templated_kinds.insert(ARG_TYPE_ARBITRARY);
-  templated_kinds.insert(ARG_TYPE_RELATION);
-  templated_kinds.insert(ARG_TYPE_MODEL);
-  templated_kinds.insert(ARG_TYPE_CONNECTION);
-  templated_kinds.insert(ARG_TYPE_DESCRIPTOR);
-  templated_kinds.insert(ARG_TYPE_LAMBDA);
-  templated_kinds.insert(ARG_RANGE_TYPE_ANY_1);
-  templated_kinds.insert(ARG_TYPE_GRAPH_NODE);
-  templated_kinds.insert(ARG_TYPE_GRAPH_EDGE);
-  templated_kinds.insert(ARG_TYPE_GRAPH_PATH);
-  templated_kinds.insert(ARG_TYPE_SEQUENCE);
-  templated_kinds.insert(ARG_MEASURE_TYPE_ANY_1);
+  templated_kinds.insert(ARG_KIND_EXPR_ANY_1);
+  templated_kinds.insert(ARG_KIND_EXPR_ANY_2);
+  templated_kinds.insert(ARG_KIND_EXPR_ANY_3);
+  templated_kinds.insert(ARG_KIND_EXPR_ANY_4);
+  templated_kinds.insert(ARG_KIND_EXPR_ANY_5);
+  templated_kinds.insert(ARG_KIND_EXPR_ARRAY_ANY_1);
+  templated_kinds.insert(ARG_KIND_EXPR_ARRAY_ANY_2);
+  templated_kinds.insert(ARG_KIND_EXPR_ARRAY_ANY_3);
+  templated_kinds.insert(ARG_KIND_EXPR_ARRAY_ANY_4);
+  templated_kinds.insert(ARG_KIND_EXPR_ARRAY_ANY_5);
+  templated_kinds.insert(ARG_KIND_EXPR_PROTO_MAP_ANY);
+  templated_kinds.insert(ARG_KIND_EXPR_PROTO_MAP_KEY_ANY);
+  templated_kinds.insert(ARG_KIND_EXPR_PROTO_MAP_VALUE_ANY);
+  templated_kinds.insert(ARG_KIND_EXPR_MAP_ANY_1_2);
+  templated_kinds.insert(ARG_KIND_EXPR_PROTO_ANY);
+  templated_kinds.insert(ARG_KIND_EXPR_STRUCT_ANY);
+  templated_kinds.insert(ARG_KIND_EXPR_ENUM_ANY);
+  templated_kinds.insert(ARG_KIND_EXPR_ARBITRARY);
+  templated_kinds.insert(ARG_KIND_RELATION);
+  templated_kinds.insert(ARG_KIND_MODEL);
+  templated_kinds.insert(ARG_KIND_CONNECTION);
+  templated_kinds.insert(ARG_KIND_DESCRIPTOR);
+  templated_kinds.insert(ARG_KIND_LAMBDA);
+  templated_kinds.insert(ARG_KIND_EXPR_RANGE_ANY_1);
+  templated_kinds.insert(ARG_KIND_EXPR_GRAPH_NODE);
+  templated_kinds.insert(ARG_KIND_EXPR_GRAPH_EDGE);
+  templated_kinds.insert(ARG_KIND_EXPR_GRAPH_PATH);
+  templated_kinds.insert(ARG_KIND_SEQUENCE);
+  templated_kinds.insert(ARG_KIND_EXPR_MEASURE_ANY_1);
+  templated_kinds.insert(ARG_KIND_EXPR_STRING_ANY);
 
   std::set<SignatureArgumentKind> non_templated_kinds;
-  non_templated_kinds.insert(ARG_TYPE_FIXED);
-  non_templated_kinds.insert(ARG_TYPE_VOID);
-  templated_kinds.insert(ARG_TYPE_GRAPH);
+  non_templated_kinds.insert(ARG_KIND_EXPR_FIXED);
+  non_templated_kinds.insert(ARG_KIND_VOID);
+  templated_kinds.insert(ARG_KIND_GRAPH);
 
   for (const FunctionArgumentType& type : GetTemplatedArgumentTypes(&factory)) {
     tests.push_back({type, true});
@@ -2127,7 +2457,7 @@ TEST(FunctionSignatureTests, TestArgumentConstraints) {
       [](const FunctionSignature& signature,
          absl::Span<const InputArgumentType> arguments) { return ""; };
   FunctionSignature nonconcrete_signature(
-      types::Int64Type(), {{ARG_TYPE_ANY_1, /*num_occurrences=*/1}},
+      types::Int64Type(), {{ARG_KIND_EXPR_ANY_1, /*num_occurrences=*/1}},
       /*context_id=*/-1,
       FunctionSignatureOptions().set_constraints(noop_constraints_callback));
   // Calling the argument constraint callback on a non-concrete signature should
@@ -2227,8 +2557,8 @@ void TestArgumentTypeOptionsSerialization(
 
 TEST(FunctionSignatureTests, TestFunctionArgumentTypeOptionsConstraint) {
   FunctionSignature orderable_element_signature(
-      FunctionArgumentType(ARG_TYPE_ANY_1),
-      {{ARG_TYPE_ANY_1,
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1),
+      {{ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_must_support_ordering()}},
       /*context_id=*/-1);
 
@@ -2243,8 +2573,8 @@ TEST(FunctionSignatureTests, TestFunctionArgumentTypeOptionsConstraint) {
                    .must_support_grouping());
 
   FunctionSignature equatable_element_signature(
-      FunctionArgumentType(ARG_TYPE_ANY_1),
-      {{ARG_TYPE_ANY_1,
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1),
+      {{ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_must_support_equality()}},
       /*context_id=*/-1);
 
@@ -2259,8 +2589,8 @@ TEST(FunctionSignatureTests, TestFunctionArgumentTypeOptionsConstraint) {
                    .must_support_grouping());
 
   FunctionSignature groupable_element_signature(
-      FunctionArgumentType(ARG_TYPE_ANY_1),
-      {{ARG_TYPE_ANY_1,
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1),
+      {{ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_must_support_grouping()}},
       /*context_id=*/-1);
 
@@ -2283,7 +2613,7 @@ TEST(FunctionSignatureTests, FunctionArgumentNamesSerialization) {
   TypeFactory type_factory;
   TypeDeserializer type_deserializor(&type_factory,
                                      /*extended_type_deserializer=*/{});
-  SignatureArgumentKind arg_kind = ARG_TYPE_VOID;
+  SignatureArgumentKind arg_kind = ARG_KIND_VOID;
   const Type* arg_type = nullptr;
 
   for (auto [named_kind, is_mandatory] :
@@ -2331,7 +2661,7 @@ TEST(FunctionSignatureTests, FunctionArgumentNamesSerialization) {
 TEST(FunctionSignatureTests,
      TestFunctionArgumentTypeOptionsArrayElementConstraint) {
   FunctionArgumentType orderable_array_arg(
-      ARG_ARRAY_TYPE_ANY_1,
+      ARG_KIND_EXPR_ARRAY_ANY_1,
       FunctionArgumentTypeOptions().set_array_element_must_support_ordering());
   EXPECT_TRUE(
       orderable_array_arg.options().array_element_must_support_ordering());
@@ -2342,7 +2672,7 @@ TEST(FunctionSignatureTests,
   TestArgumentTypeOptionsSerialization(orderable_array_arg);
 
   FunctionArgumentType groupable_array_arg(
-      ARG_ARRAY_TYPE_ANY_1,
+      ARG_KIND_EXPR_ARRAY_ANY_1,
       FunctionArgumentTypeOptions().set_array_element_must_support_grouping());
   EXPECT_FALSE(
       groupable_array_arg.options().array_element_must_support_ordering());
@@ -2353,7 +2683,7 @@ TEST(FunctionSignatureTests,
   TestArgumentTypeOptionsSerialization(groupable_array_arg);
 
   FunctionArgumentType equatable_array_arg(
-      ARG_ARRAY_TYPE_ANY_1,
+      ARG_KIND_EXPR_ARRAY_ANY_1,
       FunctionArgumentTypeOptions().set_array_element_must_support_equality());
   EXPECT_FALSE(
       equatable_array_arg.options().array_element_must_support_ordering());
@@ -2365,9 +2695,10 @@ TEST(FunctionSignatureTests,
 }
 
 TEST(FunctionSignatureTests, GraphFunctionArgumentType) {
-  FunctionArgumentType node_arg(ARG_TYPE_GRAPH_NODE),
-      edge_arg(ARG_TYPE_GRAPH_EDGE), element_arg(ARG_TYPE_GRAPH_ELEMENT),
-      path_arg(ARG_TYPE_GRAPH_PATH);
+  FunctionArgumentType node_arg(ARG_KIND_EXPR_GRAPH_NODE),
+      edge_arg(ARG_KIND_EXPR_GRAPH_EDGE),
+      element_arg(ARG_KIND_EXPR_GRAPH_ELEMENT),
+      path_arg(ARG_KIND_EXPR_GRAPH_PATH);
   EXPECT_TRUE(node_arg.IsScalar());
   EXPECT_TRUE(edge_arg.IsScalar());
   EXPECT_TRUE(element_arg.IsScalar());
@@ -2383,7 +2714,7 @@ TEST(FunctionSignatureTests, GraphFunctionArgumentType) {
 }
 
 TEST(FunctionSignatureTests, LambdaArgumentTypeConstructedDirectlyIsInvalid) {
-  FunctionArgumentType lambda(ARG_TYPE_LAMBDA);
+  FunctionArgumentType lambda(ARG_KIND_LAMBDA);
   EXPECT_THAT(
       lambda.IsValid(PRODUCT_INTERNAL),
       StatusIs(absl::StatusCode::kInternal, HasSubstr("constructed directly")));
@@ -2391,20 +2722,24 @@ TEST(FunctionSignatureTests, LambdaArgumentTypeConstructedDirectlyIsInvalid) {
 
 TEST(FunctionSignatureTests, SignatureSupportsArgumentAlias) {
   FunctionSignature support_alias(
-      FunctionArgumentType(ARG_TYPE_ANY_1),
-      {{ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_alias_kind(
-                            FunctionEnums::ARGUMENT_ALIASED)},
-       {ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_alias_kind(
-                            FunctionEnums::ARGUMENT_NON_ALIASED)}},
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1),
+      {{ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_argument_alias_kind(
+            FunctionEnums::ARGUMENT_ALIASED)},
+       {ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_argument_alias_kind(
+            FunctionEnums::ARGUMENT_NON_ALIASED)}},
       /*context_id=*/-1);
   EXPECT_TRUE(SignatureSupportsArgumentAliases(support_alias));
 
   FunctionSignature unsupport_alias(
-      FunctionArgumentType(ARG_TYPE_ANY_1),
-      {{ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_alias_kind(
-                            FunctionEnums::ARGUMENT_NON_ALIASED)},
-       {ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_alias_kind(
-                            FunctionEnums::ARGUMENT_NON_ALIASED)}},
+      FunctionArgumentType(ARG_KIND_EXPR_ANY_1),
+      {{ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_argument_alias_kind(
+            FunctionEnums::ARGUMENT_NON_ALIASED)},
+       {ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_argument_alias_kind(
+            FunctionEnums::ARGUMENT_NON_ALIASED)}},
       /*context_id=*/-1);
   EXPECT_FALSE(SignatureSupportsArgumentAliases(unsupport_alias));
 }
@@ -2412,12 +2747,12 @@ TEST(FunctionSignatureTests, SignatureSupportsArgumentAlias) {
 TEST(FunctionSignatureTests, SetConcreteResultTypePreservesArgumentOptions) {
   FunctionSignature result_arg_has_options(
       FunctionArgumentType(
-          ARG_TYPE_ANY_1,
+          ARG_KIND_EXPR_ANY_1,
           FunctionArgumentTypeOptions().set_uses_array_element_for_collation()),
-      {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+      {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
       /*context_id=*/-1);
   result_arg_has_options.SetConcreteResultType(
-      types::Int64Type(), SignatureArgumentKind::ARG_TYPE_FIXED);
+      types::Int64Type(), SignatureArgumentKind::ARG_KIND_EXPR_FIXED);
   EXPECT_TRUE(result_arg_has_options.result_type()
                   .options()
                   .uses_array_element_for_collation());
@@ -2461,49 +2796,57 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn<FunctionSignatureInvalidTestParams>({
         // Templated array type should fail if corresponding ANY type is not
         // present.
-        {.result_type = {ARG_ARRAY_TYPE_ANY_1}, .arguments = {}},
-        {.result_type = {ARG_ARRAY_TYPE_ANY_1}, .arguments = {ARG_TYPE_ANY_2}},
-        {.result_type = {ARG_TYPE_ANY_2}, .arguments = {ARG_ARRAY_TYPE_ANY_1}},
+        {.result_type = {ARG_KIND_EXPR_ARRAY_ANY_1}, .arguments = {}},
+        {.result_type = {ARG_KIND_EXPR_ARRAY_ANY_1},
+         .arguments = {ARG_KIND_EXPR_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_ANY_2},
+         .arguments = {ARG_KIND_EXPR_ARRAY_ANY_1}},
         // Templated range type should fail if corresponding ANY type is not
         // present.
-        {.result_type = {ARG_RANGE_TYPE_ANY_1}, .arguments = {}},
-        {.result_type = {ARG_RANGE_TYPE_ANY_1}, .arguments = {ARG_TYPE_ANY_2}},
-        {.result_type = {ARG_TYPE_ANY_2}, .arguments = {ARG_RANGE_TYPE_ANY_1}},
+        {.result_type = {ARG_KIND_EXPR_RANGE_ANY_1}, .arguments = {}},
+        {.result_type = {ARG_KIND_EXPR_RANGE_ANY_1},
+         .arguments = {ARG_KIND_EXPR_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_ANY_2},
+         .arguments = {ARG_KIND_EXPR_RANGE_ANY_1}},
         // Templated measure type should fail if corresponding ANY type is not
         // present.
-        {.result_type = {ARG_MEASURE_TYPE_ANY_1}, .arguments = {}},
-        {.result_type = {ARG_MEASURE_TYPE_ANY_1},
-         .arguments = {ARG_TYPE_ANY_2}},
-        {.result_type = {ARG_TYPE_ANY_2},
-         .arguments = {ARG_MEASURE_TYPE_ANY_1}},
+        {.result_type = {ARG_KIND_EXPR_MEASURE_ANY_1}, .arguments = {}},
+        {.result_type = {ARG_KIND_EXPR_MEASURE_ANY_1},
+         .arguments = {ARG_KIND_EXPR_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_ANY_2},
+         .arguments = {ARG_KIND_EXPR_MEASURE_ANY_1}},
         // Templated map result type should fail if key and value are not both
         // present.
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2}, .arguments = {}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2}, .arguments = {ARG_TYPE_ANY_1}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2}, .arguments = {ARG_TYPE_ANY_2}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {ARG_TYPE_ANY_1, ARG_TYPE_ANY_3}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {ARG_TYPE_ANY_1, ARG_ARRAY_TYPE_ANY_1}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {FunctionArgumentType::Lambda({ARG_TYPE_ANY_1},
-                                                    ARG_TYPE_ANY_1)}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {FunctionArgumentType::Lambda({ARG_TYPE_ANY_2},
-                                                    ARG_TYPE_ANY_2)}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2}, .arguments = {}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_ANY_1}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_3}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ARRAY_ANY_1}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1},
+                                                    ARG_KIND_EXPR_ANY_1)}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_2},
+                                                    ARG_KIND_EXPR_ANY_2)}},
         // Templated proto map type should fail if key and value are not
         // present.
-        {.result_type = {ARG_PROTO_MAP_ANY}, .arguments = {}},
+        {.result_type = {ARG_KIND_EXPR_PROTO_MAP_ANY}, .arguments = {}},
 
         // These probably should fail, but don't currently. Since
-        // ARG_PROTO_MAP_ANY is not used as a return type anywhere in our
+        // ARG_KIND_EXPR_PROTO_MAP_ANY is not used as a return type
+        // anywhere in
+        // our
         // catalog, nor do we expect it to be in the future, this is low
         // priority.
         //
-        // {.result_type = {ARG_PROTO_MAP_ANY},
-        //  .arguments = {ARG_PROTO_MAP_KEY_ANY}},
-        // {.result_type = {ARG_PROTO_MAP_ANY},
-        //  .arguments = {ARG_PROTO_MAP_VALUE_ANY}},
+        // {.result_type = {ARG_KIND_EXPR_PROTO_MAP_ANY},
+        //  .arguments = {ARG_KIND_EXPR_PROTO_MAP_KEY_ANY}},
+        // {.result_type = {ARG_KIND_EXPR_PROTO_MAP_ANY},
+        //  .arguments = {ARG_KIND_EXPR_PROTO_MAP_VALUE_ANY}},
     }));
 
 struct FunctionSignatureValidTestParams {
@@ -2528,23 +2871,88 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn<FunctionSignatureValidTestParams>({
         // Templated map type should succeed if key and value are both present
         // or inferrable.
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {ARG_TYPE_ANY_1, ARG_TYPE_ANY_2}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {ARG_ARRAY_TYPE_ANY_1, ARG_TYPE_ANY_2}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {ARG_ARRAY_TYPE_ANY_1, ARG_ARRAY_TYPE_ANY_2}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {ARG_RANGE_TYPE_ANY_1, ARG_TYPE_ANY_2}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {ARG_RANGE_TYPE_ANY_1, ARG_ARRAY_TYPE_ANY_2}},
-        {.result_type = {ARG_MAP_TYPE_ANY_1_2},
-         .arguments = {FunctionArgumentType::Lambda({ARG_TYPE_ANY_1},
-                                                    ARG_TYPE_ANY_2)}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_ARRAY_ANY_1, ARG_KIND_EXPR_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_ARRAY_ANY_1, ARG_KIND_EXPR_ARRAY_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_RANGE_ANY_1, ARG_KIND_EXPR_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {ARG_KIND_EXPR_RANGE_ANY_1, ARG_KIND_EXPR_ARRAY_ANY_2}},
+        {.result_type = {ARG_KIND_EXPR_MAP_ANY_1_2},
+         .arguments = {FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1},
+                                                    ARG_KIND_EXPR_ANY_2)}},
         {.result_type = {types::BoolType()},
-         .arguments = {ARG_MAP_TYPE_ANY_1_2, ARG_TYPE_ANY_2,
-                       FunctionArgumentType::Lambda({ARG_TYPE_ANY_1},
-                                                    ARG_TYPE_ANY_1)}},
+         .arguments = {ARG_KIND_EXPR_MAP_ANY_1_2, ARG_KIND_EXPR_ANY_2,
+                       FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1},
+                                                    ARG_KIND_EXPR_ANY_1)}},
     }));
+
+TEST(FunctionSignatureTests, GetSQLDeclarationWithTypeModifiers) {
+  TypeFactory factory;
+  Collation collation = Collation::MakeScalar("und:ci");
+  StringTypeParametersProto string_type_param_proto;
+  string_type_param_proto.set_max_length(123);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters type_param,
+      TypeParameters::MakeStringTypeParameters(string_type_param_proto));
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(type_param, collation);
+
+  FunctionArgumentType arg_type(factory.get_string(),
+                                FunctionArgumentTypeOptions(),
+                                /*num_occurrences=*/1, type_modifiers);
+  FunctionArgumentType arg_type_no_modifiers(factory.get_string(),
+                                             FunctionArgumentTypeOptions(),
+                                             /*num_occurrences=*/1);
+
+  // Test FunctionArgumentType::GetSQLDeclaration
+  EXPECT_EQ("STRING(123) COLLATE 'und:ci'",
+            arg_type.GetSQLDeclaration(ProductMode::PRODUCT_INTERNAL,
+                                       /*use_external_float32=*/false));
+  EXPECT_EQ("STRING", arg_type_no_modifiers.GetSQLDeclaration(
+                          ProductMode::PRODUCT_INTERNAL,
+                          /*use_external_float32=*/false));
+
+  // Test FunctionSignature::GetSQLDeclaration
+  FunctionArgumentTypeList arguments;
+  arguments.push_back(arg_type);
+  FunctionSignature signature(factory.get_int64(), arguments,
+                              /*context_id=*/-1);
+
+  FunctionArgumentTypeList arguments_no_modifiers;
+  arguments_no_modifiers.push_back(arg_type_no_modifiers);
+  FunctionSignature signature_no_modifiers(
+      factory.get_int64(), arguments_no_modifiers, /*context_id=*/-1);
+
+  EXPECT_EQ(signature.GetSQLDeclaration({} /* argument_names */,
+                                        ProductMode::PRODUCT_INTERNAL,
+                                        /*use_external_float32=*/false),
+            "(STRING(123) COLLATE 'und:ci') RETURNS INT64");
+  EXPECT_EQ(signature_no_modifiers.GetSQLDeclaration(
+                {} /* argument_names */, ProductMode::PRODUCT_INTERNAL,
+                /*use_external_float32=*/false),
+            "(STRING) RETURNS INT64");
+}
+
+TEST(FunctionSignatureTests, GetSQLDeclarationWithTypeModifiersError) {
+  TypeFactory factory;
+  Collation collation = Collation::MakeScalar("und:ci");
+  TypeModifiers type_modifiers =
+      TypeModifiers::MakeTypeModifiers(TypeParameters(), collation);
+
+  // Collation is not compatible with INT64, so TypeNameWithModifiers should
+  // fail.
+  FunctionArgumentType arg_type(factory.get_int64(),
+                                FunctionArgumentTypeOptions(),
+                                /*num_occurrences=*/1, type_modifiers);
+
+  std::string decl = arg_type.GetSQLDeclaration(ProductMode::PRODUCT_INTERNAL,
+                                                /*use_external_float32=*/false);
+  EXPECT_EQ("ERROR: Input collation und:ci is not compatible with type INT64",
+            decl);
+}
 
 }  // namespace googlesql

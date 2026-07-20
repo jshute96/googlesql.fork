@@ -31,7 +31,9 @@
 #include "googlesql/analyzer/analytic_function_resolver.h"
 #include "googlesql/analyzer/expr_resolver_helper.h"
 #include "googlesql/analyzer/function_resolver.h"
+#include "googlesql/analyzer/graph_dml_resolver.h"
 #include "googlesql/analyzer/graph_expr_resolver_helper.h"
+#include "googlesql/analyzer/graph_query_resolver_helper.h"
 #include "googlesql/analyzer/name_scope.h"
 #include "googlesql/analyzer/query_resolver_helper.h"
 #include "googlesql/analyzer/resolver.h"
@@ -49,8 +51,10 @@
 #include "googlesql/public/options.pb.h"
 #include "googlesql/public/property_graph.h"
 #include "googlesql/public/strings.h"
+#include "googlesql/public/type_parameters.pb.h"
 #include "googlesql/public/types/annotation.h"
 #include "googlesql/public/types/graph_element_type.h"
+#include "googlesql/public/types/simple_value.h"
 #include "googlesql/public/types/type.h"
 #include "googlesql/public/types/type_factory.h"
 #include "googlesql/public/with_modifier_mode.h"
@@ -67,6 +71,7 @@
 #include "googlesql/base/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
@@ -74,9 +79,7 @@
 #include "absl/strings/substitute.h"
 #include "absl/types/span.h"
 #include "googlesql/base/map_util.h"
-#include "googlesql/base/stl_util.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -134,8 +137,10 @@ ResolvedGraphPathMode::PathMode GetResolvedPathMode(
 absl::Status CheckNoAmbiguousNameTarget(const ASTNode& location,
                                         const NameList& name_list) {
   for (const NamedColumn& named_column : name_list.columns()) {
-    if (NameTarget target; name_list.LookupName(named_column.name(), &target) &&
-                           target.IsAmbiguous()) {
+    NameTarget target;
+    GOOGLESQL_ASSIGN_OR_RETURN(bool name_found,
+                     name_list.LookupName(named_column.name(), &target));
+    if (name_found && target.IsAmbiguous()) {
       return MakeSqlErrorAt(&location)
              << "Ambiguous name: " << ToIdentifierLiteral(named_column.name());
     }
@@ -612,7 +617,7 @@ GraphTableQueryResolver::ValidatePathPatternInternal(
 
 absl::Status GraphTableQueryResolver::ResolveGraphTableQuery(
     const ASTGraphTableQuery* graph_table_query, const NameScope* scope,
-    std::unique_ptr<const ResolvedScan>* output,
+    bool is_nested, std::unique_ptr<const ResolvedScan>* output,
     NameListPtr* output_name_list) {
   if (!resolver_->language().LanguageFeatureEnabled(FEATURE_SQL_GRAPH)) {
     return MakeSqlErrorAt(graph_table_query) << "Graph query is not supported";
@@ -629,9 +634,11 @@ absl::Status GraphTableQueryResolver::ResolveGraphTableQuery(
 
   auto graph_named_variables = CreateEmptyGraphNameLists(graph_table_query);
   ResolvedColumnList graph_table_columns;
-  std::unique_ptr<const ResolvedGraphScanBase> resolved_graph_scan;
+  std::unique_ptr<const ResolvedGraphScanBase> graph_pattern_scan;
+  std::unique_ptr<const ResolvedScan> resolved_graph_scan;
   std::vector<std::unique_ptr<const ResolvedComputedColumn>>
       graph_table_column_expr_list;
+
   if (graph_table_query->graph_op()->Is<ASTGqlOperatorList>()) {
     // GQL syntax, which contains chained GQL operators and no
     // graph_table_shape. see (broken link):gql-graph-table for more details.
@@ -664,12 +671,14 @@ absl::Status GraphTableQueryResolver::ResolveGraphTableQuery(
 
     // 'graph_named_variables' contains an empty working name list to indicate
     // the start of the GQL query.
-    GOOGLESQL_ASSIGN_OR_RETURN(auto result,
-                     ResolveGqlLinearQueryList(
-                         *gql_query, scope, std::move(graph_named_variables),
-                         /*is_first_statement_in_graph_query=*/true));
-    resolved_graph_scan = std::move(result.resolved_node);
-    graph_table_columns = resolved_graph_scan->column_list();
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        auto result,
+        ResolveGqlLinearQueryList(
+            *gql_query, scope, std::move(graph_named_variables),
+            GqlQueryContext{.is_first_statement_in_graph_query = true,
+                            .is_nested = is_nested}));
+    graph_pattern_scan = std::move(result.resolved_node);
+    graph_table_columns = graph_pattern_scan->column_list();
     *output_name_list = result.graph_name_lists.singleton_name_list;
   } else {
     GOOGLESQL_RET_CHECK(graph_table_query->graph_op()->Is<ASTGqlMatch>());
@@ -688,11 +697,11 @@ absl::Status GraphTableQueryResolver::ResolveGraphTableQuery(
     // Capture the output nameslists of the match(es).
     graph_named_variables = std::move(result.graph_name_lists);
     // The result of the match(es) will be a ResolvedGraphScan.
-    std::unique_ptr<const ResolvedGraphScan> graph_pattern_scan =
-        std::move(result.resolved_node);
+    graph_pattern_scan = std::move(result.resolved_node);
     // Resolve graph table shape using the combined namescope.
     const NameScope graph_pattern_scope(
         scope, graph_named_variables.singleton_name_list);
+
     auto graph_table_shape_name_list = std::make_shared<const NameList>();
     if (graph_table_query->graph_table_shape() == nullptr) {
       if (!resolver_->language().LanguageFeatureEnabled(
@@ -716,16 +725,49 @@ absl::Status GraphTableQueryResolver::ResolveGraphTableQuery(
         graph_table_columns.push_back(col.column());
       }
       *output_name_list = named_graph_element_name_list;
-    } else {
-      GOOGLESQL_RETURN_IF_ERROR(ResolveGraphTableShape(
-          graph_table_query->graph_table_shape(), &graph_pattern_scope,
-          &graph_table_shape_name_list, &graph_table_columns,
-          &graph_table_column_expr_list));
-      *output_name_list = graph_table_shape_name_list;
-    }
 
-    resolved_graph_scan = std::move(graph_pattern_scan);
+    } else {
+      const ASTSelect* select = graph_table_query->graph_table_shape();
+      GOOGLESQL_RET_CHECK(select != nullptr);
+
+      auto query_resolution_info =
+          std::make_unique<QueryResolutionInfo>(resolver_);
+      query_resolution_info->set_select_form(SelectForm::kGqlReturn);
+
+      auto name_list_ptr = std::make_shared<NameList>();
+      NameListPtr output_name_list_internal = name_list_ptr;
+      GOOGLESQL_RETURN_IF_ERROR(ResolveGraphTableShape(
+          select, &graph_pattern_scope, query_resolution_info.get(),
+          &output_name_list_internal, &graph_table_columns,
+          &graph_table_column_expr_list));
+      graph_table_shape_name_list = output_name_list_internal;
+
+      if (query_resolution_info->HasAnalytic()) {
+        return MakeSqlErrorAt(select->select_list())
+               << "Analytic functions are not supported in GRAPH_TABLE COLUMNS "
+                  "clause";
+      }
+      if (query_resolution_info->HasGroupByOrAggregation()) {
+        return MakeSqlErrorAt(select->select_list())
+               << "Aggregate functions are not supported in GRAPH_TABLE "
+                  "COLUMNS clause";
+      }
+
+      *output_name_list = output_name_list_internal;
+    }
   }
+
+  // Columns produced by GRAPH_TABLE is similar to a SELECT list. They count
+  // as referenced and cannot be pruned.
+  resolver_->RecordColumnAccess(graph_table_columns);
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      resolved_graph_scan,
+      ResolvedGraphTableScanBuilder()
+          .set_column_list(graph_table_columns)
+          .set_property_graph(graph_)
+          .set_input_scan(std::move(graph_pattern_scan))
+          .set_shape_expr_list(std::move(graph_table_column_expr_list))
+          .Build());
 
   if (graph_table_query->alias() != nullptr) {
     // If alias is provided, add a range variable so that this alias can be
@@ -736,16 +778,7 @@ absl::Status GraphTableQueryResolver::ResolveGraphTableQuery(
                          graph_table_query, *output_name_list));
   }
 
-  // Columns produced by GRAPH_TABLE is similar to a SELECT list. They count as
-  // referenced and cannot be pruned.
-  resolver_->RecordColumnAccess(graph_table_columns);
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      *output, ResolvedGraphTableScanBuilder()
-                   .set_column_list(graph_table_columns)
-                   .set_property_graph(graph_)
-                   .set_input_scan(std::move(resolved_graph_scan))
-                   .set_shape_expr_list(std::move(graph_table_column_expr_list))
-                   .Build());
+  *output = std::move(resolved_graph_scan);
 
   GOOGLESQL_RETURN_IF_ERROR(EnsureNoMeasuresInNameList(*output_name_list,
                                              graph_table_query, "graph queries",
@@ -867,12 +900,14 @@ absl::Status GraphTableQueryResolver::ResolveGqlLinearOpsQuery(
   absl::Cleanup cleanup = [&callback]() { callback(); };
 
   GOOGLESQL_ASSIGN_OR_RETURN(auto input_scan, ResolvedSingleRowScanBuilder().Build());
-  GOOGLESQL_ASSIGN_OR_RETURN(auto resolved_input,
-                   ResolveGqlOperatorList(
-                       query->linear_ops()->operators(), scope,
-                       {.resolved_node = std::move(input_scan),
-                        .graph_name_lists = CreateEmptyGraphNameLists(query)},
-                       /*is_first_statement_in_graph_query=*/true));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      auto resolved_input,
+      ResolveGqlOperatorList(
+          query->linear_ops()->operators(), scope,
+          {.resolved_node = std::move(input_scan),
+           .graph_name_lists = CreateEmptyGraphNameLists(query)},
+          GqlQueryContext{.is_first_statement_in_graph_query = true,
+                          .is_nested = true}));
 
   ResolvedColumn column(resolver_->AllocateColumnId(), kGraphTableName,
                         resolver_->MakeIdString("literal_true"),
@@ -944,7 +979,7 @@ absl::StatusOr<ElementTableSet> GetTablesSatisfyingLabelExpr(
     const ResolvedGraphLabelExpr* label_expr,
     const absl::flat_hash_set<const T*>& tables) {
   static_assert(
-      std::is_base_of<GraphElementTable, T>::value,
+      std::is_base_of_v<GraphElementTable, T>,
       "Type parameter must have base class of type GraphElementTable");
   ElementTableSet matching_element_tables;
   for (const GraphElementTable* table : tables) {
@@ -1118,8 +1153,11 @@ GraphTableQueryResolver::ResolveCostExpr(
           "COST expression should return type $0, but returns $1",
           target_type_name, actual_type_name);
     };
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        TypeModifiers type_modifiers,
+        TypeModifiers::MakeTypeModifiers(output->type_annotation_map()));
     GOOGLESQL_RETURN_IF_ERROR(resolver_->CoerceExprToType(
-        &ast_edge_cost, {cost_supertype, output->type_annotation_map()},
+        &ast_edge_cost, cost_supertype, std::move(type_modifiers),
         Resolver::CoercionMode::kImplicitCoercion, make_error_msg, &output));
   }
   if (output->Is<ResolvedLiteral>() &&
@@ -1212,8 +1250,7 @@ void GraphTableQueryResolver::RecordArrayColumnsForPathModeForSinglePathScan(
   }
 }
 
-absl::StatusOr<GraphTableQueryResolver::ResolvedGraphWithNameList<
-    const ResolvedGraphElementScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedGraphElementScan>>
 GraphTableQueryResolver::ResolveElementPattern(
     const ASTGraphElementPattern& ast_element_pattern,
     const NameScope* input_scope,
@@ -1238,9 +1275,11 @@ GraphTableQueryResolver::ResolveElementPattern(
   bool has_explicit_name = filler->variable_name() != nullptr;
   if (has_explicit_name) {
     NameTarget existing_name_target;
-    if (input_scope->LookupName(filler->variable_name()->GetAsIdString(),
-                                &existing_name_target) &&
-        existing_name_target.IsColumn() &&
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        bool name_found,
+        input_scope->LookupName(filler->variable_name()->GetAsIdString(),
+                                &existing_name_target));
+    if (name_found && existing_name_target.IsColumn() &&
         existing_name_target.column().type()->IsGraphElement()) {
       return MakeSqlErrorAt(filler)
              << "The name "
@@ -1549,8 +1588,7 @@ GraphTableQueryResolver::ResolvePathPatternList(
   return result;
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedGraphScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedGraphScan>>
 GraphTableQueryResolver::ResolveGraphPattern(
     const ASTGraphPattern& ast_graph_pattern, const NameScope* input_scope,
     GraphTableNamedVariables input_graph_name_lists) {
@@ -1927,8 +1965,7 @@ absl::StatusOr<ResolvedColumn> GraphTableQueryResolver::GeneratePathColumn(
   return result;
 }
 
-absl::StatusOr<GraphTableQueryResolver::ResolvedGraphWithNameList<
-    const ResolvedGraphPathScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedGraphPathScan>>
 GraphTableQueryResolver::ResolvePathPattern(
     const ASTGraphPathPattern& ast_path_pattern, const NameScope* input_scope,
     GraphTableNamedVariables input_graph_name_lists, bool create_path_column,
@@ -2224,8 +2261,7 @@ GraphTableQueryResolver::MakeEqualElementExpr(
   return result;
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedExpr>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedExpr>>
 GraphTableQueryResolver::ResolveMultiplyDeclaredVariables(
     const ASTNode& ast_location,
     const GraphTableNamedVariables& input_graph_name_lists,
@@ -2308,8 +2344,7 @@ GraphTableQueryResolver::ResolveMultiplyDeclaredVariables(
            .graph_name_lists = std::move(output_graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedExpr>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedExpr>>
 GraphTableQueryResolver::ResolveMultiplyDeclaredVariables(
     const ASTNode& ast_location,
     const GraphTableNamedVariables& input_name_list,
@@ -2366,16 +2401,19 @@ GraphTableQueryResolver::ResolveMultiplyDeclaredVariables(
   auto final_group_list = std::make_shared<NameList>();
   for (const NamedColumn& group_variable :
        input_name_list.group_name_list->columns()) {
-    if (NameTarget unused_name_target;
-        local_name_list.group_name_list->LookupName(group_variable.name(),
-                                                    &unused_name_target)) {
+    NameTarget unused_name_target;
+    GOOGLESQL_ASSIGN_OR_RETURN(bool name_found,
+                     local_name_list.group_name_list->LookupName(
+                         group_variable.name(), &unused_name_target));
+    if (name_found) {
       return MakeSqlErrorAt(ast_location)
              << "Group variable " << group_variable.name()
              << " is multiply declared";
     }
-    if (NameTarget unused_name_target;
-        local_name_list.singleton_name_list->LookupName(group_variable.name(),
-                                                        &unused_name_target)) {
+    GOOGLESQL_ASSIGN_OR_RETURN(name_found,
+                     local_name_list.singleton_name_list->LookupName(
+                         group_variable.name(), &unused_name_target));
+    if (name_found) {
       return MakeSqlErrorAt(ast_location)
              << "Variable name: " << group_variable.name()
              << " cannot be used in both quantified and unquantified patterns";
@@ -2383,9 +2421,11 @@ GraphTableQueryResolver::ResolveMultiplyDeclaredVariables(
   }
   for (const NamedColumn& group_variable :
        local_name_list.group_name_list->columns()) {
-    if (NameTarget unused_name_target;
-        input_name_list.singleton_name_list->LookupName(group_variable.name(),
-                                                        &unused_name_target)) {
+    NameTarget unused_name_target;
+    GOOGLESQL_ASSIGN_OR_RETURN(bool name_found,
+                     input_name_list.singleton_name_list->LookupName(
+                         group_variable.name(), &unused_name_target));
+    if (name_found) {
       return MakeSqlErrorAt(ast_location)
              << "Variable name: " << group_variable.name()
              << " cannot be used in both quantified and unquantified patterns";
@@ -2447,10 +2487,13 @@ GraphTableQueryResolver::ResolveMultiplyDeclaredVariables(
 }
 
 absl::Status GraphTableQueryResolver::ResolveGraphTableShape(
-    const ASTSelectList* ast_select_list, const NameScope* input_scope,
-    NameListPtr* output_name_list, ResolvedColumnList* output_column_list,
+    const ASTSelect* ast_select, const NameScope* input_scope,
+    QueryResolutionInfo* query_resolution_info, NameListPtr* output_name_list,
+    ResolvedColumnList* output_column_list,
     std::vector<std::unique_ptr<const ResolvedComputedColumn>>* expr_list)
     const {
+  GOOGLESQL_RET_CHECK(ast_select != nullptr);
+  const ASTSelectList* ast_select_list = ast_select->select_list();
   GOOGLESQL_RET_CHECK(ast_select_list != nullptr);
   GOOGLESQL_RET_CHECK(input_scope != nullptr);
   GOOGLESQL_RET_CHECK(output_name_list != nullptr);
@@ -2467,7 +2510,7 @@ absl::Status GraphTableQueryResolver::ResolveGraphTableShape(
 
   auto graph_table_shape_name_list = std::make_shared<NameList>();
   for (const ASTSelectColumn* col : ast_select_list->columns()) {
-    GOOGLESQL_RETURN_IF_ERROR(ResolveSelectColumn(col, input_scope,
+    GOOGLESQL_RETURN_IF_ERROR(ResolveSelectColumn(col, input_scope, query_resolution_info,
                                         graph_table_shape_name_list.get(),
                                         output_column_list, expr_list));
   }
@@ -2600,7 +2643,8 @@ GraphTableQueryResolver::ResolveGraphElementPropertySpecification(
 
 absl::Status GraphTableQueryResolver::ResolveSelectColumn(
     const ASTSelectColumn* ast_select_column, const NameScope* input_scope,
-    NameList* output_name_list, ResolvedColumnList* output_column_list,
+    QueryResolutionInfo* query_resolution_info, NameList* output_name_list,
+    ResolvedColumnList* output_column_list,
     std::vector<std::unique_ptr<const ResolvedComputedColumn>>* expr_list)
     const {
   static constexpr char kGraphTableShape[] = "graph table shape";
@@ -2617,11 +2661,15 @@ absl::Status GraphTableQueryResolver::ResolveSelectColumn(
         output_column_list, expr_list);
   }
 
-  auto query_resolution_info = std::make_unique<QueryResolutionInfo>(resolver_);
+  std::unique_ptr<QueryResolutionInfo> owned_qri;
+  if (query_resolution_info == nullptr) {
+    owned_qri = std::make_unique<QueryResolutionInfo>(resolver_);
+    query_resolution_info = owned_qri.get();
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::unique_ptr<const ResolvedExpr> resolved_column_expr,
       ResolveExpr(ast_select_column->expression(), input_scope,
-                  query_resolution_info.get(), /*allow_analytic=*/true,
+                  query_resolution_info, /*allow_analytic=*/true,
                   /*allow_horizontal_aggregate=*/true, kGraphTableShape));
   GOOGLESQL_ASSIGN_OR_RETURN(const auto column_name, GetColumnName(ast_select_column));
   ResolvedColumn output_column(resolver_->AllocateColumnId(), kGraphTableName,
@@ -2825,13 +2873,12 @@ GraphTableQueryResolver::BuildGraphRefScan(const NameListPtr& input_name_list) {
   return std::move(builder).Build();
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlOperator(
     const ASTGqlOperator* gql_op, const NameScope* external_scope,
     std::vector<std::unique_ptr<const ResolvedScan>>& current_scan_list,
     ResolvedGraphWithNameList<const ResolvedScan> inputs,
-    bool is_first_statement_in_graph_query) {
+    GqlQueryContext context) {
   auto& input_scan = inputs.resolved_node;
   GOOGLESQL_RET_CHECK(input_scan != nullptr);
 
@@ -2843,8 +2890,7 @@ GraphTableQueryResolver::ResolveGqlOperator(
       GOOGLESQL_ASSIGN_OR_RETURN(
           auto op_list_result,
           ResolveGqlLinearQuery(*gql_op->GetAsOrDie<ASTGqlOperatorList>(),
-                                external_scope, std::move(inputs),
-                                is_first_statement_in_graph_query));
+                                external_scope, std::move(inputs), context));
       // ResolveGqlLinearQuery() returns a result with ResolvedGraphLinearScan.
       // Upcast it to a ResolvedScan before returning it.
       return {{.resolved_node = std::move(op_list_result.resolved_node),
@@ -2853,6 +2899,31 @@ GraphTableQueryResolver::ResolveGqlOperator(
     case AST_GQL_MATCH: {
       return ResolveGqlMatch(*gql_op->GetAsOrDie<ASTGqlMatch>(), external_scope,
                              std::move(inputs));
+    }
+    case AST_GQL_INSERT: {
+      if (!resolver_->language().LanguageFeatureEnabled(
+              FEATURE_SQL_GRAPH_TERMINAL_INSERT)) {
+        return MakeSqlErrorAt(gql_op) << "Graph INSERT is not supported";
+      }
+      resolver_->needs_generalized_query_stmt_ = true;
+      if (context.is_nested) {
+        return MakeSqlErrorAt(gql_op)
+               << "INSERT is not allowed in non-top-level graph statement";
+      }
+      if (context.is_set_op) {
+        return MakeSqlErrorAt(gql_op)
+               << "INSERT is not allowed in GQL set operations";
+      }
+
+      GraphDmlResolver dml_resolver(resolver_, graph_);
+      // `local_scope` contains variables from the preceding linear operators
+      // and correlated variables from the outer scope. However, since INSERT
+      // is only allowed in a top-level graph statement, in reality, only
+      // variables from the preceding linear operators are present in
+      // `local_scope`.
+      return dml_resolver.ResolveGqlInsert(*gql_op->GetAsOrDie<ASTGqlInsert>(),
+                                           local_scope.get(),
+                                           std::move(inputs));
     }
     case AST_GQL_LET: {
       return ResolveGqlLet(*gql_op->GetAsOrDie<ASTGqlLet>(), local_scope.get(),
@@ -2879,12 +2950,12 @@ GraphTableQueryResolver::ResolveGqlOperator(
     case AST_GQL_INLINE_SUBQUERY_CALL: {
       return ResolveGqlInlineSubqueryCall(
           *gql_op->GetAsOrDie<ASTGqlInlineSubqueryCall>(), local_scope.get(),
-          std::move(inputs), is_first_statement_in_graph_query);
+          std::move(inputs), context);
     }
     case AST_GQL_NAMED_CALL: {
       return ResolveGqlNamedCall(*gql_op->GetAsOrDie<ASTGqlNamedCall>(),
                                  local_scope.get(), std::move(inputs),
-                                 is_first_statement_in_graph_query);
+                                 context.is_first_statement_in_graph_query);
     }
     case AST_GQL_RETURN: {
       return ResolveGqlReturn(*gql_op->GetAsOrDie<ASTGqlReturn>(),
@@ -2892,8 +2963,7 @@ GraphTableQueryResolver::ResolveGqlOperator(
     }
     case AST_GQL_SET_OPERATION: {
       return ResolveGqlSetOperation(*gql_op->GetAsOrDie<ASTGqlSetOperation>(),
-                                    external_scope, std::move(inputs),
-                                    is_first_statement_in_graph_query);
+                                    external_scope, std::move(inputs), context);
     }
     case AST_GQL_SAMPLE: {
       return ResolveGqlSample(*gql_op->GetAsOrDie<ASTGqlSample>(),
@@ -3035,8 +3105,7 @@ static absl::StatusOr<std::shared_ptr<NameList>> ComputeNewGroupNameList(
   return new_group_name_list;
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::BuildRefForInputScan(
     const ResolvedGraphWithNameList<const ResolvedScan>& input) {
   std::unique_ptr<const ResolvedScan> copied_scan;
@@ -3300,12 +3369,11 @@ GraphTableQueryResolver::GraphSetOperationResolver::ToIndexedColumnNamesList(
   return indexed_column_names_list;
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::GraphSetOperationResolver::Resolve(
     const NameScope* external_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs,
-    bool is_first_statement_in_graph_query) {
+    GqlQueryContext context) {
   GOOGLESQL_RETURN_IF_ERROR(ValidateGqlSetOperation(node_));
   const auto* set_op_metadata =
       node_.metadata()->set_operation_metadata_list(0);
@@ -3322,12 +3390,12 @@ GraphTableQueryResolver::GraphSetOperationResolver::Resolve(
         graph_resolver_->BuildRefForInputScan(inputs));
 
     // Return one linear scan for each set operation input.
+    context.is_set_op = true;
     GOOGLESQL_ASSIGN_OR_RETURN(
         ResolvedGraphWithNameList<const ResolvedGraphLinearScan> resolved_input,
         graph_resolver_->ResolveGqlLinearQuery(
             *set_op_input_node->GetAsOrDie<ASTGqlOperatorList>(),
-            external_scope, std::move(set_op_input_scan),
-            is_first_statement_in_graph_query));
+            external_scope, std::move(set_op_input_scan), context));
     resolved_set_op_inputs.push_back(std::move(resolved_input));
   }
   std::vector<IndexedColumnNames> input_query_column_names =
@@ -3404,19 +3472,16 @@ GraphTableQueryResolver::GraphSetOperationResolver::Resolve(
        .graph_name_lists = std::move(final_name_lists)});
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlSetOperation(
     const ASTGqlSetOperation& set_op, const NameScope* external_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs,
-    bool is_first_statement_in_graph_query) {
+    GqlQueryContext context) {
   GraphSetOperationResolver set_op_resolver(set_op, this);
-  return set_op_resolver.Resolve(external_scope, std::move(inputs),
-                                 is_first_statement_in_graph_query);
+  return set_op_resolver.Resolve(external_scope, std::move(inputs), context);
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlSample(
     const ASTGqlSample& sample_op, const NameScope* external_scope,
     ResolvedGraphWithNameList<const ResolvedScan> input) {
@@ -3444,12 +3509,10 @@ static bool IsCompositeQuery(const ASTGqlOperator* node) {
   return IsLinearQuery(node) || node->Is<ASTGqlSetOperation>();
 }
 
-absl::StatusOr<GraphTableQueryResolver::ResolvedGraphWithNameList<
-    const ResolvedGraphLinearScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedGraphLinearScan>>
 GraphTableQueryResolver::ResolveGqlLinearQueryList(
     const ASTGqlOperatorList& gql_ops_list, const NameScope* external_scope,
-    GraphTableNamedVariables input_graph_name_lists,
-    bool is_first_statement_in_graph_query) {
+    GraphTableNamedVariables input_graph_name_lists, GqlQueryContext context) {
   // Check that the first 2 levels are linear scans.
   GOOGLESQL_RET_CHECK(!gql_ops_list.operators().empty());
   for (const auto* composite_op : gql_ops_list.operators()) {
@@ -3465,24 +3528,30 @@ GraphTableQueryResolver::ResolveGqlLinearQueryList(
                        gql_ops_list.operators(), external_scope,
                        {.resolved_node = std::move(input_scan),
                         .graph_name_lists = std::move(input_graph_name_lists)},
-                       is_first_statement_in_graph_query));
+                       context));
 
   if (!resolver_->language().LanguageFeatureEnabled(
           FEATURE_SQL_GRAPH_EXPOSE_GRAPH_ELEMENT)) {
     const ASTGqlOperator* last_op = gql_ops_list.operators().back();
     if (IsLinearQuery(last_op)) {
-      GOOGLESQL_RETURN_IF_ERROR(CheckReturnNoGraphTypedCols(
-          result.resolved_node->column_list(),
-          last_op->GetAsOrDie<ASTGqlOperatorList>()->operators().back()));
+      const ASTGqlOperator* final_op =
+          last_op->GetAsOrDie<ASTGqlOperatorList>()->operators().back();
+      if (final_op->Is<ASTGqlReturn>()) {
+        GOOGLESQL_RETURN_IF_ERROR(CheckReturnNoGraphTypedCols(
+            result.resolved_node->column_list(), final_op));
+      }
     } else {
       // If the last scan is a composite query, validate that the column list of
       // every resolved linear scan contained satisfies the "no graph element
       // column" constraint.
       for (const auto* linear_op :
            last_op->GetAsOrDie<ASTGqlSetOperation>()->inputs()) {
-        GOOGLESQL_RETURN_IF_ERROR(CheckReturnNoGraphTypedCols(
-            result.resolved_node->column_list(),
-            linear_op->GetAsOrDie<ASTGqlOperatorList>()->operators().back()));
+        const ASTGqlOperator* final_op =
+            linear_op->GetAsOrDie<ASTGqlOperatorList>()->operators().back();
+        if (final_op->Is<ASTGqlReturn>()) {
+          GOOGLESQL_RETURN_IF_ERROR(CheckReturnNoGraphTypedCols(
+              result.resolved_node->column_list(), final_op));
+        }
       }
     }
   }
@@ -3493,22 +3562,32 @@ absl::Status GraphTableQueryResolver::CheckGqlLinearQuery(
     absl::Span<const ASTGqlOperator* const> primitive_ops) const {
   const auto size = primitive_ops.size();
   GOOGLESQL_RET_CHECK_GT(size, 0);
-  // All ops other than the last one should be one of MATCH,
-  // LET, FILTER, WITH, FOR, or ORDER BY and OFFSET/LIMIT.
+  // All ops other than the last one should be a graph linear op.
   for (int i = 0; i < size - 1; ++i) {
-    GOOGLESQL_RET_CHECK(primitive_ops[i]->Is<ASTGqlMatch>() ||
-              primitive_ops[i]->Is<ASTGqlLet>() ||
-              primitive_ops[i]->Is<ASTGqlOrderByAndPage>() ||
-              primitive_ops[i]->Is<ASTGqlFilter>() ||
-              primitive_ops[i]->Is<ASTGqlWith>() ||
-              primitive_ops[i]->Is<ASTGqlSample>() ||
-              primitive_ops[i]->Is<ASTGqlFor>() ||
-              primitive_ops[i]->Is<ASTGqlNamedCall>() ||
-              primitive_ops[i]->Is<ASTGqlInlineSubqueryCall>())
-        << "Unexpected op: " << primitive_ops[i]->DebugString();
+    if (primitive_ops[i]->Is<ASTGqlMatch>() ||
+        primitive_ops[i]->Is<ASTGqlLet>() ||
+        primitive_ops[i]->Is<ASTGqlOrderByAndPage>() ||
+        primitive_ops[i]->Is<ASTGqlFilter>() ||
+        primitive_ops[i]->Is<ASTGqlWith>() ||
+        primitive_ops[i]->Is<ASTGqlSample>() ||
+        primitive_ops[i]->Is<ASTGqlFor>() ||
+        primitive_ops[i]->Is<ASTGqlNamedCall>() ||
+        primitive_ops[i]->Is<ASTGqlInlineSubqueryCall>()) {
+      continue;
+    }
+    // Terminal INSERT prevents all ops other than RETURN from following it.
+    if (primitive_ops[i]->Is<ASTGqlInsert>()) {
+      if (!primitive_ops[i + 1]->Is<ASTGqlReturn>()) {
+        return MakeSqlErrorAt(primitive_ops[i + 1])
+               << "INSERT can only be followed by RETURN in a linear query";
+      }
+      continue;
+    }
+    GOOGLESQL_RET_CHECK_FAIL() << "Unexpected op: " << primitive_ops[i]->DebugString();
   }
-  // The last op should be a RETURN.
-  GOOGLESQL_RET_CHECK(primitive_ops[size - 1]->Is<ASTGqlReturn>());
+  // The last op should be a RETURN or INSERT.
+  GOOGLESQL_RET_CHECK(primitive_ops[size - 1]->Is<ASTGqlReturn>() ||
+            primitive_ops[size - 1]->Is<ASTGqlInsert>());
 
   auto is_only_order_by = [](const ASTGqlOrderByAndPage* op) {
     return op != nullptr && op->order_by() != nullptr && op->page() == nullptr;
@@ -3541,28 +3620,25 @@ absl::Status GraphTableQueryResolver::CheckGqlLinearQuery(
   return absl::OkStatus();
 }
 
-absl::StatusOr<GraphTableQueryResolver::ResolvedGraphWithNameList<
-    const ResolvedGraphLinearScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedGraphLinearScan>>
 GraphTableQueryResolver::ResolveGqlLinearQuery(
     const ASTGqlOperatorList& gql_ops_list, const NameScope* external_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs,
-    bool is_first_statement_in_graph_query) {
+    GqlQueryContext context) {
   const absl::Span<const ASTGqlOperator* const> primitive_ops =
       gql_ops_list.operators();
   GOOGLESQL_RETURN_IF_ERROR(CheckGqlLinearQuery(primitive_ops));
 
   return ResolveGqlOperatorList(primitive_ops, external_scope,
-                                std::move(inputs),
-                                is_first_statement_in_graph_query);
+                                std::move(inputs), context);
 }
 
-absl::StatusOr<GraphTableQueryResolver::ResolvedGraphWithNameList<
-    const ResolvedGraphLinearScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedGraphLinearScan>>
 GraphTableQueryResolver::ResolveGqlOperatorList(
     absl::Span<const ASTGqlOperator* const> gql_ops,
     const NameScope* external_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs,
-    bool is_first_statement_in_graph_query) {
+    GqlQueryContext context) {
   GOOGLESQL_RET_CHECK(!gql_ops.empty())
       << "GQL linear scan must contain at least one child ASTGqlOperator";
 
@@ -3576,12 +3652,26 @@ GraphTableQueryResolver::ResolveGqlOperatorList(
   std::unique_ptr<const ResolvedScan> ref_scan;
   auto op_inputs = std::move(inputs);
 
+  // RAII helper to ensure the resolving_gql_dml_with_insert_ flag is reset
+  // on the Resolver when exiting this function.
+  struct DmlResetter {
+    Resolver* r;
+    ~DmlResetter() { r->resolving_gql_dml_with_insert_ = false; }
+  };
+  DmlResetter dml_resetter{resolver_};
+
   for (int i = 0; i < gql_ops.size(); ++i) {
     const ASTGqlOperator* gql_op = gql_ops[i];
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        op_inputs, ResolveGqlOperator(
-                       gql_op, external_scope, scan_list, std::move(op_inputs),
-                       is_first_statement_in_graph_query && i == 0));
+    context.is_first_statement_in_graph_query =
+        context.is_first_statement_in_graph_query && i == 0;
+    GOOGLESQL_ASSIGN_OR_RETURN(op_inputs,
+                     ResolveGqlOperator(gql_op, external_scope, scan_list,
+                                        std::move(op_inputs), context));
+    // If we successfully resolved an INSERT statement, set the flag indicating
+    // that subsequent operators in the linear sequence appear after an INSERT.
+    if (gql_op->node_kind() == AST_GQL_INSERT) {
+      resolver_->resolving_gql_dml_with_insert_ = true;
+    }
     // Capture the resulting output scan in our scan list.
     scan_list.push_back(std::move(op_inputs.resolved_node));
     // Build a ref scan to the tabular result as the next input scan to GQL ops.
@@ -3597,6 +3687,20 @@ GraphTableQueryResolver::ResolveGqlOperatorList(
     GOOGLESQL_RET_CHECK(op_inputs.graph_name_lists.correlated_name_list ==
               correlated_name_list);
   }
+
+  if (gql_ops.back()->node_kind() == AST_GQL_INSERT) {
+    std::unique_ptr<const ResolvedScan> last_scan = std::move(scan_list.back());
+    scan_list.pop_back();
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<const ResolvedFinishScan> finish_scan,
+                     ResolvedFinishScanBuilder()
+                         .set_column_list({})
+                         .set_input_scan(std::move(last_scan))
+                         .Build());
+    scan_list.push_back(std::move(finish_scan));
+    op_inputs.graph_name_lists.singleton_name_list =
+        std::make_shared<NameList>();
+  }
+
   auto linear_builder = ResolvedGraphLinearScanBuilder().set_column_list(
       scan_list.back()->column_list());
   GOOGLESQL_ASSIGN_OR_RETURN(
@@ -3633,8 +3737,7 @@ static absl::Status RestoreMultiplyDeclaredNames(
   return absl::OkStatus();
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlMatch(
     const ASTGqlMatch& match_op, const NameScope* input_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs) {
@@ -3706,8 +3809,10 @@ static absl::Status CheckNameNotInDisallowedList(
   if (disallowed_name_list == nullptr) {
     return absl::OkStatus();
   }
-  if (NameTarget name_target;
-      disallowed_name_list->LookupName(name, &name_target)) {
+  NameTarget name_target;
+  GOOGLESQL_ASSIGN_OR_RETURN(bool name_found,
+                   disallowed_name_list->LookupName(name, &name_target));
+  if (name_found) {
     return MakeSqlErrorAt(location)
            << "Variable name: " << ToIdentifierLiteral(name)
            << " already exists";
@@ -3721,8 +3826,7 @@ static absl::Status CheckNameNotInDisallowedList(
 // amends the working name list with names from the variable definitions.
 // Names added to the name list do not conflict with names already in the
 // list. If any such names are encountered, returns an error.
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlLet(
     const ASTGqlLet& let_op, const NameScope* local_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs) {
@@ -3752,6 +3856,8 @@ GraphTableQueryResolver::ResolveGqlLet(
   // Reuse the node-source annotation string for LET as the clause identifier
   // string since it very conveniently already available here.
   auto query_resolution_info = std::make_unique<QueryResolutionInfo>(resolver_);
+  query_resolution_info->set_from_clause_name_list(
+      inputs.graph_name_lists.singleton_name_list);
   for (const auto& definition : definitions) {
     const auto column_name = definition->identifier()->GetAsIdString();
 
@@ -3812,8 +3918,7 @@ GraphTableQueryResolver::ResolveGqlLet(
            .graph_name_lists = std::move(output_graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlFilter(
     const ASTGqlFilter& filter_op, const NameScope* local_scope,
     std::vector<std::unique_ptr<const ResolvedScan>>& current_scan_list,
@@ -3851,8 +3956,7 @@ GraphTableQueryResolver::ResolveGqlFilter(
            .graph_name_lists = std::move(inputs.graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlOrderByAndPage(
     const ASTGqlOrderByAndPage& order_by_page_op,
     const NameScope* external_scope,
@@ -3871,8 +3975,7 @@ GraphTableQueryResolver::ResolveGqlOrderByAndPage(
            .graph_name_lists = std::move(page_result.graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlFor(
     const ASTGqlFor& for_op, const NameScope* local_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs) {
@@ -3965,12 +4068,11 @@ GraphTableQueryResolver::ResolveGqlFor(
            .graph_name_lists = std::move(output_graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlInlineSubqueryCall(
     const ASTGqlInlineSubqueryCall& call_op, const NameScope* local_scope,
     ResolvedGraphWithNameList<const ResolvedScan> input,
-    bool is_first_statement_in_graph_query) {
+    GqlQueryContext context) {
   if (!resolver_->language().LanguageFeatureEnabled(FEATURE_SQL_GRAPH_CALL)) {
     return MakeSqlErrorAt(call_op) << "CALL is not supported";
   }
@@ -4032,24 +4134,32 @@ GraphTableQueryResolver::ResolveGqlInlineSubqueryCall(
        call_op.name_capture_list()->identifier_list()) {
     bool is_already_correlated = false;
     NameTarget target;
-    if (!input_name_list.singleton_name_list->LookupName(name->GetAsIdString(),
-                                                         &target)) {
+    GOOGLESQL_ASSIGN_OR_RETURN(bool name_found,
+                     input_name_list.singleton_name_list->LookupName(
+                         name->GetAsIdString(), &target));
+    if (!name_found) {
       if (input_name_list.correlated_name_list == nullptr) {
         // This is a top-level CALL query. Its capture list can make outer
         // column references.
         CorrelatedColumnsSetList correlated_column_sets;
-        if (!local_scope->LookupName(name->GetAsIdString(), &target,
-                                     &correlated_column_sets)) {
+        GOOGLESQL_ASSIGN_OR_RETURN(name_found,
+                         local_scope->LookupName(name->GetAsIdString(), &target,
+                                                 &correlated_column_sets));
+        if (!name_found) {
           return MakeSqlErrorAt(name)
                  << "Unrecognized name " << name->GetAsStringView();
         }
         GOOGLESQL_RET_CHECK(!correlated_column_sets.empty())
             << "The name must be correlated, since it's not in the input "
                "name list.";
-      } else if (!input_name_list.correlated_name_list->LookupName(
-                     name->GetAsIdString(), &target)) {
-        return MakeSqlErrorAt(name)
-               << "Unrecognized name " << name->GetAsStringView();
+      } else {
+        GOOGLESQL_ASSIGN_OR_RETURN(bool name_found,
+                         input_name_list.correlated_name_list->LookupName(
+                             name->GetAsIdString(), &target));
+        if (!name_found) {
+          return MakeSqlErrorAt(name)
+                 << "Unrecognized name " << name->GetAsStringView();
+        }
       }
       is_already_correlated = true;
     }
@@ -4083,6 +4193,7 @@ GraphTableQueryResolver::ResolveGqlInlineSubqueryCall(
   auto lateral_scope = std::make_unique<NameScope>(filtered_local_scope.get(),
                                                    &dummy_correlated_columns);
 
+  context.is_nested = true;
   GOOGLESQL_ASSIGN_OR_RETURN(
       auto resolved_subquery_with_names,
       ResolveGqlOperatorList(
@@ -4094,7 +4205,7 @@ GraphTableQueryResolver::ResolveGqlInlineSubqueryCall(
                 .group_name_list = std::make_shared<NameList>(),
                 // Mark the names as correlated for this subquery.
                 .correlated_name_list = flattened_name_list}},
-          is_first_statement_in_graph_query));
+          context));
 
   // Ensure we didn't mistakenly drop the correlated list somewhere.
   GOOGLESQL_RET_CHECK(
@@ -4144,8 +4255,7 @@ GraphTableQueryResolver::ResolveGqlInlineSubqueryCall(
            .graph_name_lists = std::move(output_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlNamedCall(
     const ASTGqlNamedCall& call_op, const NameScope* local_scope,
     ResolvedGraphWithNameList<const ResolvedScan> input,
@@ -4254,6 +4364,31 @@ GraphTableQueryResolver::ResolveGqlNamedCall(
         is_first_statement_in_graph_query ? &graph_arg : nullptr,
         &resolved_scan, &tvf_output_name_list);
     if (!tvf_resolve_status.ok()) {
+      // If the call is not the first statement in the graph query, we need to
+      // check if the user intended to call a table-valued function with the
+      // implicit table argument.
+      if (!input_scan->column_list().empty()) {
+        ResolvedTVFArg table_arg;
+        // We temporarily move the input_scan but restore it before continuing.
+        // Ultimately we're in an error generating path so it doesn't really
+        // matter.
+        table_arg.SetScan(std::move(input_scan),
+                          input_graph_name_lists.singleton_name_list,
+                          /*is_pipe_input_table=*/true);
+        if (absl::IsInvalidArgument(tvf_resolve_status) &&
+            !is_first_statement_in_graph_query &&
+            resolver_
+                ->ResolveTVF(call_op.tvf_call(), lateral_scope.get(),
+                             &table_arg, &resolved_scan, &tvf_output_name_list)
+                .ok()) {
+          return googlesql_base::StatusBuilder(tvf_resolve_status)
+                 << "Did you mean to use CALL PER () "
+                 << call_op.tvf_call()->name()->ToIdentifierPathString()
+                 << "(...) instead?";
+        }
+        // Restore the input_scan.
+        GOOGLESQL_ASSIGN_OR_RETURN(input_scan, table_arg.MoveScan());
+      }
       if (absl::IsInvalidArgument(tvf_resolve_status) &&
           !is_first_statement_in_graph_query &&
           resolver_
@@ -4305,7 +4440,9 @@ GraphTableQueryResolver::ResolveGqlNamedCall(
           yield_item->expression()->GetAsOrNull<ASTIdentifier>();
       IdString name = identifier->GetAsIdString();
       NameTarget target;
-      if (!tvf_output_name_list->LookupName(name, &target)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(bool name_found,
+                       tvf_output_name_list->LookupName(name, &target));
+      if (!name_found) {
         return MakeSqlErrorAt(identifier)
                << "Name " << ToIdentifierLiteral(name)
                << " not found in the TVF output";
@@ -4320,7 +4457,9 @@ GraphTableQueryResolver::ResolveGqlNamedCall(
       }
 
       NameTarget dummy_target;
-      if (updated_name_list->LookupName(name, &dummy_target)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(name_found,
+                       updated_name_list->LookupName(name, &dummy_target));
+      if (name_found) {
         return MakeSqlErrorAt(location)
                << "Name " << ToIdentifierLiteral(name)
                << " is already specified in the TVF output";
@@ -4369,8 +4508,7 @@ GraphTableQueryResolver::ResolveGqlNamedCall(
            .graph_name_lists = std::move(output_graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlOrderByClause(
     const ASTOrderBy* order_by, const NameScope* external_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs) {
@@ -4393,8 +4531,7 @@ GraphTableQueryResolver::ResolveGqlOrderByClause(
            .graph_name_lists = std::move(input_graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlPageClauses(
     const ASTGqlPage* page, const NameScope* local_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs) {
@@ -4415,8 +4552,7 @@ GraphTableQueryResolver::ResolveGqlPageClauses(
            .graph_name_lists = std::move(input_graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlWith(
     const ASTGqlWith& with_op, const NameScope* local_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs) {
@@ -4488,8 +4624,7 @@ GraphTableQueryResolver::ResolveGqlWith(
            .graph_name_lists = std::move(output_graph_name_lists)}};
 }
 
-absl::StatusOr<
-    GraphTableQueryResolver::ResolvedGraphWithNameList<const ResolvedScan>>
+absl::StatusOr<ResolvedGraphWithNameList<const ResolvedScan>>
 GraphTableQueryResolver::ResolveGqlReturn(
     const ASTGqlReturn& return_op, const NameScope* local_scope,
     ResolvedGraphWithNameList<const ResolvedScan> inputs) {
@@ -4663,9 +4798,9 @@ absl::StatusOr<NameListPtr> GraphTableQueryResolver::GetOutputGroupNameList(
           FEATURE_SQL_GRAPH_BOUNDED_PATH_QUANTIFICATION)) {
     for (const NamedColumn& singleton :
          graph_namelists.singleton_name_list->columns()) {
-      const ArrayType* array_type;
-      GOOGLESQL_RETURN_IF_ERROR(resolver_->type_factory_->MakeArrayType(
-          singleton.column().type(), &array_type));
+      GOOGLESQL_ASSIGN_OR_RETURN(const ArrayType* array_type,
+                       resolver_->type_factory_->MakeArrayType(
+                           singleton.column().type(), resolver_->language()));
       ResolvedColumn output_column(resolver_->AllocateColumnId(),
                                    singleton.column().table_name_id(),
                                    singleton.column().name_id(), array_type);
@@ -4752,9 +4887,10 @@ absl::Status GraphTableQueryResolver::ValidateGraphNameLists(
 
   for (const auto& group_variable : group_name_list->columns()) {
     // Validate that no duplicate variable in group name list.
-    if (NameTarget name_target;
-        group_name_list->LookupName(group_variable.name(), &name_target) &&
-        name_target.IsAmbiguous()) {
+    NameTarget name_target;
+    GOOGLESQL_ASSIGN_OR_RETURN(bool name_found, group_name_list->LookupName(
+                                          group_variable.name(), &name_target));
+    if (name_found && name_target.IsAmbiguous()) {
       return MakeSqlErrorAt(ast_node)
              << "Variable name: " << ToIdentifierLiteral(group_variable.name())
              << " is ambiguous group variable in the "
@@ -4766,8 +4902,11 @@ absl::Status GraphTableQueryResolver::ValidateGraphNameLists(
       // Validate that no variable is in both group and singleton name list when
       // direct access to group variables is not allowed. Otherwise this
       // check will be done while resolving multiply declared variables.
-      if (NameTarget name_target; singleton_name_list->LookupName(
-              group_variable.name(), &name_target)) {
+      NameTarget name_target;
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          bool name_found,
+          singleton_name_list->LookupName(group_variable.name(), &name_target));
+      if (name_found) {
         return MakeSqlErrorAt(ast_node)
                << "Variable name: "
                << ToIdentifierLiteral(group_variable.name())
