@@ -16,19 +16,36 @@
 
 #include "googlesql/public/types/type_parameters.h"
 
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "googlesql/public/functions/rounding_mode.pb.h"
 #include "googlesql/public/type.pb.h"
 #include "googlesql/public/type_parameters.pb.h"
+#include "googlesql/public/types/annotation.h"
+#include "googlesql/public/types/collation.h"
+#include "googlesql/public/types/declarative_type.h"
+#include "googlesql/public/types/simple_value.h"
+#include "googlesql/public/types/struct_type.h"
+#include "googlesql/public/types/type.h"
 #include "googlesql/public/types/type_factory.h"
+#include "googlesql/public/types/type_modifiers.h"
 #include "googlesql/testdata/test_schema.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "googlesql/base/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "google/protobuf/descriptor.h"
+#include "google/protobuf/text_format.h"
+
+using ::testing::Property;
+using ::absl_testing::IsOkAndHolds;
 
 namespace googlesql {
 namespace {
@@ -147,9 +164,14 @@ TEST(TypeParameters, TypeParametersWithSetChildList) {
   child_list.push_back(numeric_child);
 
   EXPECT_TRUE(params.IsEmpty());
+  EXPECT_TRUE(params.IsTopLevelEmpty());
+
   params.set_child_list(child_list);
   EXPECT_FALSE(params.IsEmpty());
   EXPECT_FALSE(params.child_list().empty());
+  // However, the top-level itself is still empty
+  EXPECT_TRUE(params.IsTopLevelEmpty());
+
   EXPECT_EQ(params.num_children(), 3);
   EXPECT_EQ(params.child(1).string_type_parameters().max_length(), 10);
   EXPECT_EQ(params.child(2).numeric_type_parameters().precision(), 10);
@@ -592,6 +614,181 @@ TEST(TypeParameters, MatchTypeParametersNestedStructType) {
 
   EXPECT_TRUE(nested_struct_params.MatchType(nested_struct_type));
   EXPECT_FALSE(nested_struct_params.MatchType(child_struct_type));
+}
+
+static absl::StatusOr<TypeParameters>
+CreateTypeParametersForStructWithTimestampPrecision(int64_t precision) {
+  TimestampTypeParametersProto timestamp_type_parameters_proto;
+  timestamp_type_parameters_proto.set_precision(precision);
+  GOOGLESQL_ASSIGN_OR_RETURN(TypeParameters ts_type_params_precision,
+                   TypeParameters::MakeTimestampTypeParameters(
+                       timestamp_type_parameters_proto));
+  return TypeParameters::MakeTypeParametersWithChildList(
+      {TypeParameters(), std::move(ts_type_params_precision)});
+}
+
+TEST(TypeParametersTest, EqualsWithDefaultTimestampPrecision) {
+  TypeParameters type_parameters1;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(TypeParameters type_parameters2,
+                       CreateTypeParametersForStructWithTimestampPrecision(6));
+
+  EXPECT_FALSE(type_parameters1.Equals(type_parameters2));
+  EXPECT_FALSE(type_parameters1.Equals(
+      type_parameters2, /*default_timestamp_precision=*/std::nullopt));
+
+  EXPECT_TRUE(type_parameters1.Equals(type_parameters2,
+                                      /*default_timestamp_precision=*/6));
+  EXPECT_FALSE(type_parameters1.Equals(type_parameters2,
+                                       /*default_timestamp_precision=*/3));
+}
+
+TEST(TypeParametersTest, VectorTypeParametersResolution) {
+  VectorTypeParametersProto proto;
+  proto.set_length(128);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(TypeParameters type_params,
+                       TypeParameters::MakeVectorTypeParameters(proto));
+  EXPECT_TRUE(type_params.IsVectorTypeParameters());
+  const VectorTypeParametersProto* vector_params =
+      type_params.vector_type_parameters();
+  ASSERT_NE(vector_params, nullptr);
+  EXPECT_EQ(vector_params->length(), 128);
+  EXPECT_EQ(type_params.DebugString(), "(length=128)");
+  EXPECT_EQ(type_params.ToParenthesizedString(), "(128)");
+}
+
+TEST(TypeParametersTest, CompositeTypeParametersResolution) {
+  TypeFactory type_factory;
+
+  // 1. Construct the declarative type for VECTOR.
+  const Type* vector_type = nullptr;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      vector_type,
+      type_factory.MakeDeclarativeType(
+          DeclarativeTypeDescriptor()
+              .set_type_id({std::string(TypeId::kGoogleSqlNamespace), "VECTOR"})
+              .set_display_name("VECTOR")
+              .set_backing_type(type_factory.get_bytes())));
+
+  // 2. Construct the array type for ARRAY<VECTOR>.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(const Type* array_vector_type,
+                       type_factory.MakeArrayType(vector_type));
+
+  // 3. Construct the struct type for STRUCT<va ARRAY<VECTOR>, s STRING>.
+  const Type* struct_type = nullptr;
+  GOOGLESQL_ASSERT_OK(type_factory.MakeStructType(
+      {{"va", array_vector_type}, {"s", type_factory.get_string()}},
+      &struct_type));
+
+  // 4. Construct the type parameters.
+  // VECTOR(128)
+  VectorTypeParametersProto vector_proto;
+  vector_proto.set_length(128);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(TypeParameters vector_params,
+                       TypeParameters::MakeVectorTypeParameters(vector_proto));
+
+  // ARRAY<VECTOR(128)>
+  TypeParameters array_params =
+      TypeParameters::MakeTypeParametersWithChildList({vector_params});
+
+  // STRING(MAX)
+  StringTypeParametersProto string_proto;
+  string_proto.set_is_max_length(true);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(TypeParameters string_params,
+                       TypeParameters::MakeStringTypeParameters(string_proto));
+
+  // STRUCT<va ARRAY<VECTOR(128)>, s STRING(MAX)>
+  TypeParameters struct_params =
+      TypeParameters::MakeTypeParametersWithChildList(
+          {array_params, string_params});
+
+  // Validate the type parameters.
+  TypeParametersProto proto;
+  GOOGLESQL_ASSERT_OK(struct_params.Serialize(&proto));
+  ASSERT_THAT(
+      proto, testing::EqualsProto(R"pb(
+        child_list { child_list { vector_type_parameters { length: 128 } } }
+        child_list { string_type_parameters { is_max_length: true } }
+      )pb"));
+
+  // MatchType validates type match.
+  ASSERT_TRUE(struct_params.MatchType(struct_type));
+
+  // Verify mismatch logic works.
+  const Type* mismatch_struct_type = nullptr;
+  GOOGLESQL_ASSERT_OK(type_factory.MakeStructType(
+      {{"va", array_vector_type}, {"s", type_factory.get_int64()}},
+      &mismatch_struct_type));
+  ASSERT_FALSE(struct_params.MatchType(mismatch_struct_type));
+
+  // DebugString formatting verification.
+  ASSERT_EQ(struct_params.DebugString(), "[[(length=128)],(max_length=MAX)]");
+  ASSERT_EQ(struct_params.ToParenthesizedString(), "");
+
+  // Serialization / Deserialization.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(TypeParameters deserialized,
+                       TypeParameters::Deserialize(proto));
+  ASSERT_TRUE(struct_params.Equals(deserialized));
+
+  // TypeModifiers Verification.
+  TypeModifiers struct_modifiers =
+      TypeModifiers::MakeTypeModifiers(struct_params, Collation());
+  TypeModifiersProto modifiers_proto;
+  GOOGLESQL_ASSERT_OK(struct_modifiers.Serialize(&modifiers_proto));
+  ASSERT_THAT(
+      modifiers_proto, testing::EqualsProto(R"pb(
+        type_parameters {
+          child_list { child_list { vector_type_parameters { length: 128 } } }
+          child_list { string_type_parameters { is_max_length: true } }
+        }
+        collation {}
+      )pb"));
+}
+
+TEST(TypeParametersTest, ToParenthesizedStringAllVariants) {
+  // String
+  StringTypeParametersProto string_proto1;
+  string_proto1.set_max_length(10);
+  ASSERT_THAT(
+      TypeParameters::MakeStringTypeParameters(string_proto1),
+      IsOkAndHolds(Property(&TypeParameters::ToParenthesizedString, "(10)")));
+
+  StringTypeParametersProto string_proto2;
+  string_proto2.set_is_max_length(true);
+  ASSERT_THAT(
+      TypeParameters::MakeStringTypeParameters(string_proto2),
+      IsOkAndHolds(Property(&TypeParameters::ToParenthesizedString, "(MAX)")));
+
+  // Numeric
+  NumericTypeParametersProto numeric_proto1;
+  numeric_proto1.set_precision(10);
+  numeric_proto1.set_scale(5);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters p1,
+      TypeParameters::MakeNumericTypeParameters(numeric_proto1));
+  ASSERT_EQ(p1.ToParenthesizedString(), "(10, 5)");
+
+  NumericTypeParametersProto numeric_proto2;
+  numeric_proto2.set_precision(38);
+  numeric_proto2.set_scale(9);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters p2,
+      TypeParameters::MakeNumericTypeParameters(numeric_proto2));
+  ASSERT_EQ(p2.ToParenthesizedString(), "(38, 9)");
+
+  NumericTypeParametersProto numeric_proto3;
+  numeric_proto3.set_is_max_precision(true);
+  numeric_proto3.set_scale(9);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TypeParameters p3,
+      TypeParameters::MakeNumericTypeParameters(numeric_proto3));
+  ASSERT_EQ(p3.ToParenthesizedString(), "(MAX, 9)");
+
+  // Timestamp
+  TimestampTypeParametersProto timestamp_proto;
+  timestamp_proto.set_precision(6);
+  ASSERT_THAT(
+      TypeParameters::MakeTimestampTypeParameters(timestamp_proto),
+      IsOkAndHolds(Property(&TypeParameters::ToParenthesizedString, "(6)")));
 }
 
 }  // namespace

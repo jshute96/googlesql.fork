@@ -95,6 +95,8 @@ class SimpleType : public Type {
   absl::Status ValidateResolvedTypeParameters(
       const TypeParameters& type_parameters, ProductMode mode) const override;
 
+  bool UsesExtendedInlineValueContent() const override;
+
  protected:
   ~SimpleType() override;
 
@@ -105,6 +107,9 @@ class SimpleType : public Type {
  private:
   bool SupportsGroupingImpl(const LanguageOptions& language_options,
                             const Type** no_grouping_type) const override;
+
+  bool SupportsReturningImpl(const LanguageOptions& language_options,
+                             const Type** no_returning_type) const override;
 
   absl::Status SerializeToProtoAndDistinctFileDescriptorsImpl(
       const BuildFileDescriptorMapOptions& options, TypeProto* type_proto,

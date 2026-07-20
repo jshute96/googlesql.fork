@@ -23,6 +23,7 @@
 #include "googlesql/analyzer/constant_resolver_helper.h"
 #include "googlesql/common/errors.h"
 #include "googlesql/parser/parse_tree.h"
+#include "googlesql/parser/parse_tree_errors.h"
 #include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/function.h"
 #include "googlesql/public/input_argument_type.h"
@@ -32,9 +33,9 @@
 #include "googlesql/resolved_ast/resolved_node_kind.pb.h"
 #include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/types/span.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -148,19 +149,42 @@ static absl::StatusOr<InputArgumentType> GetInputArgumentTypeForGenericArgument(
     const AnalyzerOptions& analyzer_options) {
   ABSL_DCHECK(argument_ast_node != nullptr);
 
-  bool expects_null_expr = argument_ast_node->Is<ASTLambda>() ||
-                           argument_ast_node->Is<ASTSequenceArg>();
+  if (argument_ast_node->Is<ASTNamedArgument>()) {
+    argument_ast_node =
+        argument_ast_node->GetAsOrDie<ASTNamedArgument>()->expr();
+  }
+
   if (expr == nullptr) {
-    ABSL_DCHECK(expects_null_expr);
-    if (argument_ast_node->Is<ASTLambda>()) {
+    // Lambda arguments can either be inline or be passed as a function-typed
+    // parameter, hence the check for ASTLambda and ASTFunctionRefArg.
+    // ASTPathExpression is rejected because propagating function references
+    // requires the FUNCTION keyword.
+    if (argument_ast_node->Is<ASTLambda>() ||
+        argument_ast_node->Is<ASTFunctionRefArg>()) {
+      if (argument_ast_node->Is<ASTFunctionRefArg>()) {
+        const ASTFunctionRefArg* func_ref =
+            argument_ast_node->GetAsOrDie<ASTFunctionRefArg>();
+        if (func_ref->function_path()->num_names() != 1) {
+          return MakeSqlErrorAt(func_ref)
+                 << "Function reference argument must be a simple identifier";
+        }
+      }
       return InputArgumentType::LambdaInputArgumentType();
+    } else if (argument_ast_node->Is<ASTPathExpression>()) {
+      return MakeSqlErrorAt(argument_ast_node)
+             << "Function-typed UDF arguments must be prefixed with the "
+                "FUNCTION keyword";
     } else if (argument_ast_node->Is<ASTSequenceArg>()) {
       return InputArgumentType::SequenceInputArgumentType();
+    } else if (argument_ast_node->Is<ASTModelArg>()) {
+      return InputArgumentType::ModelInputArgumentType();
+    } else {
+      GOOGLESQL_RET_CHECK_FAIL() << "A nullptr placeholder can only be used for a lambda,"
+                          " sequence, model, or function-typed argument";
     }
-    ABSL_DCHECK(false) << "A nullptr placeholder can only be used for a lambda or "
-                     "sequence argument";
   }
-  ABSL_DCHECK(!expects_null_expr);
+
+  GOOGLESQL_RET_CHECK(expr != nullptr);
   return GetInputArgumentTypeForExpr(expr, pick_default_type_for_untyped_expr,
                                      analyzer_options);
 }

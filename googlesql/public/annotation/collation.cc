@@ -35,11 +35,11 @@
 #include "googlesql/resolved_ast/resolved_collation.h"
 #include "googlesql/resolved_ast/resolved_node_kind.pb.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/substitute.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -92,6 +92,9 @@ absl::Status CollationAnnotation::RejectsCollationOnFunctionArguments(
       }
     } else if (function_call.generic_argument_list(i)->expr() != nullptr) {
       arg_i = function_call.generic_argument_list(i)->expr();
+    } else if (function_call.generic_argument_list(i)->inline_lambda() !=
+               nullptr) {
+      arg_i = function_call.generic_argument_list(i)->inline_lambda()->body();
     } else {
       continue;
     }
@@ -150,6 +153,18 @@ absl::Status CollationAnnotation::CheckAndPropagateForFunctionCallBase(
     }
     GOOGLESQL_RETURN_IF_ERROR(
         MergeAnnotations(collation_to_propagate.get(), *result_annotation_map));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status CollationAnnotation::CheckAndPropagateForMakeMap(
+    const ResolvedMakeMap& make_map,
+    StructAnnotationMap* result_annotation_map) {
+  GOOGLESQL_RETURN_IF_ERROR(DefaultAnnotationSpec::CheckAndPropagateForMakeMap(
+      make_map, result_annotation_map));
+  if (CollationAnnotation::ExistsIn(result_annotation_map)) {
+    return MakeSqlError()
+           << "Collation is not supported on MAP or its key and value types";
   }
   return absl::OkStatus();
 }

@@ -31,16 +31,24 @@
 #include "googlesql/local_service/local_service.pb.h"
 #include "googlesql/local_service/state.h"
 #include "googlesql/parser/parse_tree_serializer.h"
+#include "googlesql/parser/parser.h"
 #include "googlesql/proto/simple_catalog.pb.h"
+#include "googlesql/public/analyzer.h"
+#include "googlesql/public/analyzer_output.h"
 #include "googlesql/public/builtin_function.h"
 #include "googlesql/public/builtin_function_options.h"
+#include "googlesql/public/constant_evaluator.h"
 #include "googlesql/public/evaluator.h"
+#include "googlesql/public/evaluator_table_iterator.h"
 #include "googlesql/public/formatter_options.h"
 #include "googlesql/public/function.h"
 #include "googlesql/public/id_string.h"
 #include "googlesql/public/language_options.h"
 #include "googlesql/public/lenient_formatter.h"
+#include "googlesql/public/prepared_expression_constant_evaluator.h"
+#include "googlesql/public/property_graph.h"
 #include "googlesql/public/simple_catalog.h"
+#include "googlesql/public/simple_catalog_util.h"
 #include "googlesql/public/simple_table.pb.h"
 #include "googlesql/public/sql_formatter.h"
 #include "googlesql/public/table_from_proto.h"
@@ -50,18 +58,23 @@
 #include "googlesql/public/value.h"
 #include "googlesql/public/value.pb.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
+#include "googlesql/resolved_ast/resolved_node.h"
 #include "googlesql/resolved_ast/sql_builder.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/bind_front.h"
+#include "googlesql/base/check.h"
+#include "absl/memory/memory.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
+#include "googlesql/base/status_builder.h"
 
 namespace googlesql {
 namespace local_service {
@@ -153,6 +166,18 @@ absl::StatusOr<EvaluateModifyResponse::Row::Operation> SerializeModifyOperation(
   }
 }
 
+absl::Status ResolvePropertyDefinitionsForSimpleCatalog(
+    const AnalyzerOptions& options, SimpleCatalog& catalog,
+    std::vector<std::unique_ptr<const AnalyzerOutput>>& artifacts) {
+  absl::flat_hash_set<const PropertyGraph*> graphs;
+  GOOGLESQL_RETURN_IF_ERROR(catalog.GetPropertyGraphs(&graphs));
+  for (const PropertyGraph* graph : graphs) {
+    GOOGLESQL_RETURN_IF_ERROR(ResolveGraphPropertyDefinitions(options.language(), graph,
+                                                    &catalog, artifacts));
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 class RegisteredDescriptorPoolState : public GenericState {
@@ -210,6 +235,18 @@ class RegisteredDescriptorPoolPool
   std::shared_ptr<RegisteredDescriptorPoolState> builtin_pool_;
 };
 
+static std::unique_ptr<const ConstantEvaluator> MaybeSetConstantEvaluator(
+    const AnalyzerOptionsProto& options_proto, AnalyzerOptions* options,
+    EvaluatorOptions evaluator_options) {
+  std::unique_ptr<PreparedExpressionConstantEvaluator> constant_evaluator;
+  if (options_proto.use_constant_evaluator()) {
+    constant_evaluator = std::make_unique<PreparedExpressionConstantEvaluator>(
+        evaluator_options, options->language());
+    options->set_constant_evaluator(constant_evaluator.get());
+  }
+  return constant_evaluator;
+}
+
 class InternalPreparedExpressionState : public GenericState {
  public:
   InternalPreparedExpressionState() = delete;
@@ -233,11 +270,15 @@ class InternalPreparedExpressionState : public GenericState {
     EvaluatorOptions evaluator_options;
     evaluator_options.type_factory = type_factory.get();
     evaluator_options.default_time_zone = options->default_time_zone();
+    std::unique_ptr<const ConstantEvaluator> constant_evaluator =
+        MaybeSetConstantEvaluator(options_proto, options.get(),
+                                  evaluator_options);
     auto exp = std::make_unique<PreparedExpression>(sql, evaluator_options);
     GOOGLESQL_RETURN_IF_ERROR(exp->Prepare(*options, catalog));
     return absl::WrapUnique(new InternalPreparedExpressionState(
         std::move(type_factory), std::move(options), std::move(exp),
-        std::move(owned_descriptor_pool_ids), owned_catalog_id));
+        std::move(constant_evaluator), std::move(owned_descriptor_pool_ids),
+        owned_catalog_id));
   }
 
   const PreparedExpression* GetExpression() const { return expression_.get(); }
@@ -255,17 +296,20 @@ class InternalPreparedExpressionState : public GenericState {
       std::unique_ptr<const TypeFactory> factory,
       std::unique_ptr<const AnalyzerOptions> options,
       std::unique_ptr<const PreparedExpression> expression,
+      std::unique_ptr<const ConstantEvaluator> constant_evaluator,
       absl::flat_hash_set<int64_t> owned_descriptor_pool_ids,
       std::optional<int64_t> owned_catalog_id)
       : factory_(std::move(factory)),
         options_(std::move(options)),
         expression_(std::move(expression)),
+        constant_evaluator_(std::move(constant_evaluator)),
         owned_descriptor_pool_ids_(std::move(owned_descriptor_pool_ids)),
         owned_catalog_id_(owned_catalog_id) {}
 
   const std::unique_ptr<const TypeFactory> factory_;
   const std::unique_ptr<const AnalyzerOptions> options_;
   const std::unique_ptr<const PreparedExpression> expression_;
+  const std::unique_ptr<const ConstantEvaluator> constant_evaluator_;
   // Descriptor pools that are owned by this PreparedExpression, and should
   // be deleted when this object is deleted.
   const absl::flat_hash_set<int64_t> owned_descriptor_pool_ids_;
@@ -297,11 +341,15 @@ class InternalPreparedQueryState : public GenericState {
     EvaluatorOptions evaluator_options;
     evaluator_options.type_factory = type_factory.get();
     evaluator_options.default_time_zone = options->default_time_zone();
+    std::unique_ptr<const ConstantEvaluator> constant_evaluator =
+        MaybeSetConstantEvaluator(options_proto, options.get(),
+                                  evaluator_options);
     auto query = std::make_unique<PreparedQuery>(sql, evaluator_options);
     GOOGLESQL_RETURN_IF_ERROR(query->Prepare(*options, catalog));
     return absl::WrapUnique(new InternalPreparedQueryState(
         std::move(type_factory), std::move(options), std::move(query),
-        std::move(owned_descriptor_pool_ids), owned_catalog_id));
+        std::move(constant_evaluator), std::move(owned_descriptor_pool_ids),
+        owned_catalog_id));
   }
 
   const PreparedQuery* GetQuery() const { return query_.get(); }
@@ -319,17 +367,20 @@ class InternalPreparedQueryState : public GenericState {
       std::unique_ptr<const TypeFactory> factory,
       std::unique_ptr<const AnalyzerOptions> options,
       std::unique_ptr<const PreparedQuery> query,
+      std::unique_ptr<const ConstantEvaluator> constant_evaluator,
       absl::flat_hash_set<int64_t> owned_descriptor_pool_ids,
       std::optional<int64_t> owned_catalog_id)
       : factory_(std::move(factory)),
         options_(std::move(options)),
         query_(std::move(query)),
+        constant_evaluator_(std::move(constant_evaluator)),
         owned_descriptor_pool_ids_(std::move(owned_descriptor_pool_ids)),
         owned_catalog_id_(owned_catalog_id) {}
 
   const std::unique_ptr<const TypeFactory> factory_;
   const std::unique_ptr<const AnalyzerOptions> options_;
   const std::unique_ptr<const PreparedQuery> query_;
+  const std::unique_ptr<const ConstantEvaluator> constant_evaluator_;
   // Descriptor pools that are owned by this PreparedQuery, and should
   // be deleted when this object is deleted.
   const absl::flat_hash_set<int64_t> owned_descriptor_pool_ids_;
@@ -360,11 +411,15 @@ class InternalPreparedModifyState : public GenericState {
     EvaluatorOptions evaluator_options;
     evaluator_options.type_factory = type_factory.get();
     evaluator_options.default_time_zone = options->default_time_zone();
+    std::unique_ptr<const ConstantEvaluator> constant_evaluator =
+        MaybeSetConstantEvaluator(options_proto, options.get(),
+                                  evaluator_options);
     auto modify = std::make_unique<PreparedModify>(sql, evaluator_options);
     GOOGLESQL_RETURN_IF_ERROR(modify->Prepare(*options, catalog));
     return absl::WrapUnique(new InternalPreparedModifyState(
         std::move(type_factory), std::move(options), std::move(modify),
-        std::move(owned_descriptor_pool_ids), owned_catalog_id));
+        std::move(constant_evaluator), std::move(owned_descriptor_pool_ids),
+        owned_catalog_id));
   }
 
   PreparedModify* GetModify() { return modify_.get(); }
@@ -382,17 +437,20 @@ class InternalPreparedModifyState : public GenericState {
       std::unique_ptr<const TypeFactory> factory,
       std::unique_ptr<const AnalyzerOptions> options,
       std::unique_ptr<PreparedModify> modify,
+      std::unique_ptr<const ConstantEvaluator> constant_evaluator,
       absl::flat_hash_set<int64_t> owned_descriptor_pool_ids,
       std::optional<int64_t> owned_catalog_id)
       : factory_(std::move(factory)),
         options_(std::move(options)),
         modify_(std::move(modify)),
+        constant_evaluator_(std::move(constant_evaluator)),
         owned_descriptor_pool_ids_(std::move(owned_descriptor_pool_ids)),
         owned_catalog_id_(owned_catalog_id) {}
 
   const std::unique_ptr<const TypeFactory> factory_;
   const std::unique_ptr<const AnalyzerOptions> options_;
   const std::unique_ptr<PreparedModify> modify_;
+  const std::unique_ptr<const ConstantEvaluator> constant_evaluator_;
   // Descriptor pools that are owned by this PreparedModify, and should
   // be deleted when this object is deleted.
   const absl::flat_hash_set<int64_t> owned_descriptor_pool_ids_;
@@ -1198,10 +1256,19 @@ absl::Status GoogleSqlLocalServiceImpl::AnalyzeImpl(
     const AnalyzeRequest& request,
     const std::vector<const google::protobuf::DescriptorPool*>& pools, Catalog* catalog,
     AnalyzeResponse* response) {
+  GOOGLESQL_RET_CHECK(catalog->Is<SimpleCatalog>());
+  GOOGLESQL_RET_CHECK_NE(catalog, nullptr);
+
   AnalyzerOptions options;
   TypeFactory factory;
   GOOGLESQL_RETURN_IF_ERROR(AnalyzerOptions::Deserialize(request.options(), pools,
                                                &factory, &options));
+  std::vector<std::unique_ptr<const AnalyzerOutput>> property_graph_artifacts;
+  GOOGLESQL_RETURN_IF_ERROR(ResolvePropertyDefinitionsForSimpleCatalog(
+      options, *catalog->GetAs<SimpleCatalog>(), property_graph_artifacts));
+  std::unique_ptr<const ConstantEvaluator> constant_evaluator =
+      MaybeSetConstantEvaluator(request.options(), &options,
+                                EvaluatorOptions{});
 
   if (!(request.has_sql_statement() || request.has_parse_resume_location())) {
     return ::googlesql_base::UnknownErrorBuilder()
@@ -1235,10 +1302,19 @@ absl::Status GoogleSqlLocalServiceImpl::AnalyzeExpressionImpl(
     const AnalyzeRequest& request,
     const std::vector<const google::protobuf::DescriptorPool*>& pools, Catalog* catalog,
     AnalyzeResponse* response) {
+  GOOGLESQL_RET_CHECK(catalog->Is<SimpleCatalog>());
+  GOOGLESQL_RET_CHECK_NE(catalog, nullptr);
+
   AnalyzerOptions options;
   TypeFactory factory;
   GOOGLESQL_RETURN_IF_ERROR(AnalyzerOptions::Deserialize(request.options(), pools,
                                                &factory, &options));
+  std::vector<std::unique_ptr<const AnalyzerOutput>> property_graph_artifacts;
+  GOOGLESQL_RETURN_IF_ERROR(ResolvePropertyDefinitionsForSimpleCatalog(
+      options, *catalog->GetAs<SimpleCatalog>(), property_graph_artifacts));
+  std::unique_ptr<const ConstantEvaluator> constant_evaluator =
+      MaybeSetConstantEvaluator(request.options(), &options,
+                                EvaluatorOptions{});
 
   if (request.has_sql_expression()) {
     std::unique_ptr<const AnalyzerOutput> output;
@@ -1273,13 +1349,15 @@ absl::Status GoogleSqlLocalServiceImpl::BuildSql(const BuildSqlRequest& request,
 
   std::unique_ptr<ResolvedNode> ast;
   if (request.has_resolved_statement()) {
-    ast = std::move(ResolvedStatement::RestoreFrom(request.resolved_statement(),
-                                                   restore_params)
-                        .value());
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<ResolvedStatement> statement,
+                     ResolvedStatement::RestoreFrom(
+                         request.resolved_statement(), restore_params));
+    ast = std::move(statement);
   } else if (request.has_resolved_expression()) {
-    ast = std::move(
-        ResolvedExpr::RestoreFrom(request.resolved_expression(), restore_params)
-            .value());
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<ResolvedExpr> expression,
+                     ResolvedExpr::RestoreFrom(request.resolved_expression(),
+                                               restore_params));
+    ast = std::move(expression);
   } else {
     return absl::OkStatus();
   }
