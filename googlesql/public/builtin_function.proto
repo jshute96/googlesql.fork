@@ -26,7 +26,6 @@ option java_outer_classname = "GoogleSQLFunction";
 // A unique ID for GoogleSQL function signatures.  Resolved GoogleSQL functions
 // will provide one of these enums, and GoogleSQL implementations should map
 // them to something they can evaluate.
-// Next id: 1952
 enum FunctionSignatureId {
   // User code that switches on this enum must have a default case so
   // builds won't break if new enums get added.
@@ -39,7 +38,7 @@ enum FunctionSignatureId {
   // other special functions (CASE).  FunctionSignatureIds are assigned
   // in ranges:
   //
-  // 0002-0999 Non-standard function calls    (NextId: 334)
+  // 0002-0999 Non-standard function calls    (NextId: 354)
   // 1000-1099 String functions               (NextId: 1086)
   // 1100-1199 Control flow functions         (NextId: 1108)
   // 1200-1299 Time functions                 (Fully used)
@@ -49,7 +48,7 @@ enum FunctionSignatureId {
   // 1600-1699 Misc functions                 (Fully used)
   // 1700-1799 Net functions                  (NextId: 1716)
   // 1800-1899 More time functions            (NextId: 1876)
-  // 1900-1999 Hashing/encryption functions   (NextId: 1952)
+  // 1900-1999 Hashing/encryption functions   (NextId: 1959)
   // 2000-2199 Geography functions            (NextId: 2096)
   // 2200-2299 Anonymization functions        (NextId: 2232)
   // 2300-2499 Numeric, more math & distances (NextId: 2394)
@@ -62,8 +61,10 @@ enum FunctionSignatureId {
   // 3100-3199 Measure functions              (NextId: 3101)
   // 3200-3299 MATCH_RECOGNIZE functions      (NextId: 3207)
   // 3300-3399 Aggregate functions III        (NextId: 3303)
-  // 3400-3499 Misc functions II              (NextId: 3410)
-  // 4000-4099 Table valued functions         (NextId: 4005)
+  // 3400-3499 Misc functions II              (NextId: 3416)
+  // 3500-3599 Vector functions               (NextId: 3502)
+  // 4000-4099 Table valued functions         (NextId: 5031)
+  // 5000-5099 AI functions                   (NextId: 5050)
 
   // enum value                       // Related function name
   // ----------                       // ---------------------
@@ -91,18 +92,28 @@ enum FunctionSignatureId {
   FN_GREATER = 107;                        // $greater
   FN_GREATER_INT64_UINT64 = 222;           // $greater
   FN_GREATER_UINT64_INT64 = 223;           // $greater
+  FN_GREATER_JSON_NONJSON = 345;           // $greater
+  FN_GREATER_NONJSON_JSON = 346;           // $greater
   FN_GREATER_OR_EQUAL = 108;               // $greater_or_equal
   FN_GREATER_OR_EQUAL_INT64_UINT64 = 224;  // $greater_or_equal
   FN_GREATER_OR_EQUAL_UINT64_INT64 = 225;  // $greater_or_equal
+  FN_GREATER_OR_EQUAL_JSON_NONJSON = 347;  // $greater_or_equal
+  FN_GREATER_OR_EQUAL_NONJSON_JSON = 348;  // $greater_or_equal
   FN_LESS = 105;                           // $less
   FN_LESS_INT64_UINT64 = 226;              // $less
   FN_LESS_UINT64_INT64 = 227;              // $less
+  FN_LESS_JSON_NONJSON = 349;              // $less
+  FN_LESS_NONJSON_JSON = 350;              // $less
   FN_LESS_OR_EQUAL = 106;                  // $less_or_equal
   FN_LESS_OR_EQUAL_INT64_UINT64 = 228;     // $less_or_equal
   FN_LESS_OR_EQUAL_UINT64_INT64 = 229;     // $less_or_equal
+  FN_LESS_OR_EQUAL_JSON_NONJSON = 351;     // $less_or_equal
+  FN_LESS_OR_EQUAL_NONJSON_JSON = 352;     // $less_or_equal
   FN_EQUAL = 42;                           // $equal
   FN_EQUAL_INT64_UINT64 = 230;             // $equal
   FN_EQUAL_UINT64_INT64 = 231;             // $equal
+  FN_EQUAL_JSON_NONJSON = 336;             // $equal
+  FN_EQUAL_NONJSON_JSON = 337;             // $equal
   FN_STRING_ARRAY_LIKE_ANY = 291;          // $like_any_array
   FN_STRING_ARRAY_LIKE_ALL = 292;          // $like_all_array
   FN_STRING_LIKE = 97;                     // $like
@@ -122,6 +133,7 @@ enum FunctionSignatureId {
   FN_STRING_ARRAY_NOT_LIKE_ALL = 308;      // $not_like_all_array
   FN_BYTE_ARRAY_NOT_LIKE_ALL = 309;        // $not_like_all_array
   FN_IN = 100;                             // $in
+  FN_IN_JSON_NONJSON = 338;                // $in
   FN_IN_ARRAY = 219;                       // $in_array
   FN_BETWEEN = 110;                        // $between
   FN_BETWEEN_INT64_UINT64_UINT64 = 254;    // $between
@@ -130,6 +142,7 @@ enum FunctionSignatureId {
   FN_BETWEEN_UINT64_INT64_INT64 = 257;     // $between
   FN_BETWEEN_UINT64_UINT64_INT64 = 258;    // $between
   FN_BETWEEN_UINT64_INT64_UINT64 = 259;    // $between
+  FN_BETWEEN_JSON_ANY_ANY = 353;           // $between
   FN_IS_NULL = 101;                        // $is_null
   FN_IS_TRUE = 102;                        // $is_true
   FN_IS_FALSE = 103;                       // $is_false
@@ -140,10 +153,18 @@ enum FunctionSignatureId {
   FN_MULTIPLY_BIGNUMERIC = 264;            // $multiply
   FN_MULTIPLY_INTERVAL_INT64 = 299;        // $multiply
   FN_MULTIPLY_INT64_INTERVAL = 300;        // $multiply
+  FN_MULTIPLY_INTERVAL_DOUBLE = 334;       // $multiply
+  FN_MULTIPLY_DOUBLE_INTERVAL = 335;       // $multiply
   FN_NOT = 45;                             // $not
   FN_NOT_EQUAL = 109;                      // $not_equal
   FN_NOT_EQUAL_INT64_UINT64 = 232;         // $not_equal
   FN_NOT_EQUAL_UINT64_INT64 = 233;         // $not_equal
+  FN_NOT_EQUAL_JSON_NONJSON = 339;         // $not_equal
+  FN_NOT_EQUAL_NONJSON_JSON = 340;         // $not_equal
+  FN_DISTINCT_JSON_NONJSON = 341;          // $is_distinct
+  FN_DISTINCT_NONJSON_JSON = 342;          // $is_distinct
+  FN_NOT_DISTINCT_JSON_NONJSON = 343;      // $is_not_distinct
+  FN_NOT_DISTINCT_NONJSON_JSON = 344;      // $is_not_distinct
   FN_OR = 46;                              // $or
   FN_SUBTRACT_DOUBLE = 115;                // $subtract
   FN_SUBTRACT_INT64 = 48;                  // $subtract
@@ -856,6 +877,8 @@ enum FunctionSignatureId {
 
   FN_SESSION_USER = 1612;  // session_user
 
+  FN_SECURE_CONTEXT = 1954;  // secure_context(string) -> string
+
   FN_GENERATE_ARRAY_INT64 = 1613;       // generate_array(int64)
   FN_GENERATE_ARRAY_UINT64 = 1614;      // generate_array(uint64)
   FN_GENERATE_ARRAY_NUMERIC = 1625;     // generate_array(numeric)
@@ -910,6 +933,9 @@ enum FunctionSignatureId {
   FN_JSON_VALUE = 1624;       // json_value(string[, string]) -> string
   FN_JSON_VALUE_JSON = 1687;  // json_value(json[, string]) -> string
   FN_PARSE_JSON = 1698;       // parse_json(string[, string]) -> json
+  FN_JSON_EXISTS = 3410;      // json_exists(json, string) -> bool
+  FN_JSON_EXISTS_ANY = 3411;  // json_exists_any(json, array<string>) -> bool
+  FN_JSON_EXISTS_ALL = 3412;  // json_exists_all(json, array<string>) -> bool
   FN_FROM_PROTO_TIMESTAMP =
       1626;  // from_proto(google.protobuf.Timestamp) -> timestamp
   FN_FROM_PROTO_DATE = 1627;  // from_proto(google.type.Date) -> date
@@ -1041,6 +1067,8 @@ enum FunctionSignatureId {
   // Keyset management, encryption, and decryption functions
   // ((broken link)). Requires that FEATURE_ENCRYPTION is enabled.
   FN_KEYS_NEW_KEYSET = 1910;  // keys.new_keyset(string)
+  // keys.new_keyset(string, string)
+  FN_KEYS_NEW_KEYSET_WITH_METADATA = 1955;
   // keys.add_key_from_raw_bytes(bytes, string, bytes)
   FN_KEYS_ADD_KEY_FROM_RAW_BYTES = 1911;
   FN_KEYS_ROTATE_KEYSET = 1912;     // keys.rotate_keyset(bytes, string)
@@ -1053,6 +1081,8 @@ enum FunctionSignatureId {
   FN_KEYS_KEYSET_CHAIN_STRING_BYTES = 1929;
   // keys.new_wrapped_keyset(string, string)
   FN_KEYS_NEW_WRAPPED_KEYSET = 1942;
+  // keys.new_wrapped_keyset(string, string, string)
+  FN_KEYS_NEW_WRAPPED_KEYSET_WITH_METADATA = 1956;
   // keys.rotate_wrapped_keyset(string, bytes, string)
   FN_KEYS_ROTATE_WRAPPED_KEYSET = 1943;
   // keys.rewrap_keyset(string, string, bytes)
@@ -1110,6 +1140,14 @@ enum FunctionSignatureId {
   FN_DETERMINISTIC_DECRYPT_STRUCT_STRING = 1940;
   // deterministic_decrypt_bytes(struct, bytes, bytes)
   FN_DETERMINISTIC_DECRYPT_STRUCT_BYTES = 1941;
+  // fpe_encrypt(bytes, array<int64>[, bytes])
+  FN_FPE_ENCRYPT = 1952;
+  // fpe_decrypt(bytes, array<int64>[, bytes])
+  FN_FPE_DECRYPT = 1953;
+  // fpe_encrypt(struct, array<int64>[, bytes])
+  FN_FPE_ENCRYPT_STRUCT = 1957;
+  // fpe_decrypt(struct, array<int64>[, bytes])
+  FN_FPE_DECRYPT_STRUCT = 1958;
 
   // ST_ family of functions (Geography related - (broken link))
   // Constructors
@@ -1733,10 +1771,34 @@ enum FunctionSignatureId {
   // zstd_decompress_to_string(bytes[, int64]) -> string
   FN_ZSTD_DECOMPRESS_TO_STRING = 2693;
 
+  // Vector functions
+  FN_ENCODE_VECTOR = 3500;       // encode_vector(ARRAY<FLOAT>) -> vector
+  FN_DOT_PRODUCT_VECTOR = 3501;  // dot_product(vector, vector) -> double
+  FN_DECODE_VECTOR = 3502;       // decode_vector(vector) -> array<float>
+  FN_VECTOR_LENGTH = 3503;       // vector_length(vector) -> int64
+  FN_VECTOR_ENCODING = 3504;     // vector_encoding(vector) -> string
+  FN_COSINE_DISTANCE_VECTOR =
+      3505;  // cosine_distance(vector, vector) -> double
+  FN_EUCLIDEAN_DISTANCE_VECTOR =
+      3506;  // euclidean_distance(vector, vector) -> double
+  FN_MANHATTAN_DISTANCE_VECTOR =
+      3507;  // manhattan_distance(vector, vector) -> double
+  FN_APPROX_DOT_PRODUCT_VECTOR =
+      3508;  // approx_dot_product(vector, vector) -> double
+  FN_APPROX_COSINE_DISTANCE_VECTOR =
+      3509;  // approx_cosine_distance(vector, vector) -> double
+  FN_APPROX_EUCLIDEAN_DISTANCE_VECTOR =
+      3510;  // approx_euclidean_distance(vector, vector) -> double
+  FN_L1_NORM_VECTOR = 3511;  // l1_norm(vector) -> double
+  FN_L2_NORM_VECTOR = 3512;  // l2_norm(vector) -> double
+
   // Table valued functions
   FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS =
       4000;  // VECTOR_SEARCH(table, string, table, string,
              // int64, string, double, proto) -> ANY TABLE
+  FN_BATCH_VECTOR_SEARCH_TVF_WITH_JSON_OPTIONS =
+      5024;  // VECTOR_SEARCH(table, string, table, string,
+             // int64, string, double, json) -> ANY TABLE
   // tumble(table<any>, string, interval[, timestamp]) -> table<any>
   FN_TUMBLE = 4001;
   // hop(table<any>, string, interval, interval[, timestamp]) -> table<any>
@@ -1746,4 +1808,91 @@ enum FunctionSignatureId {
   FN_TUMBLE_NO_TIMESTAMP_COL = 4003;
   // hop(table<any>, interval, interval[, timestamp]) -> table<any>
   FN_HOP_NO_TIMESTAMP_COL = 4004;
+
+  // KMEANS(table, string, int64, string, double, json) -> ANY TABLE
+  FN_KMEANS_TVF = 4005;
+
+  FN_SINGLE_VECTOR_SEARCH_TVF_FLOAT_ARRAY_WITH_PROTO_OPTIONS =
+      5025;  // VECTOR_SEARCH(table, string, array<float>,
+             // int64, string, double, proto) -> ANY TABLE
+  FN_SINGLE_VECTOR_SEARCH_TVF_FLOAT_ARRAY_WITH_JSON_OPTIONS =
+      5026;  // VECTOR_SEARCH(table, string, array<float>,
+             // int64, string, double, json) -> ANY TABLE
+  FN_SINGLE_VECTOR_SEARCH_TVF_DOUBLE_ARRAY_WITH_PROTO_OPTIONS =
+      5027;  // VECTOR_SEARCH(table, string, array<double>,
+             // int64, string, double, proto) -> ANY TABLE
+  FN_SINGLE_VECTOR_SEARCH_TVF_DOUBLE_ARRAY_WITH_JSON_OPTIONS =
+      5028;  // VECTOR_SEARCH(table, string, array<double>,
+             // int64, string, double, json) -> ANY TABLE
+  FN_SINGLE_VECTOR_SEARCH_TVF_STRING_WITH_PROTO_OPTIONS =
+      5029;  // VECTOR_SEARCH(table, string, string,
+             // int64, string, double, proto) -> ANY TABLE
+  FN_SINGLE_VECTOR_SEARCH_TVF_STRING_WITH_JSON_OPTIONS =
+      5030;  // VECTOR_SEARCH(table, string, string,
+             // int64, string, double, json) -> ANY TABLE
+
+  // AI functions
+  // TODO: Add function overloads for `model` to be a MODEL
+  // reference once this argument type is available.
+  // Signature ids for AI.IF(prompt). This must be the minimal signature for
+  // AI.IF and can't have any fewer arguments.
+  FN_AI_IF_WITH_STRING_PROMPT = 5000;  // AI.IF(string) -> bool
+  FN_AI_IF_WITH_STRUCT_PROMPT = 5001;  // AI.IF(struct) -> bool
+
+  // Signature id for AI.IF(prompt, payload)
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD = 5002;  // AI.IF(string, any) -> bool
+
+  // Signature ids for AI.IF(prompt, model)
+  FN_AI_IF_WITH_STRING_PROMPT_STRING_MODEL =
+      5003;  // AI.IF(string, string) -> bool
+  FN_AI_IF_WITH_STRUCT_PROMPT_STRING_MODEL =
+      5004;  // AI.IF(struct, string) -> bool
+
+  // Signature ids for AI.IF(prompt, options)
+  FN_AI_IF_WITH_STRING_PROMPT_JSON_OPTIONS =
+      5005;  // AI.IF(string, json) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_STRUCT_OPTIONS =
+      5006;  // AI.IF(string, struct) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_STRING_OPTIONS =
+      5007;  // AI.IF(string, string) -> bool
+  FN_AI_IF_WITH_STRUCT_PROMPT_JSON_OPTIONS =
+      5008;  // AI.IF(struct, json) -> bool
+  FN_AI_IF_WITH_STRUCT_PROMPT_STRUCT_OPTIONS =
+      5009;  // AI.IF(struct, struct) -> bool
+  FN_AI_IF_WITH_STRUCT_PROMPT_STRING_OPTIONS =
+      5010;  // AI.IF(struct, string) -> bool
+
+  // Signature ids for AI.IF(prompt, model, options)
+  FN_AI_IF_WITH_STRUCT_PROMPT_STRING_MODEL_JSON_OPTIONS =
+      5011;  // AI.IF(struct, string, json) -> bool
+  FN_AI_IF_WITH_STRUCT_PROMPT_STRING_MODEL_STRUCT_OPTIONS =
+      5012;  // AI.IF(struct, string, struct) -> bool
+  FN_AI_IF_WITH_STRUCT_PROMPT_STRING_MODEL_STRING_OPTIONS =
+      5013;  // AI.IF(struct, string, string) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_STRING_MODEL_JSON_OPTIONS =
+      5014;  // AI.IF(string, string, json) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_STRING_MODEL_STRUCT_OPTIONS =
+      5015;  // AI.IF(string, string, struct) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_STRING_MODEL_STRING_OPTIONS =
+      5016;  // AI.IF(string, string, string) -> bool
+
+  // Signature id for AI.IF(prompt, payload, model)
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD_STRING_MODEL =
+      5017;  // AI.IF(string, any, string) -> bool
+
+  // Signature ids for AI.IF(prompt, payload, options)
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD_JSON_OPTIONS =
+      5018;  // AI.IF(string, any, json) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD_STRUCT_OPTIONS =
+      5019;  // AI.IF(string, any, struct) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD_STRING_OPTIONS =
+      5020;  // AI.IF(string, any, string) -> bool
+
+  // Signature ids for AI.IF(prompt, payload, model, options)
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD_STRING_MODEL_JSON_OPTIONS =
+      5021;  // AI.IF(string, any, string, json) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD_STRING_MODEL_STRUCT_OPTIONS =
+      5022;  // AI.IF(string, any, string, struct) -> bool
+  FN_AI_IF_WITH_STRING_PROMPT_ANY_PAYLOAD_STRING_MODEL_STRING_OPTIONS =
+      5023;  // AI.IF(string, any, string, string) -> bool
 }

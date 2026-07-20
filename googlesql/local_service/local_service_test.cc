@@ -16,25 +16,21 @@
 
 #include "googlesql/local_service/local_service.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include "googlesql/base/logging.h"
-#include "googlesql/base/path.h"
 #include "google/protobuf/wrappers.pb.h"
-#include "google/protobuf/compiler/importer.h"
 #include "google/protobuf/descriptor.pb.h"
-#include "google/protobuf/descriptor.h"
-#include "google/protobuf/text_format.h"
 #include "googlesql/common/status_payload_utils.h"
 #include "googlesql/common/testing/proto_matchers.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "googlesql/common/testing/testing_proto_util.h"
 #include "googlesql/proto/function.pb.h"
 #include "googlesql/proto/simple_catalog.pb.h"
+#include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/formatter_options.pb.h"
 #include "googlesql/public/functions/date_time_util.h"
 #include "googlesql/public/parse_resume_location.pb.h"
@@ -49,9 +45,12 @@
 #include "googlesql/testdata/test_schema.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "googlesql/base/check.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "googlesql/base/status.h"
+#include "google/protobuf/compiler/importer.h"
+#include "google/protobuf/text_format.h"
 
 namespace googlesql {
 
@@ -519,7 +518,8 @@ TEST_F(GoogleSqlLocalServiceImplTest, ExtractTableNamesFromStatement) {
   ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(R"pb(table_name {
                                                     table_name_segment: "foo"
                                                     table_name_segment: "bar"
-                                                  })pb", &expectedResponse));
+                                                  })pb",
+                                             &expectedResponse));
   EXPECT_THAT(response, EqualsProto(expectedResponse));
 }
 
@@ -554,10 +554,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, ExtractTableNamesFromFirstStatement) {
   GOOGLESQL_ASSERT_OK(ExtractTableNamesFromNextStatement(request, &response));
   ExtractTableNamesFromNextStatementResponse expectedResponse;
   ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(
-      R"pb(table_name {
-             table_name_segment: "foo"
-             table_name_segment: "bar"
-           }
+      R"pb(table_name { table_name_segment: "foo" table_name_segment: "bar" }
            resume_byte_position: 29)pb",
       &expectedResponse));
   EXPECT_THAT(response, EqualsProto(expectedResponse));
@@ -585,10 +582,8 @@ TEST_F(GoogleSqlLocalServiceImplTest, ExtractWithWrongStatementSupported) {
              input: "CREATE TABLE test AS SELECT COUNT(1) FROM foo.bar;"
              byte_position: 0
            }
-           options {
-             supported_statement_kinds: RESOLVED_CONSTANT
-           }
-           )pb",
+           options { supported_statement_kinds: RESOLVED_CONSTANT }
+      )pb",
       &request));
 
   ExtractTableNamesFromNextStatementResponse response;
@@ -605,17 +600,14 @@ TEST_F(GoogleSqlLocalServiceImplTest, ExtractWithAllStatementsSupported) {
              byte_position: 0
            }
            options {}
-           )pb",
+      )pb",
       &request));
 
   ExtractTableNamesFromNextStatementResponse response;
   GOOGLESQL_ASSERT_OK(ExtractTableNamesFromNextStatement(request, &response));
   ExtractTableNamesFromNextStatementResponse expectedResponse;
   ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(
-      R"pb(table_name {
-             table_name_segment: "foo"
-             table_name_segment: "bar"
-           }
+      R"pb(table_name { table_name_segment: "foo" table_name_segment: "bar" }
            resume_byte_position: 50)pb",
       &expectedResponse));
   EXPECT_THAT(response, EqualsProto(expectedResponse));
@@ -680,9 +672,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, ExtractTableNamesFromNextStatement) {
   GOOGLESQL_ASSERT_OK(ExtractTableNamesFromNextStatement(request, &response));
   ExtractTableNamesFromNextStatementResponse expectedResponse;
   ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(
-      R"pb(table_name {
-             table_name_segment: "baz"
-           }
+      R"pb(table_name { table_name_segment: "baz" }
            resume_byte_position: 49)pb",
       &expectedResponse));
   EXPECT_THAT(response, EqualsProto(expectedResponse));
@@ -701,9 +691,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, ExtractTableNamesWithNoSemicolon) {
   GOOGLESQL_ASSERT_OK(ExtractTableNamesFromNextStatement(request, &response));
   ExtractTableNamesFromNextStatementResponse expectedResponse;
   ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(
-      R"pb(table_name {
-             table_name_segment: "baz"
-           }
+      R"pb(table_name { table_name_segment: "baz" }
            resume_byte_position: 48)pb",
       &expectedResponse));
   EXPECT_THAT(response, EqualsProto(expectedResponse));
@@ -1037,6 +1025,137 @@ TEST_F(GoogleSqlLocalServiceImplTest, Analyze) {
   AnalyzeResponse response3;
   GOOGLESQL_EXPECT_OK(Analyze(request3, &response3));
   EXPECT_EQ(40, response3.resume_byte_position());
+}
+
+TEST_F(GoogleSqlLocalServiceImplTest, AnalyzeWithPropertyGraphSuccess) {
+  const std::string catalog_proto_text = R"pb(
+    name: "catalog"
+    table {
+      name: "Person"
+      column {
+        name: "id"
+        type { type_kind: TYPE_INT64 }
+      }
+      column {
+        name: "name"
+        type { type_kind: TYPE_STRING }
+      }
+      primary_key_column_index: 0
+    }
+    property_graph {
+      name_path: "catalog"
+      name_path: "aml"
+      property_declarations {
+        name: "id"
+        property_graph_name_path: "catalog"
+        property_graph_name_path: "aml"
+        type { type_kind: TYPE_INT64 }
+      }
+      property_declarations {
+        name: "name"
+        property_graph_name_path: "catalog"
+        property_graph_name_path: "aml"
+        type { type_kind: TYPE_STRING }
+      }
+      labels {
+        name: "PersonLabel"
+        property_graph_name_path: "catalog"
+        property_graph_name_path: "aml"
+        property_declaration_names: "id"
+        property_declaration_names: "name"
+      }
+      node_tables {
+        name: "Person"
+        property_graph_name_path: "catalog"
+        property_graph_name_path: "aml"
+        kind: NODE
+        input_table_name: "Person"
+        key_columns: 0
+        label_names: "PersonLabel"
+        property_definitions {
+          property_declaration_name: "id"
+          value_expression_sql: "id"
+        }
+        property_definitions {
+          property_declaration_name: "name"
+          value_expression_sql: "name"
+        }
+      }
+    }
+  )pb";
+
+  SimpleCatalogProto catalog;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(catalog_proto_text, &catalog));
+
+  AnalyzeRequest request;
+  *request.mutable_simple_catalog() = catalog;
+  request.set_sql_statement("select 1;");
+
+  AnalyzeResponse response;
+  GOOGLESQL_EXPECT_OK(Analyze(request, &response));
+}
+
+TEST_F(GoogleSqlLocalServiceImplTest, AnalyzeWithPropertyGraphFailure) {
+  const std::string catalog_proto_text = R"pb(
+    name: "catalog"
+    table {
+      name: "Person"
+      column {
+        name: "id"
+        type { type_kind: TYPE_INT64 }
+      }
+      column {
+        name: "name"
+        type { type_kind: TYPE_STRING }
+      }
+      primary_key_column_index: 0
+    }
+    property_graph {
+      name_path: "catalog"
+      name_path: "aml"
+      property_declarations {
+        name: "id"
+        property_graph_name_path: "catalog"
+        property_graph_name_path: "aml"
+        type { type_kind: TYPE_INT64 }
+      }
+      labels {
+        name: "PersonLabel"
+        property_graph_name_path: "catalog"
+        property_graph_name_path: "aml"
+        property_declaration_names: "id"
+      }
+      node_tables {
+        name: "Person"
+        property_graph_name_path: "catalog"
+        property_graph_name_path: "aml"
+        kind: NODE
+        input_table_name: "Person"
+        key_columns: 0
+        label_names: "PersonLabel"
+        property_definitions {
+          property_declaration_name: "id"
+          # "non_existent_column" does not exist in the table Person
+          value_expression_sql: "non_existent_column"
+        }
+      }
+    }
+  )pb";
+
+  SimpleCatalogProto catalog;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(catalog_proto_text, &catalog));
+
+  AnalyzeRequest request;
+  *request.mutable_simple_catalog() = catalog;
+  request.set_sql_statement("select 1;");
+
+  AnalyzeResponse response;
+  EXPECT_THAT(Analyze(request, &response),
+              StatusIs(absl::StatusCode::kNotFound,
+                       ::testing::HasSubstr("Cannot find column named "
+                                            "non_existent_column")));
 }
 
 void AddDateTruncToCatalog(SimpleCatalogProto* catalog) {
@@ -1419,7 +1538,6 @@ TEST_F(GoogleSqlLocalServiceImplTest,
        UnregisterCatalogAlsoUnregistersOwnedDescriptorPools) {
   int64_t catalog1_id;
   int64_t kitchen_sink_pool_id;  // kitchen
-  int64_t pool_b_id;
   int64_t builtin_pool_id;
   // REGISTER CATALOG 1
   {
@@ -1437,7 +1555,6 @@ TEST_F(GoogleSqlLocalServiceImplTest,
     EXPECT_THAT(response1.descriptor_pool_id_list().registered_ids_size(), 4);
     kitchen_sink_pool_id =
         response1.descriptor_pool_id_list().registered_ids(0);
-    pool_b_id = response1.descriptor_pool_id_list().registered_ids(1);
     builtin_pool_id = response1.descriptor_pool_id_list().registered_ids(2);
     EXPECT_EQ(response1.descriptor_pool_id_list().registered_ids(3),
               builtin_pool_id);
@@ -1537,7 +1654,7 @@ void ExpectValueIsKitchenSink3(
     const ValueProto& value,
     const googlesql_test::Proto3KitchenSink& expected) {
   googlesql_test::Proto3KitchenSink actual;
-  ASSERT_TRUE(actual.ParseFromCord(absl::Cord(value.proto_value())));
+  ASSERT_TRUE(actual.ParseFromString(value.proto_value()));
   EXPECT_THAT(actual, EqualsProto(expected));
 }
 
@@ -2047,7 +2164,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, AnalyzeExpression) {
                    function { name: "GoogleSQL:$less" }
                    signature {
                      argument {
-                       kind: ARG_TYPE_FIXED
+                       kind: ARG_KIND_EXPR_FIXED
                        type { type_kind: TYPE_INT32 }
                        options {
                          cardinality: REQUIRED
@@ -2056,7 +2173,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, AnalyzeExpression) {
                        num_occurrences: 1
                      }
                      argument {
-                       kind: ARG_TYPE_FIXED
+                       kind: ARG_KIND_EXPR_FIXED
                        type { type_kind: TYPE_INT32 }
                        options {
                          cardinality: REQUIRED
@@ -2065,7 +2182,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, AnalyzeExpression) {
                        num_occurrences: 1
                      }
                      return_type {
-                       kind: ARG_TYPE_FIXED
+                       kind: ARG_KIND_EXPR_FIXED
                        type { type_kind: TYPE_BOOL }
                        options {
                          cardinality: REQUIRED
@@ -2191,6 +2308,26 @@ TEST_F(GoogleSqlLocalServiceImplTest, BuildSqlStatement) {
   EXPECT_THAT(response, EqualsProto(expectedResponse));
 }
 
+TEST_F(GoogleSqlLocalServiceImplTest, BuildSqlInvalidStatementReturnsError) {
+  BuildSqlRequest request;
+  ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(R"pb(resolved_statement {})pb",
+                                             &request));
+
+  BuildSqlResponse response;
+  absl::Status status = BuildSql(request, &response);
+  EXPECT_FALSE(status.ok());
+}
+
+TEST_F(GoogleSqlLocalServiceImplTest, BuildSqlInvalidExpressionReturnsError) {
+  BuildSqlRequest request;
+  ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(R"pb(resolved_expression {})pb",
+                                             &request));
+
+  BuildSqlResponse response;
+  absl::Status status = BuildSql(request, &response);
+  EXPECT_FALSE(status.ok());
+}
+
 TEST_F(GoogleSqlLocalServiceImplTest, BuildSqlExpression) {
   BuildSqlRequest request;
   ABSL_QCHECK(google::protobuf::TextFormat::ParseFromString(
@@ -2202,7 +2339,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, BuildSqlExpression) {
                    function { name: "GoogleSQL:$less" }
                    signature {
                      argument {
-                       kind: ARG_TYPE_FIXED
+                       kind: ARG_KIND_EXPR_FIXED
                        type { type_kind: TYPE_INT32 }
                        options {
                          cardinality: REQUIRED
@@ -2211,7 +2348,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, BuildSqlExpression) {
                        num_occurrences: 1
                      }
                      argument {
-                       kind: ARG_TYPE_FIXED
+                       kind: ARG_KIND_EXPR_FIXED
                        type { type_kind: TYPE_INT32 }
                        options {
                          cardinality: REQUIRED
@@ -2220,7 +2357,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, BuildSqlExpression) {
                        num_occurrences: 1
                      }
                      return_type {
-                       kind: ARG_TYPE_FIXED
+                       kind: ARG_KIND_EXPR_FIXED
                        type { type_kind: TYPE_BOOL }
                        options {
                          cardinality: REQUIRED
@@ -2377,7 +2514,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctions) {
       mode: SCALAR
       signature {
         argument {
-          kind: ARG_TYPE_ANY_1
+          kind: ARG_KIND_EXPR_ANY_1
           options {
             cardinality: REQUIRED
             extra_relation_input_columns_allowed: true
@@ -2385,7 +2522,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctions) {
           num_occurrences: -1
         }
         argument {
-          kind: ARG_TYPE_ANY_1
+          kind: ARG_KIND_EXPR_ANY_1
           options {
             cardinality: REQUIRED
             extra_relation_input_columns_allowed: true
@@ -2393,7 +2530,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctions) {
           num_occurrences: -1
         }
         return_type {
-          kind: ARG_TYPE_FIXED
+          kind: ARG_KIND_EXPR_FIXED
           type {
             type_kind: TYPE_BOOL
           }
@@ -2434,7 +2571,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctions) {
       mode: SCALAR
       signature {
         argument {
-          kind: ARG_TYPE_FIXED
+          kind: ARG_KIND_EXPR_FIXED
           type {
             type_kind: TYPE_DOUBLE
           }
@@ -2445,7 +2582,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctions) {
           num_occurrences: -1
         }
         return_type {
-          kind: ARG_TYPE_FIXED
+          kind: ARG_KIND_EXPR_FIXED
           type {
             type_kind: TYPE_DOUBLE
           }
@@ -2510,7 +2647,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctionsReturnsTypes) {
       mode: SCALAR
       signature {
         argument {
-          kind: ARG_TYPE_FIXED
+          kind: ARG_KIND_EXPR_FIXED
           type {
             type_kind: TYPE_NUMERIC
           }
@@ -2521,7 +2658,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctionsReturnsTypes) {
           num_occurrences: -1
         }
         argument {
-          kind: ARG_TYPE_FIXED
+          kind: ARG_KIND_EXPR_FIXED
           type {
             type_kind: TYPE_INT64
           }
@@ -2532,7 +2669,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctionsReturnsTypes) {
           num_occurrences: -1
         }
         argument {
-          kind: ARG_TYPE_FIXED
+          kind: ARG_KIND_EXPR_FIXED
           type {
             type_kind: TYPE_ENUM
             enum_type {
@@ -2548,7 +2685,7 @@ TEST_F(GoogleSqlLocalServiceImplTest, GetBuiltinFunctionsReturnsTypes) {
           num_occurrences: -1
         }
         return_type {
-          kind: ARG_TYPE_FIXED
+          kind: ARG_KIND_EXPR_FIXED
           type {
             type_kind: TYPE_NUMERIC
           }

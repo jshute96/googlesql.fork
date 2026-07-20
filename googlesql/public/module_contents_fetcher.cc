@@ -30,10 +30,11 @@
 #include "googlesql/public/options.pb.h"
 #include "googlesql/public/parse_resume_location.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/types/span.h"
+#include "googlesql/base/status_builder.h"
 #include "google/protobuf/descriptor.h"
 #include "googlesql/base/map_util.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -185,7 +186,7 @@ static void FetchAndAppendAllModuleAndProtoContents(
       continue;
     }
 
-    const google::protobuf::FileDescriptor* file_descriptor;
+    const google::protobuf::FileDescriptor* file_descriptor = nullptr;
     const absl::Status fetch_status =
         module_contents_fetcher->FetchProtoFileDescriptor(proto_name,
                                                           &file_descriptor);

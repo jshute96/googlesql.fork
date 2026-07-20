@@ -28,7 +28,6 @@
 #include <utility>
 #include <vector>
 
-#include "googlesql/base/logging.h"
 #include "googlesql/common/utf_util.h"
 #include "googlesql/public/functions/convert_proto.h"
 #include "googlesql/public/functions/format_max_output_width.h"
@@ -44,7 +43,10 @@
 #include "googlesql/public/value.h"
 #include "absl/base/optimization.h"
 #include "absl/flags/flag.h"
+#include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/cord.h"
 #include "absl/strings/match.h"
@@ -53,13 +55,13 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "googlesql/base/status_builder.h"
 #include "unicode/utf8.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/dynamic_message.h"
 #include "google/protobuf/message.h"
 #include "re2/re2.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 namespace functions {
@@ -231,17 +233,13 @@ absl::Status StringFormatEvaluator::SetTypes(
 }
 
 bool StringFormatEvaluator::ProcessType(const Type* arg_type) {
-  if (arg_type->IsArray()) {
-    if (!ProcessType(arg_type->AsArray()->element_type())) {
+  for (const Type* type : arg_type->ComponentTypes()) {
+    if (!ProcessType(type)) {
       return false;
     }
-  } else if (arg_type->IsStruct()) {
-    for (const StructField& field : arg_type->AsStruct()->fields()) {
-      if (!ProcessType(field.type)) {
-        return false;
-      }
-    }
-  } else if (arg_type->IsProto()) {
+  }
+
+  if (arg_type->IsProto()) {
     const ProtoType* proto_type = arg_type->AsProto();
     const google::protobuf::Descriptor* descriptor = proto_type->descriptor();
 
@@ -264,7 +262,14 @@ bool StringFormatEvaluator::ProcessType(const Type* arg_type) {
                        descriptor->name()));
       return false;
     }
-  } else if (arg_type->IsGraphElement()) {
+  } else if (arg_type->IsGraphElement() || arg_type->IsColumnListSpec()) {
+    status_ =
+        absl::Status(absl::StatusCode::kUnimplemented,
+                     absl::StrCat("Cannot format type ",
+                                  arg_type->ShortTypeName(product_mode_)));
+    return false;
+  } else if (arg_type->IsDeclarativeType()) {
+    // TODO: b/836885041 - Support formatting for declarative types.
     status_ =
         absl::Status(absl::StatusCode::kUnimplemented,
                      absl::StrCat("Cannot format type ",

@@ -17,16 +17,17 @@
 #include "googlesql/testdata/sample_catalog_impl.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
-#include "googlesql/base/logging.h"
 #include "google/protobuf/descriptor.pb.h"
 #include "googlesql/common/errors.h"
 #include "googlesql/common/internal_property_graph.h"
@@ -72,6 +73,7 @@
 #include "googlesql/testdata/ambiguous_has.pb.h"
 #include "googlesql/testdata/referenced_schema.pb.h"
 #include "googlesql/testdata/sample_annotation.h"
+#include "googlesql/testdata/test_hop_tumble.pb.h"
 #include "googlesql/testdata/test_proto3.pb.h"
 #include "googlesql/public/functions/differential_privacy.pb.h"
 #include "absl/base/attributes.h"
@@ -84,8 +86,10 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
 #include "googlesql/base/check.h"
+#include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
@@ -100,7 +104,6 @@
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_builder.h"
-#include "googlesql/base/status_macros.h"
 #include "googlesql/base/clock.h"
 
 // The _UNLESS_DBG macros are a hack to make analyzer tests (and anything else
@@ -164,6 +167,11 @@
 #endif
 
 namespace googlesql {
+
+static absl::Status AddTableBackedTvf(
+    absl::string_view tvf_name, absl::Span<const TVFSchemaColumn> tvf_columns,
+    SimpleCatalog& catalog, bool is_value_table = false);
+
 namespace {
 
 // A fluent builder for building FunctionArgumentType instances
@@ -171,7 +179,7 @@ class ArgBuilder {
  public:
   explicit ArgBuilder() = default;
   ArgBuilder&& Type(const Type* type) && {
-    kind_ = ARG_TYPE_FIXED;
+    kind_ = ARG_KIND_EXPR_FIXED;
     type_ = type;
     return std::move(*this);
   }
@@ -184,15 +192,15 @@ class ArgBuilder {
   ArgBuilder&& Int64() && { return std::move(*this).Type(types::Int64Type()); }
   ArgBuilder&& Bool() && { return std::move(*this).Type(types::BoolType()); }
   ArgBuilder&& T1() && {
-    kind_ = ARG_TYPE_ANY_1;
+    kind_ = ARG_KIND_EXPR_ANY_1;
     return std::move(*this);
   }
   ArgBuilder&& T2() && {
-    kind_ = ARG_TYPE_ANY_2;
+    kind_ = ARG_KIND_EXPR_ANY_2;
     return std::move(*this);
   }
   ArgBuilder&& Any() && {
-    kind_ = ARG_TYPE_ARBITRARY;
+    kind_ = ARG_KIND_EXPR_ARBITRARY;
     return std::move(*this);
   }
   ArgBuilder&& Repeated() && {
@@ -221,7 +229,7 @@ class ArgBuilder {
   FunctionArgumentType Build() && {
     ABSL_CHECK(kind_.has_value());
     if (type_ != nullptr) {
-      ABSL_CHECK(kind_ = ARG_TYPE_FIXED);
+      ABSL_CHECK(kind_ = ARG_KIND_EXPR_FIXED);
       return FunctionArgumentType(type_, options_);
     } else {
       return FunctionArgumentType(*kind_, options_);
@@ -301,21 +309,23 @@ absl::StatusOr<SimpleTable*> SampleCatalogImpl::GetTable(
   }
 }
 
-const ProtoType* SampleCatalogImpl::GetProtoType(
+absl::StatusOr<const ProtoType*> SampleCatalogImpl::GetProtoType(
     const google::protobuf::Descriptor* descriptor) {
   const Type* type;
-  GOOGLESQL_CHECK_OK(catalog_->FindType({std::string(descriptor->full_name())}, &type));
-  ABSL_CHECK(type != nullptr);
-  ABSL_CHECK(type->IsProto());
+  GOOGLESQL_RETURN_IF_ERROR(
+      catalog_->FindType({std::string(descriptor->full_name())}, &type));
+  GOOGLESQL_RET_CHECK(type != nullptr);
+  GOOGLESQL_RET_CHECK(type->IsProto());
   return type->AsProto();
 }
 
-const EnumType* SampleCatalogImpl::GetEnumType(
+absl::StatusOr<const EnumType*> SampleCatalogImpl::GetEnumType(
     const google::protobuf::EnumDescriptor* descriptor) {
   const Type* type;
-  GOOGLESQL_CHECK_OK(catalog_->FindType({std::string(descriptor->full_name())}, &type));
-  ABSL_CHECK(type != nullptr);
-  ABSL_CHECK(type->IsEnum());
+  GOOGLESQL_RETURN_IF_ERROR(
+      catalog_->FindType({std::string(descriptor->full_name())}, &type));
+  GOOGLESQL_RET_CHECK(type != nullptr);
+  GOOGLESQL_RET_CHECK(type->IsEnum());
   return type->AsEnum();
 }
 
@@ -612,18 +622,19 @@ static absl::StatusOr<const AnnotationMap*>
 ComputeResultAnnotationsCallbackSqlError(
     const ResolvedFunctionCallBase& function_call, TypeFactory& type_factory) {
   for (const AnnotationMap* argument : GetArgumentAnnotations(function_call)) {
-    if (argument != nullptr && !argument->Empty()) {
+    if (!AnnotationMap::IsNullOrEmpty(argument)) {
       return MakeSqlError() << "Arguments should not have annotations";
     }
   }
   return nullptr;
 }
 
-GoogleSQLBuiltinFunctionOptions SampleCatalogImpl::LoadDefaultSuppliedTypes(
+absl::StatusOr<GoogleSQLBuiltinFunctionOptions>
+SampleCatalogImpl::LoadDefaultSuppliedTypes(
     const GoogleSQLBuiltinFunctionOptions& options) {
   GoogleSQLBuiltinFunctionOptions options_copy = options;
   const ProtoType* approx_distance_function_options_proto_type;
-  GOOGLESQL_CHECK_OK(types_->MakeProtoType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeProtoType(
       googlesql_test::TestApproxDistanceFunctionOptionsProto::GetDescriptor(),
       &approx_distance_function_options_proto_type));
   absl::flat_hash_set<FunctionSignatureId> approx_distance_function_ids = {
@@ -645,15 +656,26 @@ GoogleSQLBuiltinFunctionOptions SampleCatalogImpl::LoadDefaultSuppliedTypes(
   options_copy
       .argument_types[{FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS, 4}] =
       approx_distance_function_options_proto_type;
+  options_copy.argument_types[{
+      FN_SINGLE_VECTOR_SEARCH_TVF_FLOAT_ARRAY_WITH_PROTO_OPTIONS, 3}] =
+      approx_distance_function_options_proto_type;
+  options_copy.argument_types[{
+      FN_SINGLE_VECTOR_SEARCH_TVF_DOUBLE_ARRAY_WITH_PROTO_OPTIONS, 3}] =
+      approx_distance_function_options_proto_type;
+  options_copy.argument_types[{
+      FN_SINGLE_VECTOR_SEARCH_TVF_STRING_WITH_PROTO_OPTIONS, 3}] =
+      approx_distance_function_options_proto_type;
   return options_copy;
 }
 
-void SampleCatalogImpl::LoadCatalogBuiltins(
+absl::Status SampleCatalogImpl::LoadCatalogBuiltins(
     const GoogleSQLBuiltinFunctionOptions& builtin_function_options) {
   // Populate the sample catalog with the GoogleSQL functions using the
   // specified GoogleSQLBuiltinFunctionOptions.
-  GOOGLESQL_CHECK_OK(catalog_->AddBuiltinFunctionsAndTypes(
-      LoadDefaultSuppliedTypes(builtin_function_options)));
+  GOOGLESQL_ASSIGN_OR_RETURN(GoogleSQLBuiltinFunctionOptions function_options,
+                   LoadDefaultSuppliedTypes(builtin_function_options));
+  GOOGLESQL_RETURN_IF_ERROR(catalog_->AddBuiltinFunctionsAndTypes(function_options));
+  return absl::OkStatus();
 }
 
 absl::Status SampleCatalogImpl::LoadCatalogImpl(
@@ -661,7 +683,7 @@ absl::Status SampleCatalogImpl::LoadCatalogImpl(
   const LanguageOptions& language_options =
       builtin_function_options.language_options;
 
-  LoadCatalogBuiltins(builtin_function_options);
+  GOOGLESQL_RETURN_IF_ERROR(LoadCatalogBuiltins(builtin_function_options));
 
   // Make all proto Descriptors linked into this binary available.
   catalog_->SetDescriptorPool(google::protobuf::DescriptorPool::generated_pool());
@@ -700,10 +722,10 @@ absl::Status SampleCatalogImpl::LoadCatalogImpl(
           break;
         }
       }
-      ABSL_CHECK(found_field) << message_descriptor_proto;
+      GOOGLESQL_RET_CHECK(found_field) << message_descriptor_proto.DebugString();
     }
   }
-  ABSL_CHECK(found_message) << modified_descriptor_proto;
+  GOOGLESQL_RET_CHECK(found_message) << modified_descriptor_proto.DebugString();
   ambiguous_has_descriptor_pool_ = std::make_unique<google::protobuf::DescriptorPool>();
   ambiguous_has_descriptor_pool_->BuildFile(modified_descriptor_proto);
 
@@ -719,18 +741,18 @@ absl::Status SampleCatalogImpl::LoadCatalogImpl(
   RETURN_IF_ERROR_UNLESS_DBG(LoadTables());
   LoadConnections();
   LoadSequences();
-  LoadProtoTables();
+  RETURN_IF_ERROR_UNLESS_DBG(LoadProtoTables());
   LoadViews(language_options);
-  LoadNestedCatalogs();
-  LoadFunctions();
-  LoadFunctions2();
+  RETURN_IF_ERROR_UNLESS_DBG(LoadNestedCatalogs());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadFunctions());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadFunctions2());
   LoadAllRegisteredCatalogChanges();
   RETURN_IF_ERROR_UNLESS_DBG(LoadExtendedSubscriptFunctions(language_options));
-  LoadFunctionsWithDefaultArguments();
-  LoadFunctionsWithStructArgs();
-  LoadTemplatedSQLUDFs();
-  LoadTableValuedFunctions1();
-  LoadTableValuedFunctions2();
+  RETURN_IF_ERROR_UNLESS_DBG(LoadFunctionsWithDefaultArguments());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadFunctionsWithStructArgs());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadTemplatedSQLUDFs());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadTableValuedFunctions1());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadTableValuedFunctions2());
   LoadTableValuedFunctionsWithEvaluators();
   LoadTVFWithExtraColumns();
   LoadDescriptorTableValuedFunctions();
@@ -738,58 +760,82 @@ absl::Status SampleCatalogImpl::LoadCatalogImpl(
   LoadTableValuedFunctionsWithDeprecationWarnings();
   LoadTableValuedFunctionsWithMultipleSignatures();
   RETURN_IF_ERROR_UNLESS_DBG(LoadTvfsWithTableSchema());
-  LoadTemplatedSQLTableValuedFunctions();
-  LoadTableValuedFunctionsWithAnonymizationUid();
+  RETURN_IF_ERROR_UNLESS_DBG(LoadTemplatedSQLTableValuedFunctions());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadTableValuedFunctionsWithAnonymizationUid());
   LoadTableValuedFunctionsWithOptionalRelations();
-  LoadProcedures();
-  LoadConstants();
-  LoadWellKnownLambdaArgFunctions();
-  LoadContrivedLambdaArgFunctions();
-  LoadSqlFunctions(language_options);
-  RETURN_IF_ERROR_UNLESS_DBG(LoadMeasureTables());
-  LoadNonTemplatedSqlTableValuedFunctions(language_options);
+  RETURN_IF_ERROR_UNLESS_DBG(LoadProcedures());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadConstants());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadWellKnownLambdaArgFunctions());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadContrivedLambdaArgFunctions());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadSqlFunctions(language_options));
+  RETURN_IF_ERROR_UNLESS_DBG(LoadMeasureTables(language_options));
+  RETURN_IF_ERROR_UNLESS_DBG(
+      LoadNonTemplatedSqlTableValuedFunctions(language_options));
   RETURN_IF_ERROR_UNLESS_DBG(LoadAmlBasedPropertyGraphs());
-  LoadMultiSrcDstEdgePropertyGraphs();
-  LoadCompositeKeyPropertyGraphs();
-  LoadPropertyGraphWithDynamicLabelAndProperties();
-  LoadPropertyGraphWithDynamicMultiLabelsAndProperties();
+  RETURN_IF_ERROR_UNLESS_DBG(LoadDmlTestPropertyGraph());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadMultiSrcDstEdgePropertyGraphs());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadCompositeKeyPropertyGraphs());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadPropertyGraphWithDynamicLabelAndProperties());
+  RETURN_IF_ERROR_UNLESS_DBG(LoadPropertyGraphWithReadOnlyDynamicProperties());
+  RETURN_IF_ERROR_UNLESS_DBG(
+      LoadPropertyGraphWithDynamicMultiLabelsAndProperties());
+  LoadRowTypeObjects();
   return absl::OkStatus();
 }
 
 absl::Status SampleCatalogImpl::LoadTypes() {
-  enum_TestEnum_ = GetEnumType(googlesql_test::TestEnum_descriptor());
-  enum_AnotherTestEnum_ =
-      GetEnumType(googlesql_test::AnotherTestEnum_descriptor());
-  enum_TestEnumWithAnnotations_ =
-      GetEnumType(googlesql_test::TestEnumWithAnnotations_descriptor());
-  proto_KitchenSinkPB_ =
-      GetProtoType(googlesql_test::KitchenSinkPB::descriptor());
-  proto_MessageWithKitchenSinkPB_ =
-      GetProtoType(googlesql_test::MessageWithKitchenSinkPB::descriptor());
-  proto_CivilTimeTypesSinkPB_ =
-      GetProtoType(googlesql_test::CivilTimeTypesSinkPB::descriptor());
-  proto_TestExtraPB_ = GetProtoType(googlesql_test::TestExtraPB::descriptor());
-  proto_abPB_ = GetProtoType(googlesql_test::TestAbPB::descriptor());
-  proto_bcPB_ = GetProtoType(googlesql_test::TestBcPB::descriptor());
-  proto_EmptyMessage_ =
-      GetProtoType(googlesql_test::EmptyMessage::descriptor());
-  proto3_KitchenSinkPB_ =
-      GetProtoType(googlesql_test::Proto3KitchenSink::descriptor());
-  proto3_MessageWithInvalidMap_ =
-      GetProtoType(googlesql_test::MessageWithInvalidMap::descriptor());
-  proto_field_formats_proto_ =
-      GetProtoType(googlesql_test::FieldFormatsProto::descriptor());
-  proto_MessageWithMapField_ =
-      GetProtoType(googlesql_test::MessageWithMapField::descriptor());
-  proto_approx_distance_function_options_ = GetProtoType(
-      googlesql_test::TestApproxDistanceFunctionOptionsProto::descriptor());
+  GOOGLESQL_ASSIGN_OR_RETURN(enum_TestEnum_,
+                   GetEnumType(googlesql_test::TestEnum_descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(enum_AnotherTestEnum_,
+                   GetEnumType(googlesql_test::AnotherTestEnum_descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      enum_TestEnumWithAnnotations_,
+      GetEnumType(googlesql_test::TestEnumWithAnnotations_descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(proto_KitchenSinkPB_,
+                   GetProtoType(googlesql_test::KitchenSinkPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto_MessageWithKitchenSinkPB_,
+      GetProtoType(googlesql_test::MessageWithKitchenSinkPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto_CivilTimeTypesSinkPB_,
+      GetProtoType(googlesql_test::CivilTimeTypesSinkPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(proto_TestExtraPB_,
+                   GetProtoType(googlesql_test::TestExtraPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(proto_TimeSeriesPB_,
+                   GetProtoType(googlesql_test::TimeSeriesPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(proto_abPB_,
+                   GetProtoType(googlesql_test::TestAbPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(proto_bcPB_,
+                   GetProtoType(googlesql_test::TestBcPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(proto_EmptyMessage_,
+                   GetProtoType(googlesql_test::EmptyMessage::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto3_KitchenSinkPB_,
+      GetProtoType(googlesql_test::Proto3KitchenSink::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto3_MessageWithInvalidMap_,
+      GetProtoType(googlesql_test::MessageWithInvalidMap::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto_field_formats_proto_,
+      GetProtoType(googlesql_test::FieldFormatsProto::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto_MessageWithMapField_,
+      GetProtoType(googlesql_test::MessageWithMapField::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto_approx_distance_function_options_,
+      GetProtoType(googlesql_test::TestApproxDistanceFunctionOptionsProto::
+                       descriptor()));
+
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      proto_test_hop_and_tumble_pb_,
+      GetProtoType(googlesql_test::TestHopAndTumblePB::descriptor()));
 
   // We want to pull AmbiguousHasPB from the descriptor pool where it was
   // modified, not the generated pool.
   const google::protobuf::Descriptor* ambiguous_has_descriptor =
       ambiguous_has_descriptor_pool_->FindMessageTypeByName(
           "googlesql_test.AmbiguousHasPB");
-  ABSL_CHECK(ambiguous_has_descriptor);
+  GOOGLESQL_RET_CHECK(ambiguous_has_descriptor);
   GOOGLESQL_RET_CHECK_OK(
       types_->MakeProtoType(ambiguous_has_descriptor, &proto_ambiguous_has_));
 
@@ -801,6 +847,12 @@ absl::Status SampleCatalogImpl::LoadTypes() {
   GOOGLESQL_RET_CHECK_OK(types_->MakeStructType(
       {{"e", types_->get_int32()}, {"f", nested_struct_type_}},
       &doubly_nested_struct_type_));
+
+  GOOGLESQL_RET_CHECK_OK(
+      types_->MakeStructType({{"ambiguous_field", types_->get_int32()},
+                              {"ambiguous_field", types_->get_string()},
+                              {"proto_field", proto_test_hop_and_tumble_pb_}},
+                             &struct_with_proto_type_));
 
   GOOGLESQL_RET_CHECK_OK(types_->MakeArrayType(types_->get_int32(), &int32array_type_));
   GOOGLESQL_RET_CHECK_OK(types_->MakeArrayType(types_->get_int64(), &int64array_type_));
@@ -865,6 +917,111 @@ absl::Status SampleCatalogImpl::LoadTypes() {
 
   // Add a simple type for testing alias type from engine catalog
   catalog_->AddType("INT64AliasType", types_->get_int64());
+
+  // Add mock declarative types for testing.
+  const Type* decl_int_type = nullptr;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      decl_int_type,
+      types_->MakeDeclarativeType(
+          DeclarativeTypeDescriptor()
+              .set_type_id({"NS", "DeclInt"})
+              .set_display_name("DeclInt")
+              .set_backing_type(types_->get_int64())
+              .set_coercion_from_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_coercion_to_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::
+                      kAllowAllCoercion)
+              .set_equality_strategy(
+                  DeclarativeTypeDescriptor::EqualityDelegated{})
+              .set_returning_strategy(
+                  DeclarativeTypeDescriptor::ReturningDelegated{})));
+  catalog_->AddType("DeclInt", decl_int_type);
+
+  const Type* decl_explicit_coercion_type = nullptr;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      decl_explicit_coercion_type,
+      types_->MakeDeclarativeType(
+          DeclarativeTypeDescriptor()
+              .set_type_id({"NS", "DeclExplicitCoercion"})
+              .set_display_name("DeclExplicitCoercion")
+              .set_backing_type(types_->get_int64())
+              .set_coercion_from_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_coercion_to_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_equality_strategy(
+                  DeclarativeTypeDescriptor::EqualityDelegated{})
+              .set_returning_strategy(
+                  DeclarativeTypeDescriptor::ReturningDelegated{})));
+  catalog_->AddType("DeclExplicitCoercion", decl_explicit_coercion_type);
+
+  const Type* decl_geog_type = nullptr;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      decl_geog_type,
+      types_->MakeDeclarativeType(
+          DeclarativeTypeDescriptor()
+              .set_type_id({"NS", "DeclDelegatedButUnsupportedEquality"})
+              .set_display_name("DeclDelegatedButUnsupportedEquality")
+              .set_backing_type(types_->get_geography())
+              .set_coercion_from_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_equality_strategy(
+                  DeclarativeTypeDescriptor::EqualityDelegated{})
+              .set_returning_strategy(
+                  DeclarativeTypeDescriptor::ReturningDelegated{})));
+  catalog_->AddType("DeclDelegatedButUnsupportedEquality", decl_geog_type);
+
+  const Type* decl_array_type = nullptr;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      decl_array_type,
+      types_->MakeDeclarativeType(
+          DeclarativeTypeDescriptor()
+              .set_type_id({"NS", "DeclArray"})
+              .set_display_name("DeclArray")
+              .set_backing_type(int64array_type_)
+              .set_coercion_from_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_coercion_to_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_returning_strategy(
+                  DeclarativeTypeDescriptor::ReturningDelegated{})));
+  catalog_->AddType("DeclArray", decl_array_type);
+
+  const Type* decl_struct_type = nullptr;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      decl_struct_type,
+      types_->MakeDeclarativeType(
+          DeclarativeTypeDescriptor()
+              .set_type_id({"NS", "DeclStruct"})
+              .set_display_name("DeclStruct")
+              .set_backing_type(struct_type_)
+              .set_coercion_from_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_coercion_to_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kExplicitOnly)
+              .set_returning_strategy(
+                  DeclarativeTypeDescriptor::ReturningDelegated{})));
+  catalog_->AddType("DeclStruct", decl_struct_type);
+
+  const Type* decl_type_all_properties_disallowed = nullptr;
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      decl_type_all_properties_disallowed,
+      types_->MakeDeclarativeType(
+          DeclarativeTypeDescriptor()
+              .set_type_id({"NS", "DeclTypeAllPropertiesDisallowed"})
+              .set_display_name("DeclTypeAllPropertiesDisallowed")
+              .set_backing_type(types_->get_int64())
+              .set_coercion_from_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kNoCoercion)
+              .set_coercion_to_backing_type(
+                  DeclarativeTypeDescriptor::AllowCoercionMode::kNoCoercion)
+              .set_equality_strategy(
+                  DeclarativeTypeDescriptor::EqualityDisallowed{})
+              .set_returning_strategy(
+                  DeclarativeTypeDescriptor::ReturningDisallowed{})));
+  catalog_->AddType("DeclTypeAllPropertiesDisallowed",
+                    decl_type_all_properties_disallowed);
 
   return absl::OkStatus();
 }
@@ -1011,12 +1168,11 @@ class LazySimpleTable : public SimpleTable {
                                    << " not found in table " << FullName();
       column_values.push_back(*values);
     }
-    return std::unique_ptr<EvaluatorTableIterator>(
-        new SimpleEvaluatorTableIterator(
-            columns, column_values, num_rows_,
-            /*end_status=*/absl::OkStatus(), /*filter_column_idxs=*/{},
-            /*cancel_cb=*/[]() {},
-            /*set_deadline_cb=*/[](absl::Time t) {}, googlesql_base::Clock::RealClock()));
+    return SimpleEvaluatorTableIterator::Create(
+        columns, column_values, num_rows_,
+        /*end_status=*/absl::OkStatus(), /*filter_column_idxs=*/{},
+        /*cancel_cb=*/[]() {},
+        /*set_deadline_cb=*/[](absl::Time t) {}, googlesql_base::Clock::RealClock());
   }
 
  private:
@@ -1075,9 +1231,12 @@ class TvfWithTableSchema : public TableValuedFunction {
             absl::StrCat("Table not found: ", table_name));
       }
     }
+    TVFSignatureOptions options;
+    options.row_type_rewrite_callback =
+        TVFSignature::BaseRowTypeRewriteCallback;
     GOOGLESQL_ASSIGN_OR_RETURN(
         *tvf_signature,
-        TVFSignature::Create(actual_arguments, output_schema_table, {}));
+        TVFSignature::Create(actual_arguments, output_schema_table, options));
     return absl::OkStatus();
   }
 
@@ -1131,18 +1290,6 @@ absl::Status SampleCatalogImpl::LoadTables() {
 
   AddOwnedTable(key_value_table);
   key_value_table_ = key_value_table;
-
-  // Copy of KeyValue with ColumnListMode::LAZY.
-  LazySimpleTable* key_value_lazy_table = new LazySimpleTable(
-      "KeyValueLazy", Table::ColumnListMode::LAZY, key_value_columns);
-  key_value_lazy_table->SetContents(key_value_contents);
-  AddOwnedTable(key_value_lazy_table);
-
-  // Copy of KeyValue with ColumnListMode::FIND_ONLY.
-  LazySimpleTable* key_value_find_only_table = new LazySimpleTable(
-      "KeyValueFindOnly", Table::ColumnListMode::FIND_ONLY, key_value_columns);
-  key_value_find_only_table->SetContents(key_value_contents);
-  AddOwnedTable(key_value_find_only_table);
 
   SimpleTable* multiple_columns_table =
       new SimpleTable("MultipleColumns", {{"int_a", types_->get_int64()},
@@ -1939,6 +2086,62 @@ absl::Status SampleCatalogImpl::LoadTables() {
       {{"id", types_->get_int64()}, {"embedding", string_array_type_}});
   AddOwnedTable(base_table_wrong_type);
 
+  SimpleTable* timeseries_table = new SimpleTable(
+      "TimeseriesTable", {{"borg_job", types_->get_string()},
+                          {"borg_task_num", types_->get_int64()},
+                          {"ts_col", types_->get_timestamp()},
+                          {"gcu", types_->get_double()},
+                          {"requests", types_->get_int64()}});
+  AddOwnedTable(timeseries_table);
+
+  SimpleTable* table_timestamp_column =
+      new SimpleTable("TimeseriesTableWithTimestampColumn",
+                      {{"borg_job", types_->get_string()},
+                       {"borg_task_num", types_->get_int64()},
+                       {"timestamp", types_->get_timestamp()},
+                       {"gcu", types_->get_double()},
+                       {"requests", types_->get_int64()}});
+  AddOwnedTable(table_timestamp_column);
+
+  SimpleTable* table_timestamp_pseudo_column = new SimpleTable(
+      "TimeseriesTableWithTimestampPseudoColumn",
+      {new SimpleColumn("TimeseriesTableWithTimestampPseudoColumn", "timestamp",
+                        types_->get_timestamp(), {.is_pseudo_column = true})},
+      true);
+  AddOwnedTable(table_timestamp_pseudo_column);
+
+  SimpleTable* ts_value_table_timestamp_pseudo_column = new SimpleTable(
+      "TimeSeriesValueTableWithTimestampPseudoColumn",
+      {new SimpleColumn("TimeSeriesValueTableWithTimestampPseudoColumn",
+                        "value", proto_TimeSeriesPB_),
+       new SimpleColumn("TimeSeriesValueTableWithTimestampPseudoColumn",
+                        "timestamp", types_->get_timestamp(),
+                        {.is_pseudo_column = true})},
+      true);
+  ts_value_table_timestamp_pseudo_column->set_is_value_table(true);
+  AddOwnedTable(ts_value_table_timestamp_pseudo_column);
+
+  SimpleTable* ks_value_table_timestamp_pseudo_column = new SimpleTable(
+      "KitchenSinkValueTableWithTimestampPseudoColumn",
+      {new SimpleColumn("KitchenSinkValueTableWithTimestampPseudoColumn",
+                        "value", proto3_KitchenSinkPB_),
+       new SimpleColumn("KitchenSinkValueTableWithTimestampPseudoColumn",
+                        "timestamp", types_->get_timestamp(),
+                        {.is_pseudo_column = true})},
+      true);
+  ks_value_table_timestamp_pseudo_column->set_is_value_table(true);
+  AddOwnedTable(ks_value_table_timestamp_pseudo_column);
+
+  // Table for testing passthrough tvfs with pseudo column.
+  auto* passthrough_table_pc = new SimpleTable(
+      "PassthroughTableWithPseudoColumn", {{"b", types_->get_int64()}});
+  GOOGLESQL_CHECK_OK(passthrough_table_pc->AddColumn(
+      new SimpleColumn("PassthroughTableWithPseudoColumn", "_PSEUDO",
+                       types_->get_int64(),
+                       /*is_pseudo_column=*/true),
+      /*is_owned=*/true));
+  AddOwnedTable(passthrough_table_pc);
+
   return absl::OkStatus();
 }  // NOLINT(readability/fn_size)
 
@@ -1977,7 +2180,8 @@ absl::Status SampleCatalogImpl::AddTableWithMeasures(
     AnalyzerOptions& analyzer_options, absl::string_view table_name,
     std::vector<const Column*> columns_not_owned,
     std::optional<absl::btree_set<int>> row_identity_column_indices,
-    std::vector<MeasureColumnDef> measures, bool is_value_table) {
+    std::vector<MeasureColumnDef> measures, bool is_value_table,
+    std::optional<std::vector<std::vector<Value>>> rows) {
   GOOGLESQL_RETURN_IF_ERROR(
       ValidateValueTableness(columns_not_owned, measures, is_value_table));
   auto table = std::make_unique<SimpleTable>(table_name, columns_not_owned,
@@ -2000,11 +2204,26 @@ absl::Status SampleCatalogImpl::AddTableWithMeasures(
       sql_object_artifacts_.end(),
       std::make_move_iterator(analyzer_outputs.begin()),
       std::make_move_iterator(analyzer_outputs.end()));
+  if (rows.has_value()) {
+    std::vector<std::vector<Value>> padded_rows = std::move(rows).value();
+    const size_t num_columns = table->NumColumns();
+    // Pad the rows with NULLs for the generated columns (e.g., measures).
+    // This assumes that all generated columns are appended to the table
+    // after all real columns provided in the row data.
+    for (auto& row : padded_rows) {
+      for (size_t i = row.size(); i < num_columns; ++i) {
+        row.push_back(
+            Value::Null(table->GetColumn(static_cast<int>(i))->GetType()));
+      }
+    }
+    table->SetContents(padded_rows);
+  }
   AddOwnedTable(table.release());
   return absl::OkStatus();
 }
 
-absl::Status SampleCatalogImpl::LoadMeasureTables() {
+absl::Status SampleCatalogImpl::LoadMeasureTables(
+    const LanguageOptions& language_options) {
   AnalyzerOptions analyzer_options;
   analyzer_options.mutable_language()->EnableLanguageFeature(
       FEATURE_MULTILEVEL_AGGREGATION);
@@ -2021,6 +2240,149 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
       FEATURE_NAMED_ARGUMENTS);
   analyzer_options.mutable_language()->EnableLanguageFeature(
       FEATURE_MULTILEVEL_AGGREGATION_ON_UDAS);
+
+  if (language_options.LanguageFeatureEnabled(FEATURE_DERIVED_MEASURE)) {
+    analyzer_options.mutable_language()->EnableLanguageFeature(
+        FEATURE_DERIVED_MEASURE);
+  }
+
+  // key1, key2, country, quantity, price
+  std::vector<std::tuple<int64_t, int64_t, std::string, int64_t, int64_t>>
+      raw_rows = {
+          // United States - 10 rows
+          {1, 100, "United States", 5, 15},
+          {2, 100, "United States", 2, 10},
+          {3, 101, "United States", 1, 20},
+          {4, 100, "United States", 8, 14},
+          {5, 102, "United States", 3, 12},
+          {6, 103, "United States", 4, 25},
+          {7, 100, "United States", 10, 22},
+          {8, 101, "United States", 5, 24},
+          {9, 100, "United States", 2, 26},
+          {10, 102, "United States", 1, 25},
+
+          // Canada - 7 rows (Overlapping Quantity and Price values)
+          {11, 200, "Canada", 6, 30},
+          {12, 201, "Canada", 3, 32},
+          {13, 201, "Canada", 7, 15},
+          {14, 200, "Canada", 4, 35},
+          {15, 202, "Canada", 2, 33},
+          {16, 200, "Canada", 8, 40},
+          {17, 201, "Canada", 4, 45},
+
+          // United Kingdom - 4 rows (Overlapping Quantity and Price values)
+          {18, 300, "United Kingdom", 5, 42},
+          {19, 301, "United Kingdom", 9, 40},
+          {20, 300, "United Kingdom", 3, 10},
+          {21, 302, "United Kingdom", 10, 50},
+
+          // Australia - 3 rows (Overlapping Quantity and Price)
+          {22, 400, "Australia", 2, 55},
+          {23, 401, "Australia", 5, 51},
+          {24, 400, "Australia", 1, 50},
+
+          // Japan - 1 row (Overlapping Price)
+          {25, 500, "Japan", 4, 25},
+      };
+
+  std::vector<std::vector<Value>> measuretable_twokeys_data;
+  std::vector<std::vector<Value>> measuretable_singlekey_data;
+  std::vector<std::vector<Value>> struct_value_table_data;
+  std::vector<std::vector<Value>> int64_value_table_data;
+  std::vector<std::vector<Value>> measuretable_complexexprs_data;
+  std::vector<std::vector<Value>> measuretable_derived_data;
+  measuretable_twokeys_data.reserve(raw_rows.size());
+  measuretable_singlekey_data.reserve(raw_rows.size());
+  struct_value_table_data.reserve(raw_rows.size());
+  int64_value_table_data.reserve(raw_rows.size());
+  measuretable_complexexprs_data.reserve(raw_rows.size());
+  measuretable_derived_data.reserve(raw_rows.size());
+  for (const auto& [key1, key2, country, quantity, price] : raw_rows) {
+    measuretable_twokeys_data.push_back(
+        {Value::Int64(key1 % 5), Value::Int64(key1 / 5), Value::String(country),
+         Value::Int64(quantity), Value::Int64(price)});
+    measuretable_singlekey_data.push_back(
+        {Value::Int64(key1), Value::String(country), Value::Int64(quantity),
+         Value::Int64(price)});
+    measuretable_derived_data.push_back(
+        {Value::Int64(key1), Value::String(country), Value::Int64(quantity),
+         Value::Int64(price), Value::Int64(price / 10), Value::Int64(10)});
+
+    GOOGLESQL_ASSIGN_OR_RETURN(Value array_val,
+                     Value::MakeArray(int64array_type_, {Value::Int64(quantity),
+                                                         Value::Int64(price)}));
+    measuretable_complexexprs_data.push_back(
+        {Value::Int64(key1), Value::String(country), std::move(array_val)});
+
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        Value inner_struct,
+        Value::MakeStruct(struct_type_,
+                          {Value::Int32(static_cast<int32_t>(key1)),
+                           Value::String(country)}));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        Value middle_struct,
+        Value::MakeStruct(
+            nested_struct_type_,
+            {Value::Int32(static_cast<int32_t>(quantity)), inner_struct}));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        Value outer_struct,
+        Value::MakeStruct(
+            doubly_nested_struct_type_,
+            {Value::Int32(static_cast<int32_t>(price)), middle_struct}));
+
+    struct_value_table_data.push_back({outer_struct, Value::Int64(key1)});
+    int64_value_table_data.push_back({Value::Int64(price), Value::Int64(key1)});
+  }
+
+  std::vector<std::tuple<int64_t, int64_t, int64_t, int64_t>> raw_sales_rows = {
+      // item_id, store_id, price, quantity
+      // Item 1: High price, low volume, sold in multiple stores
+      {1, 10, 100, 5},
+      {1, 20, 100, 10},
+      {1, 30, 105, 3},
+      {1, 40, 95, 8},
+      {1, 50, 100, 12},
+
+      // Item 2: Low price, high volume, uniform price
+      {2, 10, 50, 20},
+      {2, 20, 50, 15},
+      {2, 30, 50, 25},
+      {2, 40, 50, 30},
+
+      // Item 3: Very high price, very low volume, single store
+      {3, 10, 200, 2},
+      {3, 20, 200, 1},
+      {3, 30, 190, 4},
+
+      // Item 4: Zero quantity sales (returns or out of stock logs)
+      {4, 10, 25, 0},
+      {4, 20, 25, 0},
+      {4, 50, 25, 5},
+
+      // Item 5: Variable pricing across stores
+      {5, 10, 10, 100},
+      {5, 20, 12, 80},
+      {5, 30, 15, 50},
+      {5, 40, 18, 30},
+      {5, 50, 20, 10},
+
+      // Item 6: Bulky items, low store coverage
+      {6, 10, 80, 5},
+      {6, 50, 85, 4},
+
+      // Item 7: High volume, wide price variance
+      {7, 10, 100, 50},
+      {7, 20, 150, 40},
+      {7, 30, 200, 30},
+      {7, 40, 50, 80},
+  };
+
+  std::vector<std::vector<Value>> sales_facts_data;
+  sales_facts_data.reserve(raw_sales_rows.size());
+  for (const auto& [item_id, store_id, price, quantity] : raw_sales_rows) {
+    sales_facts_data.push_back({Value::Int64(item_id), Value::Int64(store_id),
+                                Value::Int64(price), Value::Int64(quantity)});
+  }
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_SingleKey",
@@ -2047,7 +2409,46 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
        {"measure_complex_ratio_metric",
         "SUM(AVG(price) + MIN(price) GROUP BY key) / "
         "SUM(AVG(price) + MAX(price) GROUP BY key)"}},
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
+
+  if (language_options.LanguageFeatureEnabled(FEATURE_ENABLE_MEASURES) &&
+      language_options.LanguageFeatureEnabled(FEATURE_DERIVED_MEASURE)) {
+    GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
+        analyzer_options, "MeasureTable_Derived",
+        {new SimpleColumn("MeasureTable_Derived", "key", types_->get_int64()),
+         new SimpleColumn("MeasureTable_Derived", "country",
+                          types_->get_string()),
+         new SimpleColumn("MeasureTable_Derived", "quantity",
+                          types_->get_int64()),
+         new SimpleColumn("MeasureTable_Derived", "price", types_->get_int64()),
+         new SimpleColumn("MeasureTable_Derived", "tax", types_->get_int64()),
+         new SimpleColumn("MeasureTable_Derived", "shipping",
+                          types_->get_int64())},
+        /*row_identity_column_indices=*/absl::btree_set<int>{0},
+        /*measures=*/
+        {{"measure_sum_price", "SUM(price)"},
+         {"measure_sum_quantity", "SUM(quantity)"},
+         {"measure_sum_tax", "SUM(tax)"},
+         {"measure_sum_shipping", "SUM(shipping)"},
+         {"measure_derived_sum_price_plus_one", "AGG(measure_sum_price) + 1"},
+         {"measure_derived_subtotal",
+          "AGG(measure_sum_price) + AGG(measure_sum_tax)"},
+         {"measure_derived_order_total",
+          "AGG(measure_derived_subtotal) + AGG(measure_sum_shipping)"},
+         {"measure_derived_twice_sum_price",
+          "AGG(measure_sum_price) + AGG(measure_sum_price)"},
+         {"measure_derived_sum_price_plus_two", "AGG(measure_sum_price) + 2"},
+         {"measure_derived_twice_sum_price_plus_one",
+          "AGG(measure_derived_sum_price_plus_one) + "
+          "AGG(measure_derived_sum_price_plus_one)"},
+         {"measure_derived_sum_price_plus_one_plus_two",
+          "AGG(measure_derived_sum_price_plus_one) + "
+          "AGG(measure_derived_sum_price_plus_two)"},
+         {"measure_derived_mixed_sum_price",
+          "AGG(measure_sum_price) + "
+          "AGG(measure_derived_sum_price_plus_one)"}},
+        /*is_value_table=*/false, measuretable_derived_data));
+  }
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_TwoKeys",
@@ -2070,7 +2471,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
        {"measure_ratio_price_to_quantity_per_key",
         "SUM(ANY_VALUE(price) GROUP BY key1,key2) / "
         "SUM(ANY_VALUE(quantity) GROUP BY key1,key2)"}},
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_twokeys_data));
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_DifferentNames",
@@ -2085,7 +2486,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
       /*row_identity_column_indices=*/absl::btree_set<int>{0},
       /*measures=*/
       {{"measure_count_star_different_name", "COUNT(*)"}},
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
 
   GOOGLESQL_RETURN_IF_ERROR(
       AddTableWithMeasures(analyzer_options, "MeasureTable_NoRowIdentity",
@@ -2102,6 +2503,20 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
       /*row_identity_column_indices=*/absl::btree_set<int>{0},
       /*measures=*/
       {{"measure_count_star", "COUNT(*)"}}, /*is_value_table=*/false));
+
+  if (language_options.LanguageFeatureEnabled(FEATURE_ENABLE_MEASURES) &&
+      language_options.LanguageFeatureEnabled(FEATURE_DERIVED_MEASURE)) {
+    GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
+        analyzer_options, "MeasureValueTable_Struct",
+        {new SimpleColumn("MeasureValueTable_Struct", "value", struct_type_)},
+        /*row_identity_column_indices=*/absl::btree_set<int>{0},
+        /*measures=*/
+        {{"measure_count_star", "COUNT(*)", /*is_pseudo_column=*/true},
+         {"measure_sum_a", "SUM(a)", /*is_pseudo_column=*/true},
+         {"derived_measure_sum_a_plus_one", "AGG(measure_sum_a) + 1",
+          /*is_pseudo_column=*/true}},
+        /*is_value_table=*/true));
+  }
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_WithPseudoColumns",
@@ -2120,7 +2535,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
           {"measure_count_star_per_key", "COUNT(* GROUP BY key)",
            /*is_pseudo_column=*/true},
       },
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_WithSubqueryMeasureExprs",
@@ -2151,7 +2566,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
        {"measure_scalar_subquery",
         "(SELECT SUM(x) FROM UNNEST([1, 2, 3]) AS x)",
         /*is_pseudo_column=*/true}},
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_WithUdfs",
@@ -2173,7 +2588,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
            "SUM(COUNT(UnaryIncrement(price)) + NullaryWithMultiLevelAgg() "
            "group by key)"},
       },
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
 
   // The column `arg` has a name conflict with the function argument of
   // template UDF `TimesTwo(arg)`
@@ -2206,7 +2621,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
            "SUM(ANY_VALUE(TimesTwo(price + 1)) + COUNT(TimesTwo(price + 2)) "
            "group by key)"},
       },
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "StructValueTable_WithMeasures",
@@ -2221,7 +2636,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
        {"measure_ratio_sum_a_to_sum_c", "SUM(f.d.a) / SUM(f.c)",
         /*is_pseudo_column=*/true},
        {"measure_sum_key", "SUM(key)", /*is_pseudo_column=*/true}},
-      /*is_value_table=*/true));
+      /*is_value_table=*/true, struct_value_table_data));
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "KitchenSinkValueTable_WithMeasures",
@@ -2254,7 +2669,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
        {"measure_scalar_subquery",
         "(SELECT SUM(x) FROM UNNEST([1, 2, 3]) AS x)",
         /*is_pseudo_column=*/true}},
-      /*is_value_table=*/true));
+      /*is_value_table=*/true, int64_value_table_data));
 
   // Table containing measure expressions that would ordinarily trigger
   // rewrites. We disable these rewrites during measure expression analysis.
@@ -2274,12 +2689,10 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
         /*is_pseudo_column=*/true},
        {"measure_with_array_remove_last_n",
         "ARRAY_REMOVE_LAST_N([1,2], SUM(price))", /*is_pseudo_column=*/true}},
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
 
   // Table containing complex measure expressions that had triggered RQG
   // failures in the past.
-  const Type* array_int64_type = nullptr;
-  GOOGLESQL_CHECK_OK(types_->MakeArrayType(types_->get_int64(), &array_int64_type));
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_ComplexExprs",
       {new SimpleColumn("MeasureTable_ComplexExprs", "key",
@@ -2287,7 +2700,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
        new SimpleColumn("MeasureTable_ComplexExprs", "country",
                         types_->get_string()),
        new SimpleColumn("MeasureTable_ComplexExprs", "array_val",
-                        array_int64_type)},
+                        int64array_type_)},
       /*row_identity_column_indices=*/absl::btree_set<int>{0},
       /*measures=*/
       {{"measure_with_in_subquery",
@@ -2301,7 +2714,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
        {"measure_string_agg", "STRING_AGG(country, ',')"},
        {"measure_bit_and", "BIT_AND(CAST(country AS BYTES), mode => 'PAD')"},
        {"measure_aggregation_in_in_expr", "SUM(key) IN ((SELECT 1))"}},
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_complexexprs_data));
 
   GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
       analyzer_options, "MeasureTable_WithUdas",
@@ -2318,7 +2731,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
         "SumOfAggregateArgs(ANY_VALUE(price) GROUP BY key)"},
        {"measure_uda_sum_max_price_per_country",
         "SumOfAggregateArgs(MaxOfAggregateArgs(price) GROUP BY country)"}},
-      /*is_value_table=*/false));
+      /*is_value_table=*/false, measuretable_singlekey_data));
 
   // A Measure table the represents a "join" of two fact tables.
   //
@@ -2353,7 +2766,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
              // Defaults to the table's row identity columns.
              .row_identity_column_indices = std::nullopt,
          }},
-        /*is_value_table=*/false));
+        /*is_value_table=*/false, sales_facts_data));
   }
 
   {
@@ -2386,7 +2799,7 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
              .is_pseudo_column = false,
              .row_identity_column_indices = std::vector<int>{0, 1},
          }},
-        /*is_value_table=*/false));
+        /*is_value_table=*/false, sales_facts_data));
   }
 
   // Invalid measure TVF: The underlying table has a measure column whose row
@@ -2443,19 +2856,71 @@ absl::Status SampleCatalogImpl::LoadMeasureTables() {
         /*is_value_table=*/false));
   }
 
+  if (language_options.LanguageFeatureEnabled(FEATURE_ROW_TYPE)) {
+    // Add test tables for measures in row types.
+
+    {
+      const Table* measure_table = nullptr;
+      GOOGLESQL_RETURN_IF_ERROR(
+          catalog_->FindTable({"MeasureTable_SingleKey"}, &measure_table));
+      const RowType* row_type = nullptr;
+      GOOGLESQL_RETURN_IF_ERROR(types_->MakeRowType(
+          measure_table, measure_table->FullName(), &row_type));
+
+      GOOGLESQL_RETURN_IF_ERROR(AddTableBackedTvf(
+          "tvf_returning_measure_row_type",
+          {TVFSchemaColumn("normal_col_1", types_->get_string()),
+           TVFSchemaColumn("row_type_col", row_type)},
+          *catalog_));
+    }
+
+    // `MeasureTable_NestedRow` is a test table with measures in nested row
+    // types.
+    {
+      const Table* measure_table = nullptr;
+      GOOGLESQL_RETURN_IF_ERROR(
+          catalog_->FindTable({"MeasureTable_SingleKey"}, &measure_table));
+      const RowType* row_type = nullptr;
+      GOOGLESQL_RETURN_IF_ERROR(types_->MakeRowType(
+          measure_table, measure_table->FullName(), &row_type));
+
+      GOOGLESQL_RETURN_IF_ERROR(AddTableWithMeasures(
+          analyzer_options, "MeasureTable_NestedRow",
+          {new SimpleColumn("MeasureTable_NestedRow", "key",
+                            types_->get_int64()),
+           new SimpleColumn("MeasureTable_NestedRow", "inner_row_col",
+                            row_type)},
+          /*row_identity_column_indices=*/absl::btree_set<int>{0},
+          /*measures=*/{},
+          /*is_value_table=*/false));
+    }
+    {
+      const Table* measure_table = nullptr;
+      GOOGLESQL_RETURN_IF_ERROR(
+          catalog_->FindTable({"MeasureTable_NestedRow"}, &measure_table));
+      const RowType* row_type = nullptr;
+      GOOGLESQL_RETURN_IF_ERROR(types_->MakeRowType(
+          measure_table, measure_table->FullName(), &row_type));
+
+      GOOGLESQL_RETURN_IF_ERROR(AddTableBackedTvf(
+          "tvf_returning_nested_measure_row_type",
+          {TVFSchemaColumn("row_type_col", row_type)}, *catalog_));
+    }
+  }
+
   return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadProtoTables() {
+absl::Status SampleCatalogImpl::LoadProtoTables() {
   // Add a named struct type.
   const StructType* struct_TestStruct;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType(
       {{"Key", types_->get_int64()}, {"Value", types_->get_string()}},
       &struct_TestStruct));
   catalog_->AddType("TestStruct", struct_TestStruct);
 
   const StructType* struct_AnotherTestStruct;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType(
       {{"K", types_->get_int32()}, {"v", types_->get_bytes()}},
       &struct_AnotherTestStruct));
   catalog_->AddType("AnotherTestStruct", struct_TestStruct);
@@ -2540,11 +3005,11 @@ void SampleCatalogImpl::LoadProtoTables() {
     // This table has an anonymous pseudo-column, which should be inaccessible.
     auto table = new SimpleTable("AnonymousPseudoColumn");
     AddOwnedTable(table);
-    GOOGLESQL_CHECK_OK(table->set_allow_anonymous_column_name(true));
-    GOOGLESQL_CHECK_OK(table->AddColumn(
+    GOOGLESQL_RETURN_IF_ERROR(table->set_allow_anonymous_column_name(true));
+    GOOGLESQL_RETURN_IF_ERROR(table->AddColumn(
         new SimpleColumn("AnonymousPseudoColumn", "key", types_->get_int32()),
         true /* take_ownership */));
-    GOOGLESQL_CHECK_OK(table->AddColumn(
+    GOOGLESQL_RETURN_IF_ERROR(table->AddColumn(
         new SimpleColumn("AnonymousPseudoColumn", "", types_->get_string(),
                          {.is_pseudo_column = true}),
         true /* take_ownership */));
@@ -2553,13 +3018,13 @@ void SampleCatalogImpl::LoadProtoTables() {
   {
     // This table has two duplicate columns.
     auto table = new SimpleTable("DuplicateColumns");
-    GOOGLESQL_CHECK_OK(table->set_allow_duplicate_column_names(true));
+    GOOGLESQL_RETURN_IF_ERROR(table->set_allow_duplicate_column_names(true));
     AddOwnedTable(table);
-    GOOGLESQL_CHECK_OK(
+    GOOGLESQL_RETURN_IF_ERROR(
         table->AddColumn(new SimpleColumn("DuplicateColumns", "DuplicateColumn",
                                           types_->get_int32()),
                          /*is_owned=*/true));
-    GOOGLESQL_CHECK_OK(
+    GOOGLESQL_RETURN_IF_ERROR(
         table->AddColumn(new SimpleColumn("DuplicateColumns", "DuplicateColumn",
                                           types_->get_string()),
                          /*is_owned=*/true));
@@ -2588,7 +3053,7 @@ void SampleCatalogImpl::LoadProtoTables() {
                                        {"Int32Array", int32array_type_},
                                        {"TestStruct", nested_struct_type_},
                                        {"TestProto", proto_TestExtraPB_}});
-  GOOGLESQL_CHECK_OK(complex_types->SetPrimaryKey({0}));
+  GOOGLESQL_RETURN_IF_ERROR(complex_types->SetPrimaryKey({0}));
   AddOwnedTable(complex_types);
 
   AddOwnedTable(new SimpleTable(
@@ -2614,6 +3079,19 @@ void SampleCatalogImpl::LoadProtoTables() {
                                 proto_MessageWithKitchenSinkPB_));
 
   AddOwnedTable(new SimpleTable("EmptyMessageValueTable", proto_EmptyMessage_));
+
+  AddOwnedTable(
+      new SimpleTable("TableWithTestHopAndTumbleProto",
+                      {{"key", types_->get_int32()},
+                       {"ProtoColumn", proto_test_hop_and_tumble_pb_}}));
+
+  AddOwnedTable(
+      new SimpleTable("TableWithStructContainingTestHopAndTumbleProto",
+                      {{"key", types_->get_int32()},
+                       {"StructWithProto", struct_with_proto_type_}}));
+  AddOwnedTable(
+      new SimpleTable("ValueTableWithStructContainingTestHopAndTumbleProto",
+                      struct_with_proto_type_));
 
   catalog_->AddOwnedTable(
       new SimpleTable("TestExtraPBValueTable", proto_TestExtraPB_));
@@ -2662,7 +3140,7 @@ void SampleCatalogImpl::LoadProtoTables() {
                                       types_->get_int64())},
                     /*take_ownership=*/true));
   int64_value_table->set_is_value_table(true);
-  GOOGLESQL_CHECK_OK(int64_value_table->SetPrimaryKey({0}));
+  GOOGLESQL_RETURN_IF_ERROR(int64_value_table->SetPrimaryKey({0}));
 
   AddOwnedTable(new SimpleTable(
       "ArrayTypes",
@@ -2692,15 +3170,15 @@ void SampleCatalogImpl::LoadProtoTables() {
        {"BigNumericArray", bignumeric_array_type_},
        {"IntervalArray", interval_array_type_}}));
 
-  const EnumType* enum_TestEnum =
-      GetEnumType(googlesql_test::TestEnum_descriptor());
+  GOOGLESQL_ASSIGN_OR_RETURN(const EnumType* enum_TestEnum,
+                   GetEnumType(googlesql_test::TestEnum_descriptor()));
   AddOwnedTable(new SimpleTable("SimpleTypesWithStruct",
                                 {{"key", types_->get_int32()},
                                  {"TestEnum", enum_TestEnum},
                                  {"TestStruct", nested_struct_type_}}));
 
-  const ProtoType* proto_recursive_type =
-      GetProtoType(googlesql_test::RecursivePB::descriptor());
+  GOOGLESQL_ASSIGN_OR_RETURN(const ProtoType* proto_recursive_type,
+                   GetProtoType(googlesql_test::RecursivePB::descriptor()));
   AddOwnedTable(new SimpleTable("RecursivePBTable",
                                 {{"RecursivePB", proto_recursive_type}}));
 
@@ -2730,6 +3208,7 @@ void SampleCatalogImpl::LoadProtoTables() {
 
   AddOwnedTable(
       new SimpleTable("AnnotatedEnumTable", enum_TestEnumWithAnnotations_));
+  return absl::OkStatus();
 }
 
 void SampleCatalogImpl::LoadViews(const LanguageOptions& language_options) {
@@ -2783,7 +3262,7 @@ void SampleCatalogImpl::LoadViews(const LanguageOptions& language_options) {
       "SELECT 1 AS a, 'x' AS b, false AS c;");
 }
 
-void SampleCatalogImpl::LoadNestedCatalogs() {
+absl::Status SampleCatalogImpl::LoadNestedCatalogs() {
   SimpleCatalog* nested_catalog =
       catalog_->MakeOwnedSimpleCatalog("nested_catalog");
 
@@ -2797,7 +3276,7 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
     SimpleTable* nested_key_value_table = new SimpleTable(
         "KeyValueNested",
         {{"Key", types_->get_int64()}, {"Value", types_->get_string()}});
-    GOOGLESQL_CHECK_OK(
+    GOOGLESQL_RETURN_IF_ERROR(
         nested_key_value_table->set_full_name("nested_catalog.KeyValueNested"));
     nested_catalog->AddOwnedTable(nested_key_value_table);
   }
@@ -2828,9 +3307,10 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
   // A scalar function with argument alias support in the nested catalog.
   {
     FunctionArgumentType aliased(
-        ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_alias_kind(
-                            FunctionEnums::ARGUMENT_ALIASED));
-    FunctionArgumentType non_aliased(ARG_TYPE_ANY_2);
+        ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_argument_alias_kind(
+            FunctionEnums::ARGUMENT_ALIASED));
+    FunctionArgumentType non_aliased(ARG_KIND_EXPR_ANY_2);
     std::vector<FunctionSignature> signatures = {
         {types_->get_int64(), {aliased, non_aliased}, /*context_id=*/-1}};
     Function* function = new Function(
@@ -2865,11 +3345,11 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
 
   // Add a struct-typed constant to the doubly nested catalog.
   const StructType* nested_constant_struct_type;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType(
       {{"eee", types_->get_int32()}, {"fff", nested_struct_type_}},
       &nested_constant_struct_type));
   std::unique_ptr<SimpleConstant> constant_struct;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"nested_catalog", "nested_nested_catalog",
                                "TestConstantStruct"},
       Value::Struct(nested_constant_struct_type,
@@ -2927,7 +3407,7 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
   SimpleCatalog* name_conflict_catalog =
       catalog_->MakeOwnedSimpleCatalog("name_conflict_table");
   std::unique_ptr<SimpleConstant> constant;
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       SimpleConstant::Create({"name_conflict_table", "name_conflict_field"},
                              Value::Bool(false), &constant));
   name_conflict_catalog->AddOwnedConstant(constant.release());
@@ -2935,7 +3415,7 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
   // Add <nested_catalog_with_constant> for testing named constants in catalogs.
   SimpleCatalog* nested_catalog_with_constant =
       catalog_->MakeOwnedSimpleCatalog("nested_catalog_with_constant");
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       SimpleConstant::Create({"nested_catalog_with_constant", "KnownConstant"},
                              Value::Bool(false), &constant));
   nested_catalog_with_constant->AddOwnedConstant(constant.release());
@@ -2944,39 +3424,39 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
   // constants.
   SimpleCatalog* nested_catalog_with_catalog =
       catalog_->MakeOwnedSimpleCatalog("nested_catalog_with_catalog");
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       {"nested_catalog_with_catalog", "TestConstantBool"}, Value::Bool(false),
       &constant));
   nested_catalog_with_catalog->AddOwnedConstant(constant.release());
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create({"nested_catalog_with_catalog", "c"},
-                                  Value::Double(-9999.999), &constant));
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create({"nested_catalog_with_catalog", "c"},
+                                         Value::Double(-9999.999), &constant));
   nested_catalog_with_catalog->AddOwnedConstant(constant.release());
   SimpleCatalog* nested_catalog_catalog =
       nested_catalog_with_catalog->MakeOwnedSimpleCatalog(
           "nested_catalog_catalog");
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       {"nested_catalog_with_catalog", "nested_catalog_catalog", "a"},
       Value::Float(-1.4987f), &constant));
   nested_catalog_catalog->AddOwnedConstant(constant.release());
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       {"nested_catalog_with_catalog", "nested_catalog_catalog", "c"},
       Value::String("foo"), &constant));
   nested_catalog_catalog->AddOwnedConstant(constant.release());
 
   // Add a constant to <nested_catalog>.
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create({"nested_catalog", "TestConstantBool"},
-                                  Value::Bool(false), &constant));
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create({"nested_catalog", "TestConstantBool"},
+                                         Value::Bool(false), &constant));
   nested_catalog->AddOwnedConstant(constant.release());
 
   // Add another constant to <nested_catalog> that conflicts with a procedure.
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create({"nested_catalog", "nested_procedure"},
-                                  Value::Int64(2345), &constant));
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create({"nested_catalog", "nested_procedure"},
+                                         Value::Int64(2345), &constant));
   nested_catalog->AddOwnedConstant(constant.release());
 
   // Add a constant to <nested_catalog> which requires backticks.
   std::unique_ptr<SimpleConstant> string_constant_nonstandard_name;
 
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"nested_catalog", "Test Constant-String"},
       Value::String("Test constant in nested catalog"),
       &string_constant_nonstandard_name));
@@ -2984,20 +3464,20 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
 
   // Add struct constant with the same name as a nested catalog
   const StructType* nested_nested_catalog_type;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType({{"xxxx", types_->get_int64()}},
-                                  &nested_nested_catalog_type));
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType({{"xxxx", types_->get_int64()}},
+                                         &nested_nested_catalog_type));
 
   SimpleCatalog* wwww_catalog = nested_catalog->MakeOwnedSimpleCatalog("wwww");
 
   std::unique_ptr<SimpleConstant> wwww_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"nested_catalog", "wwww"},
       Value::Struct(nested_nested_catalog_type, {Value::Int64(8)}),
       &wwww_constant));
   nested_catalog->AddOwnedConstant(wwww_constant.release());
 
   std::unique_ptr<SimpleConstant> xxxx_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"nested_catalog", "wwww", "xxxx"},
       Value::Struct(nested_nested_catalog_type, {Value::Int64(8)}),
       &xxxx_constant));
@@ -3007,7 +3487,7 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
   SimpleCatalog* at_at_nested_catalog =
       catalog_->MakeOwnedSimpleCatalog("@@nested_catalog");
   std::unique_ptr<SimpleConstant> at_at_nested_catalog_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"@@nested_catalog", "sysvar2"}, Value::Int64(8),
       &at_at_nested_catalog_constant));
   at_at_nested_catalog->AddOwnedConstant(
@@ -3015,7 +3495,7 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
 
   {
     std::unique_ptr<SimpleConstant> rounding_mode_constant;
-    GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+    GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
         std::vector<std::string>{"nested_catalog", "constant_rounding_mode"},
         Value::Enum(types::RoundingModeEnumType(), "ROUND_HALF_EVEN"),
         &rounding_mode_constant));
@@ -3032,6 +3512,8 @@ void SampleCatalogImpl::LoadNestedCatalogs() {
         {types_->get_int64(), FunctionArgumentType::REQUIRED}},
        /*context_id=*/-1});
   udf_catalog->AddOwnedFunction(function);
+
+  return absl::OkStatus();
 }
 
 static FreestandingDeprecationWarning CreateDeprecationWarning(
@@ -3107,20 +3589,19 @@ absl::Status SampleCatalogImpl::LoadExtendedSubscriptFunctions(
   return absl::OkStatus();
 }
 
-const Function* SampleCatalogImpl::AddFunction(
+absl::Status SampleCatalogImpl::AddFunction(
     absl::string_view name, Function::Mode mode,
     std::vector<FunctionSignature> function_signatures,
     FunctionOptions function_options) {
   for (const FunctionSignature& sig : function_signatures) {
-    GOOGLESQL_CHECK_OK(sig.IsValid(PRODUCT_INTERNAL));
-    GOOGLESQL_CHECK_OK(sig.IsValid(PRODUCT_EXTERNAL));
+    GOOGLESQL_RETURN_IF_ERROR(sig.IsValid(PRODUCT_INTERNAL));
+    GOOGLESQL_RETURN_IF_ERROR(sig.IsValid(PRODUCT_EXTERNAL));
   }
   auto function = std::make_unique<Function>(name, "sample_functions", mode,
                                              std::move(function_signatures),
                                              std::move(function_options));
-  const Function* function_ptr = function.get();
   catalog_->AddOwnedFunction(std::move(function));
-  return function_ptr;
+  return absl::OkStatus();
 }
 
 namespace {
@@ -3203,7 +3684,7 @@ RegisterForSampleCatalog stable_function =
     });
 }  // namespace
 
-void SampleCatalogImpl::LoadFunctions() {
+absl::Status SampleCatalogImpl::LoadFunctions() {
   Function* function;
   // Add a function that takes a specific proto as an argument.
   function =
@@ -3218,6 +3699,53 @@ void SampleCatalogImpl::LoadFunctions() {
   function->AddSignature(
       {types_->get_bool(), {enum_TestEnum_}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
+
+  // Add a function that takes repeated NUMERIC(10,2) as arguments.
+  {
+    NumericTypeParametersProto numeric_type_param_proto;
+    numeric_type_param_proto.set_precision(10);
+    numeric_type_param_proto.set_scale(2);
+    auto type_param_or_error =
+        googlesql::TypeParameters::MakeNumericTypeParameters(
+            numeric_type_param_proto);
+    GOOGLESQL_CHECK_OK(type_param_or_error.status());
+    googlesql::TypeParameters type_param =
+        std::move(type_param_or_error).value();
+    googlesql::TypeModifiers type_modifiers =
+        googlesql::TypeModifiers::MakeTypeModifiers(type_param,
+                                                    googlesql::Collation());
+
+    FunctionArgumentType arg_type(types_->get_numeric(),
+                                  FunctionArgumentTypeOptions().set_cardinality(
+                                      FunctionArgumentType::REPEATED),
+                                  /*num_occurrences=*/-1, type_modifiers);
+
+    auto fn_repeated_numeric_10_2 = std::make_unique<googlesql::Function>(
+        "fn_repeated_numeric_10_2", "sample_functions", Function::SCALAR);
+    fn_repeated_numeric_10_2->AddSignature(
+        {types_->get_bool(), {arg_type}, /*context_id=*/-1});
+    catalog_->AddOwnedFunction(std::move(fn_repeated_numeric_10_2));
+  }
+
+  // Add a function that takes STRING with collation 'und:ci' as argument.
+  {
+    googlesql::TypeModifiers type_modifiers =
+        googlesql::TypeModifiers::MakeTypeModifiers(
+            googlesql::TypeParameters(),
+            googlesql::Collation::MakeScalar("und:ci"));
+
+    FunctionArgumentType arg_type(
+        types_->get_string(),
+        FunctionArgumentTypeOptions().set_argument_collation_mode(
+            FunctionEnums::AFFECTS_NONE),
+        /*num_occurrences=*/-1, type_modifiers);
+
+    auto fn_with_collation_arg = std::make_unique<googlesql::Function>(
+        "fn_with_collation_arg", "sample_functions", Function::SCALAR);
+    fn_with_collation_arg->AddSignature(
+        {types_->get_bool(), {arg_type}, /*context_id=*/-1});
+    catalog_->AddOwnedFunction(std::move(fn_with_collation_arg));
+  }
 
   // These sample functions are named 'fn_on_<typename>' with one argument of
   // type <typename> that returns a bool.
@@ -3300,42 +3828,44 @@ void SampleCatalogImpl::LoadFunctions() {
   function = new Function("fn_on_arbitrary_type_argument", "sample_functions",
                           Function::SCALAR);
   function->AddSignature(
-      {types_->get_bool(), {ARG_TYPE_ARBITRARY}, /*context_id=*/-1});
+      {types_->get_bool(), {ARG_KIND_EXPR_ARBITRARY}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add a function that takes any type enum.
   function =
       new Function("fn_on_any_enum", "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {types_->get_bool(), {ARG_ENUM_ANY}, /*context_id=*/-1});
+      {types_->get_bool(), {ARG_KIND_EXPR_ENUM_ANY}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add a function that takes any type proto.
   function =
       new Function("fn_on_any_proto", "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {types_->get_bool(), {ARG_PROTO_ANY}, /*context_id=*/-1});
+      {types_->get_bool(), {ARG_KIND_EXPR_PROTO_ANY}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add a function that takes any type struct.
   function =
       new Function("fn_on_any_struct", "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {types_->get_bool(), {ARG_STRUCT_ANY}, /*context_id=*/-1});
+      {types_->get_bool(), {ARG_KIND_EXPR_STRUCT_ANY}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add a function that takes any array and returns element type.
   function = new Function("fn_on_any_array_returns_element", "sample_functions",
                           Function::SCALAR);
-  function->AddSignature(
-      {{ARG_TYPE_ANY_1}, {ARG_ARRAY_TYPE_ANY_1}, /*context_id=*/-1});
+  function->AddSignature({{ARG_KIND_EXPR_ANY_1},
+                          {ARG_KIND_EXPR_ARRAY_ANY_1},
+                          /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add a function that takes any type and returns an array of that type.
   function = new Function("fn_on_any_element_returns_array", "sample_functions",
                           Function::SCALAR);
-  function->AddSignature(
-      {{ARG_ARRAY_TYPE_ANY_1}, {ARG_TYPE_ANY_1}, /*context_id=*/-1});
+  function->AddSignature({{ARG_KIND_EXPR_ARRAY_ANY_1},
+                          {ARG_KIND_EXPR_ANY_1},
+                          /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add a function that takes an array<int32> and returns an int32 type.
@@ -3360,7 +3890,7 @@ void SampleCatalogImpl::LoadFunctions() {
   catalog_->AddOwnedFunction(function);
 
   const StructType* struct_int32_date_type;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType(
       {{"a", types_->get_int32()}, {"b", types_->get_date()}},
       &struct_int32_date_type));
 
@@ -3372,7 +3902,7 @@ void SampleCatalogImpl::LoadFunctions() {
   catalog_->AddOwnedFunction(function);
 
   const StructType* struct_int64_string_type;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType(
       {{"a", types_->get_int64()}, {"b", types_->get_string()}},
       &struct_int64_string_type));
 
@@ -3404,8 +3934,9 @@ void SampleCatalogImpl::LoadFunctions() {
       {{types_->get_bytes()}, {bytesmap_type_}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
-  // Adds an scalar function that takes multiple repeated and optional
-  // arguments.
+  // Adds a scalar function that takes a positional required argument,
+  // multiple repeated positional arguments, a positional-or-named
+  // required argument, and multiple optional positional-or-named arguments.
   function = new Function(
       "fn_rep_opt", "sample_functions", Function::SCALAR,
       /*function_signatures=*/
@@ -3415,19 +3946,19 @@ void SampleCatalogImpl::LoadFunctions() {
            {
                {types_->get_string(),
                 FunctionArgumentTypeOptions()
-                    .set_argument_name("a0", kPositionalOrNamed)
+                    .set_argument_name("a0", kPositionalOnly)
                     .set_cardinality(FunctionArgumentType::REQUIRED)},
                {types_->get_string(),
                 FunctionArgumentTypeOptions()
-                    .set_argument_name("r0", kPositionalOrNamed)
+                    .set_argument_name("r0", kPositionalOnly)
                     .set_cardinality(FunctionArgumentType::REPEATED)},
                {types_->get_string(),
                 FunctionArgumentTypeOptions()
-                    .set_argument_name("r1", kPositionalOrNamed)
+                    .set_argument_name("r1", kPositionalOnly)
                     .set_cardinality(FunctionArgumentType::REPEATED)},
                {types_->get_string(),
                 FunctionArgumentTypeOptions()
-                    .set_argument_name("r2", kPositionalOrNamed)
+                    .set_argument_name("r2", kPositionalOnly)
                     .set_cardinality(FunctionArgumentType::REPEATED)},
                {types_->get_string(),
                 FunctionArgumentTypeOptions()
@@ -3446,116 +3977,125 @@ void SampleCatalogImpl::LoadFunctions() {
       },
       FunctionOptions());
   catalog_->AddOwnedFunction(function);
-  GOOGLESQL_CHECK_OK(function->signatures()[0].IsValid(ProductMode::PRODUCT_EXTERNAL));
+  GOOGLESQL_RETURN_IF_ERROR(
+      function->signatures()[0].IsValid(ProductMode::PRODUCT_EXTERNAL));
 
-  AddFunction("fn_repeated_with_optional_named_only", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Optional().String().NameOnly("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(
+      AddFunction("fn_repeated_with_optional_named_only", Function::SCALAR,
+                  {SignatureBuilder()
+                       .AddArg(ArgBuilder().Repeated().String())
+                       .AddArg(ArgBuilder().Repeated().String())
+                       .AddArg(ArgBuilder().Optional().String().NameOnly("o1"))
+                       .Build()}));
 
-  AddFunction("fn_repeated_diff_args_optional_named_only", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Repeated().Int64())
-                   .AddArg(ArgBuilder().Optional().Bool().NameOnly("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(
+      AddFunction("fn_repeated_diff_args_optional_named_only", Function::SCALAR,
+                  {SignatureBuilder()
+                       .AddArg(ArgBuilder().Repeated().String())
+                       .AddArg(ArgBuilder().Repeated().Int64())
+                       .AddArg(ArgBuilder().Optional().Bool().NameOnly("o1"))
+                       .Build()}));
 
-  AddFunction("fn_repeated_arbitrary_with_optional_named_only",
-              Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().Any())
-                   .AddArg(ArgBuilder().Repeated().Any())
-                   .AddArg(ArgBuilder().Optional().Any().Name("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
+      "fn_repeated_arbitrary_with_optional_named_only", Function::SCALAR,
+      {SignatureBuilder()
+           .AddArg(ArgBuilder().Repeated().Any())
+           .AddArg(ArgBuilder().Repeated().Any())
+           .AddArg(ArgBuilder().Optional().Any().Name("o1"))
+           .Build()}));
 
-  AddFunction("fn_repeated_with_optional_named_or_positional", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Optional().String().Name("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
+      "fn_repeated_with_optional_named_or_positional", Function::SCALAR,
+      {SignatureBuilder()
+           .AddArg(ArgBuilder().Repeated().String())
+           .AddArg(ArgBuilder().Repeated().String())
+           .AddArg(ArgBuilder().Optional().String().Name("o1"))
+           .Build()}));
 
-  AddFunction("fn_repeated_diff_args_optional_named_or_positional",
-              Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Repeated().Int64())
-                   .AddArg(ArgBuilder().Optional().Bool().Name("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
+      "fn_repeated_diff_args_optional_named_or_positional", Function::SCALAR,
+      {SignatureBuilder()
+           .AddArg(ArgBuilder().Repeated().String())
+           .AddArg(ArgBuilder().Repeated().Int64())
+           .AddArg(ArgBuilder().Optional().Bool().Name("o1"))
+           .Build()}));
 
-  AddFunction("fn_repeated_arbitrary_with_optional_named_or_positional",
-              Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().Any())
-                   .AddArg(ArgBuilder().Repeated().Any())
-                   .AddArg(ArgBuilder().Optional().Any().Name("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(
+      AddFunction("fn_repeated_arbitrary_with_optional_named_or_positional",
+                  Function::SCALAR,
+                  {SignatureBuilder()
+                       .AddArg(ArgBuilder().Repeated().Any())
+                       .AddArg(ArgBuilder().Repeated().Any())
+                       .AddArg(ArgBuilder().Optional().Any().Name("o1"))
+                       .Build()}));
 
-  AddFunction("fn_repeated_with_required_named", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().String().NameOnly("r1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction("fn_repeated_with_required_named",
+                              Function::SCALAR,
+                              {SignatureBuilder()
+                                   .AddArg(ArgBuilder().Repeated().String())
+                                   .AddArg(ArgBuilder().Repeated().String())
+                                   .AddArg(ArgBuilder().String().NameOnly("r1"))
+                                   .Build()}));
 
-  AddFunction("fn_repeated_diff_args_required_named", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().String())
-                   .AddArg(ArgBuilder().Repeated().Int64())
-                   .AddArg(ArgBuilder().Bool().NameOnly("r1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction("fn_repeated_diff_args_required_named",
+                              Function::SCALAR,
+                              {SignatureBuilder()
+                                   .AddArg(ArgBuilder().Repeated().String())
+                                   .AddArg(ArgBuilder().Repeated().Int64())
+                                   .AddArg(ArgBuilder().Bool().NameOnly("r1"))
+                                   .Build()}));
 
-  AddFunction("fn_repeated_arbitrary_with_required_named", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().Any())
-                   .AddArg(ArgBuilder().Repeated().Any())
-                   .AddArg(ArgBuilder().Any().NameOnly("r1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction("fn_repeated_arbitrary_with_required_named",
+                              Function::SCALAR,
+                              {SignatureBuilder()
+                                   .AddArg(ArgBuilder().Repeated().Any())
+                                   .AddArg(ArgBuilder().Repeated().Any())
+                                   .AddArg(ArgBuilder().Any().NameOnly("r1"))
+                                   .Build()}));
 
-  AddFunction("fn_repeated_t1_t2_with_optional_named_t1", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().T1())
-                   .AddArg(ArgBuilder().Repeated().T2())
-                   .AddArg(ArgBuilder().Optional().T1().NameOnly("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(
+      AddFunction("fn_repeated_t1_t2_with_optional_named_t1", Function::SCALAR,
+                  {SignatureBuilder()
+                       .AddArg(ArgBuilder().Repeated().T1())
+                       .AddArg(ArgBuilder().Repeated().T2())
+                       .AddArg(ArgBuilder().Optional().T1().NameOnly("o1"))
+                       .Build()}));
 
-  AddFunction("fn_repeated_t1_arbitrary_with_optional_named_t1",
-              Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().T1())
-                   .AddArg(ArgBuilder().Repeated().Any())
-                   .AddArg(ArgBuilder().Optional().T1().NameOnly("o1"))
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
+      "fn_repeated_t1_arbitrary_with_optional_named_t1", Function::SCALAR,
+      {SignatureBuilder()
+           .AddArg(ArgBuilder().Repeated().T1())
+           .AddArg(ArgBuilder().Repeated().Any())
+           .AddArg(ArgBuilder().Optional().T1().NameOnly("o1"))
+           .Build()}));
 
-  AddFunction(
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
       "fn_optional_any", Function::SCALAR,
-      {SignatureBuilder().AddArg(ArgBuilder().Optional().Any()).Build()});
+      {SignatureBuilder().AddArg(ArgBuilder().Optional().Any()).Build()}));
 
-  AddFunction(
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
       "fn_repeated_any", Function::SCALAR,
-      {SignatureBuilder().AddArg(ArgBuilder().Repeated().Any()).Build()});
+      {SignatureBuilder().AddArg(ArgBuilder().Repeated().Any()).Build()}));
 
-  AddFunction(
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
       "fn_optional_t1", Function::SCALAR,
-      {SignatureBuilder().AddArg(ArgBuilder().Optional().T1()).Build()});
+      {SignatureBuilder().AddArg(ArgBuilder().Optional().T1()).Build()}));
 
-  AddFunction("fn_optional_t1_ret_t1", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Optional().T1())
-                   .Returns(ArgBuilder().T1())
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction("fn_optional_t1_ret_t1", Function::SCALAR,
+                              {SignatureBuilder()
+                                   .AddArg(ArgBuilder().Optional().T1())
+                                   .Returns(ArgBuilder().T1())
+                                   .Build()}));
 
-  AddFunction(
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
       "fn_repeated_t1", Function::SCALAR,
-      {SignatureBuilder().AddArg(ArgBuilder().Repeated().T1()).Build()});
+      {SignatureBuilder().AddArg(ArgBuilder().Repeated().T1()).Build()}));
 
-  AddFunction("fn_repeated_t1_ret_t1", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().Repeated().T1())
-                   .Returns(ArgBuilder().T1())
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction("fn_repeated_t1_ret_t1", Function::SCALAR,
+                              {SignatureBuilder()
+                                   .AddArg(ArgBuilder().Repeated().T1())
+                                   .Returns(ArgBuilder().T1())
+                                   .Build()}));
 
   // Adds an aggregate function that takes no argument but supports order by.
   function = new Function("sort_count", "sample_functions", Function::AGGREGATE,
@@ -3585,6 +4125,8 @@ void SampleCatalogImpl::LoadFunctions() {
                       /*window_framing_support_in=*/true));
   catalog_->AddOwnedFunction(function);
 
+  return absl::OkStatus();
+
   // Do not add more to this function. Instead, use RegisterForSampleCatalog
   // inside an unnamed namespace. Context: Under some compilation modes all
   // local variables get their own stack location and this causes the stack
@@ -3603,7 +4145,7 @@ RegisterForSampleCatalog fn_reject_collation =
           "fn_reject_collation", "sample_functions", Function::SCALAR,
           {{types_->get_int64(),
             {types_->get_string(),
-             {ARG_TYPE_ANY_1,
+             {ARG_KIND_EXPR_ANY_1,
               FunctionArgumentTypeOptions()
                   .set_argument_name("second_arg", kPositionalOrNamed)
                   .set_cardinality(FunctionArgumentType::OPTIONAL)}},
@@ -3613,7 +4155,7 @@ RegisterForSampleCatalog fn_reject_collation =
 
 // Add the following test analytic functions. All functions have the same
 // list of function signatures:
-//     arguments: (), (ARG_TYPE_ANY_1) and (<int64>, <string>))
+//     arguments: (), (ARG_KIND_EXPR_ANY_1) and (<int64>, <string>))
 //     return: <int64>
 //
 // They differ in the window support:
@@ -3634,7 +4176,7 @@ RegisterForSampleCatalog test_analytic_functions =
       function_signatures.push_back(
           {types_->get_int64(), {}, /*context_id=*/-1});
       function_signatures.push_back(
-          {types_->get_int64(), {ARG_TYPE_ANY_1}, /*context_id=*/-1});
+          {types_->get_int64(), {ARG_KIND_EXPR_ANY_1}, /*context_id=*/-1});
       function_signatures.push_back(
           {types_->get_int64(),
            {types_->get_int64(),
@@ -3764,11 +4306,11 @@ RegisterForSampleCatalog fn_map_type_any_1_2_lambda_any_1_any_2_return_bool =
       auto function = std::make_unique<Function>(
           "fn_map_type_any_1_2_lambda_any_1_any_2_return_bool",
           "sample_functions", mode);
-      function->AddSignature(
-          {types::BoolType(),
-           {ARG_MAP_TYPE_ANY_1_2,
-            FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, ARG_TYPE_ANY_2)},
-           /*context_id=*/-1});
+      function->AddSignature({types::BoolType(),
+                              {ARG_KIND_EXPR_MAP_ANY_1_2,
+                               FunctionArgumentType::Lambda(
+                                   {ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_2)},
+                              /*context_id=*/-1});
       catalog_->AddOwnedFunction(std::move(function));
     });
 
@@ -3799,9 +4341,188 @@ RegisterForSampleCatalog intentionally_ret_check_rewrite =
                     .set_allowed_function_groups({"sample_functions"}))}}));
     });
 
+RegisterForSampleCatalog fn_collation_ret_check =
+    RegisterForSampleCatalog([](googlesql::SimpleCatalog* catalog_) {
+      googlesql::TypeFactory* types = catalog_->type_factory();
+      googlesql::TypeModifiers type_modifiers =
+          googlesql::TypeModifiers::MakeTypeModifiers(
+              googlesql::TypeParameters(),
+              googlesql::Collation::MakeScalar("und:ci"));
+      FunctionArgumentType arg_type(
+          types->get_string(),
+          FunctionArgumentTypeOptions().set_argument_collation_mode(
+              FunctionEnums::AFFECTS_OPERATION_AND_PROPAGATION),
+          /*num_occurrences=*/-1, type_modifiers);
+      catalog_->AddOwnedFunction(new Function(
+          "fn_collation_ret_check", "sample_functions", Function::SCALAR,
+          {{{types->get_bool(), {arg_type}, /*context_id=*/-1}}}));
+    });
+
+RegisterForSampleCatalog
+    fn_complex_concrete_arg_uses_collation_but_has_other_typemods =
+        RegisterForSampleCatalog([](googlesql::SimpleCatalog* catalog_) {
+          googlesql::TypeFactory* types = catalog_->type_factory();
+          googlesql::NumericTypeParametersProto numeric_type_param_proto;
+          numeric_type_param_proto.set_precision(5);
+          numeric_type_param_proto.set_scale(2);
+          auto numeric_type_param_or_error =
+              googlesql::TypeParameters::MakeNumericTypeParameters(
+                  numeric_type_param_proto);
+          GOOGLESQL_CHECK_OK(numeric_type_param_or_error.status());
+          googlesql::TypeParameters numeric_type_param =
+              std::move(numeric_type_param_or_error).value();
+
+          std::vector<googlesql::TypeParameters> child_list;
+          child_list.push_back(googlesql::TypeParameters());
+          child_list.push_back(numeric_type_param);
+
+          googlesql::TypeParameters struct_type_param;
+          struct_type_param.set_child_list(child_list);
+
+          googlesql::TypeModifiers type_modifiers =
+              googlesql::TypeModifiers::MakeTypeModifiers(
+                  struct_type_param, googlesql::Collation());
+
+          const googlesql::StructType* struct_type = nullptr;
+          GOOGLESQL_CHECK_OK(types->MakeStructType(
+              {{"", types->get_string()}, {"", types->get_numeric()}},
+              &struct_type));
+
+          const googlesql::ArrayType* array_string_type = nullptr;
+          GOOGLESQL_CHECK_OK(
+              types->MakeArrayType(types->get_string(), &array_string_type));
+
+          googlesql::FunctionArgumentType arg_type(
+              struct_type,
+              googlesql::FunctionArgumentTypeOptions()
+                  .set_argument_name("arg", googlesql::kPositionalOrNamed)
+                  .set_argument_collation_mode(
+                      googlesql::FunctionEnums::AFFECTS_OPERATION),
+              /*num_occurrences=*/-1, type_modifiers);
+
+          catalog_->AddOwnedFunction(new googlesql::Function(
+              "complex_concrete_arg_uses_collation_but_has_other_typemods",
+              "sample_functions", googlesql::Function::SCALAR,
+              {{{array_string_type, {arg_type}, /*context_id=*/-1}}}));
+        });
+
+RegisterForSampleCatalog
+    tvf_complex_concrete_arg_uses_collation_but_has_other_typemods =
+        RegisterForSampleCatalog([](googlesql::SimpleCatalog* catalog_) {
+          googlesql::TypeFactory* types = catalog_->type_factory();
+          googlesql::NumericTypeParametersProto numeric_type_param_proto;
+          numeric_type_param_proto.set_precision(5);
+          numeric_type_param_proto.set_scale(2);
+          auto numeric_type_param_or_error =
+              googlesql::TypeParameters::MakeNumericTypeParameters(
+                  numeric_type_param_proto);
+          GOOGLESQL_CHECK_OK(numeric_type_param_or_error.status());
+          googlesql::TypeParameters numeric_type_param =
+              std::move(numeric_type_param_or_error).value();
+
+          std::vector<googlesql::TypeParameters> child_list;
+          child_list.push_back(googlesql::TypeParameters());
+          child_list.push_back(numeric_type_param);
+
+          googlesql::TypeParameters struct_type_param;
+          struct_type_param.set_child_list(child_list);
+
+          googlesql::TypeModifiers type_modifiers =
+              googlesql::TypeModifiers::MakeTypeModifiers(
+                  struct_type_param, googlesql::Collation());
+
+          const googlesql::StructType* struct_type = nullptr;
+          GOOGLESQL_CHECK_OK(types->MakeStructType(
+              {{"", types->get_string()}, {"", types->get_numeric()}},
+              &struct_type));
+
+          // Define input relation schema: TABLE<col STRUCT<STRING,
+          // NUMERIC(5,2)>>
+          googlesql::TVFSchemaColumn input_col(
+              "col", struct_type, /*is_pseudo_column=*/false,
+              /*is_passthrough_column=*/false, type_modifiers);
+          googlesql::TVFRelation input_relation({input_col});
+
+          googlesql::FunctionArgumentType arg_type(
+              googlesql::ARG_KIND_RELATION,
+              googlesql::FunctionArgumentTypeOptions(
+                  input_relation,
+                  /*extra_relation_input_columns_allowed=*/false)
+                  .set_argument_name("arg", googlesql::kPositionalOrNamed)
+                  .set_argument_collation_mode(
+                      googlesql::FunctionEnums::
+                          AFFECTS_OPERATION_AND_PROPAGATION));
+
+          googlesql::TVFRelation output_schema({{"result", types->get_bool()}});
+
+          catalog_->AddOwnedTableValuedFunction(
+              new googlesql::FixedOutputSchemaTVF(
+                  {"tvf_complex_concrete_arg_uses_collation_but_has_other_"
+                   "typemods"},
+                  {googlesql::FunctionSignature(
+                      googlesql::FunctionArgumentType::RelationWithSchema(
+                          output_schema,
+                          /*extra_relation_input_columns_allowed=*/false),
+                      {arg_type}, /*context_id=*/-1)},
+                  output_schema));
+        });
+
+RegisterForSampleCatalog fn_complex_concrete_and_templated_arg =
+    RegisterForSampleCatalog([](googlesql::SimpleCatalog* catalog_) {
+      googlesql::TypeFactory* types = catalog_->type_factory();
+
+      // Define arg: STRUCT<STRING, NUMERIC(5,2)>
+      googlesql::NumericTypeParametersProto numeric_type_param_proto;
+      numeric_type_param_proto.set_precision(5);
+      numeric_type_param_proto.set_scale(2);
+      auto numeric_type_param_or_error =
+          googlesql::TypeParameters::MakeNumericTypeParameters(
+              numeric_type_param_proto);
+      GOOGLESQL_CHECK_OK(numeric_type_param_or_error.status());
+      googlesql::TypeParameters numeric_type_param =
+          std::move(numeric_type_param_or_error).value();
+
+      std::vector<googlesql::TypeParameters> child_list;
+      child_list.push_back(googlesql::TypeParameters());
+      child_list.push_back(numeric_type_param);
+
+      googlesql::TypeParameters struct_type_param;
+      struct_type_param.set_child_list(child_list);
+
+      googlesql::TypeModifiers type_modifiers =
+          googlesql::TypeModifiers::MakeTypeModifiers(struct_type_param,
+                                                      googlesql::Collation());
+
+      const googlesql::StructType* struct_type = nullptr;
+      GOOGLESQL_CHECK_OK(types->MakeStructType(
+          {{"", types->get_string()}, {"", types->get_numeric()}},
+          &struct_type));
+
+      googlesql::FunctionArgumentType arg(
+          struct_type,
+          googlesql::FunctionArgumentTypeOptions()
+              .set_argument_name("arg", googlesql::kPositionalOrNamed)
+              .set_argument_collation_mode(
+                  googlesql::FunctionEnums::AFFECTS_OPERATION_AND_PROPAGATION),
+          /*num_occurrences=*/-1, type_modifiers);
+
+      // Define other_arg: ANY TYPE
+      googlesql::FunctionArgumentType other_arg(
+          googlesql::ARG_KIND_EXPR_ARBITRARY,
+          googlesql::FunctionArgumentTypeOptions()
+              .set_argument_name("other_arg", googlesql::kPositionalOrNamed)
+              .set_argument_collation_mode(
+                  googlesql::FunctionEnums::AFFECTS_OPERATION_AND_PROPAGATION));
+
+      catalog_->AddOwnedFunction(new googlesql::Function(
+          "complex_concrete_and_templated_arg_uses_collation",
+          "sample_functions", googlesql::Function::SCALAR,
+          {{{types->get_bool(), {arg, other_arg}, /*context_id=*/-1}}}));
+    });
+
 }  // namespace
 
-void SampleCatalogImpl::LoadFunctions2() {
+absl::Status SampleCatalogImpl::LoadFunctions2() {
   // Do not add more to this function. Instead, use RegisterForSampleCatalog
   // inside an unnamed namespace. Context: Under some compilation modes all
   // local variables get their own stack location and this causes the stack
@@ -3937,16 +4658,6 @@ void SampleCatalogImpl::LoadFunctions2() {
                           {named_required_format_arg_error_if_positional,
                            named_required_date_arg_error_if_positional},
                           /*context_id=*/-1});
-  catalog_->AddOwnedFunction(function);
-
-  // Add a function with two named arguments where the first may not be
-  // specified positionally.
-  function = new Function("fn_named_args_error_if_positional_first_arg",
-                          "sample_functions", mode);
-  function->AddSignature(
-      {types_->get_bool(),
-       {named_required_format_arg_error_if_positional, named_required_date_arg},
-       /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add a function with two named arguments where the second may not be
@@ -4165,18 +4876,34 @@ void SampleCatalogImpl::LoadFunctions2() {
   // lambda to ensure one doesn't break the other.
   function->AddSignature(
       {{types_->get_int64()},
-       {ARG_TYPE_ANY_1, FunctionArgumentType::AnySequence(),
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, ARG_TYPE_ANY_2)},
+       {ARG_KIND_EXPR_ANY_1, FunctionArgumentType::AnySequence(),
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1},
+                                     ARG_KIND_EXPR_ANY_2)},
+       /*context_id=*/-1});
+  catalog_->AddOwnedFunction(function);
+
+  // Adds a function accepting a Model argument.
+  function = new Function("fn_with_model_arg", "sample_functions", mode,
+                          function_options);
+  function->AddSignature({{types_->get_int64()},
+                          {FunctionArgumentType::AnyModel()},
+                          /*context_id=*/-1});
+  // Adds a function signature for accepting both a Model argument and a
+  // lambda to ensure one doesn't break the other.
+  function->AddSignature(
+      {{types_->get_int64()},
+       {ARG_KIND_EXPR_ANY_1, FunctionArgumentType::AnyModel(),
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1},
+                                     ARG_KIND_EXPR_ANY_2)},
        /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
 
   // Add function with constant expression argument.
   function = new Function("fn_with_constant_expr_arg", "sample_functions",
                           Function::SCALAR);
-  const auto string_const_expression_arg = googlesql::FunctionArgumentType(
-      types_->get_string(), googlesql::FunctionArgumentTypeOptions()
-                                .set_cardinality(FunctionArgumentType::REQUIRED)
-                                .set_must_be_constant_expression());
+  const auto string_const_expression_arg = FunctionArgumentType(
+      types_->get_string(),
+      FunctionArgumentTypeOptions().set_must_be_constant_expression());
   function->AddSignature(
       {types_->get_bool(), {string_const_expression_arg}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
@@ -4184,10 +4911,9 @@ void SampleCatalogImpl::LoadFunctions2() {
   // Add function with analysis constant argument.
   function = new Function("fn_with_analysis_constant_arg", "sample_functions",
                           Function::SCALAR);
-  const auto any_analysis_const_arg = googlesql::FunctionArgumentType(
-      ARG_TYPE_ARBITRARY, googlesql::FunctionArgumentTypeOptions()
-                              .set_cardinality(FunctionArgumentType::REQUIRED)
-                              .set_must_be_analysis_constant());
+  const auto any_analysis_const_arg = FunctionArgumentType(
+      ARG_KIND_EXPR_ARBITRARY,
+      FunctionArgumentTypeOptions().set_must_be_analysis_constant());
   function->AddSignature(
       {types_->get_bool(), {any_analysis_const_arg}, /*context_id=*/-1});
   catalog_->AddOwnedFunction(function);
@@ -4196,12 +4922,33 @@ void SampleCatalogImpl::LoadFunctions2() {
     // Add function with immutable constant argument.
     auto function = std::make_unique<Function>("fn_with_immutable_constant_arg",
                                                "sample_functions", mode);
-    const auto any_immutable_const_arg = googlesql::FunctionArgumentType(
-        ARG_TYPE_ARBITRARY, googlesql::FunctionArgumentTypeOptions()
-                                .set_cardinality(FunctionArgumentType::REQUIRED)
-                                .set_must_be_immutable_constant());
+    const auto any_immutable_const_arg = FunctionArgumentType(
+        ARG_KIND_EXPR_ARBITRARY,
+        FunctionArgumentTypeOptions().set_must_be_immutable_constant());
     function->AddSignature(
         {types_->get_bool(), {any_immutable_const_arg}, /*context_id=*/-1});
+    catalog_->AddOwnedFunction(std::move(function));
+  }
+  {
+    // Add function with stable constant argument.
+    auto function = std::make_unique<Function>("fn_with_stable_constant_arg",
+                                               "sample_functions", mode);
+    const auto any_stable_const_arg = FunctionArgumentType(
+        ARG_KIND_EXPR_ARBITRARY,
+        FunctionArgumentTypeOptions().set_must_be_stable_constant());
+    function->AddSignature(
+        {types_->get_bool(), {any_stable_const_arg}, /*context_id=*/-1});
+    catalog_->AddOwnedFunction(std::move(function));
+  }
+  {
+    // Add function with query constant argument.
+    auto function = std::make_unique<Function>("fn_with_query_constant_arg",
+                                               "sample_functions", mode);
+    const auto any_query_const_arg = FunctionArgumentType(
+        ARG_KIND_EXPR_ARBITRARY,
+        FunctionArgumentTypeOptions().set_must_be_query_constant());
+    function->AddSignature(
+        {types_->get_bool(), {any_query_const_arg}, /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
   {
@@ -4222,170 +4969,179 @@ void SampleCatalogImpl::LoadFunctions2() {
         "sample_functions", mode,
         FunctionOptions().set_compute_result_type_callback(
             &ComputeResultTypeCallbackToStruct));
-    const FunctionArgumentType positional(ARG_TYPE_ANY_1);
-    function->AddSignature({ARG_TYPE_ARBITRARY,
+    const FunctionArgumentType positional(ARG_KIND_EXPR_ANY_1);
+    function->AddSignature({ARG_KIND_EXPR_ARBITRARY,
                             {positional, positional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // Arguments and return type are both ARG_TYPE_ANY_3.
+  // Arguments and return type are both ARG_KIND_EXPR_ANY_3.
   {
     auto function = std::make_unique<Function>("fn_with_arg_type_any_3",
                                                "sample_functions", mode);
-    const FunctionArgumentType positional(ARG_TYPE_ANY_3);
-    function->AddSignature({ARG_TYPE_ANY_3,
+    const FunctionArgumentType positional(ARG_KIND_EXPR_ANY_3);
+    function->AddSignature({ARG_KIND_EXPR_ANY_3,
                             {positional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_TYPE_ANY_3 arguments + ARRAY_ARG_TYPE_ANY_3 result.
+  // ARG_KIND_EXPR_ANY_3 arguments + ARRAY_ARG_KIND_EXPR_ANY_3 result.
   {
     auto function = std::make_unique<Function>("fn_arg_type_any_3_array_result",
                                                "sample_functions", mode);
     const FunctionArgumentType optional(
-        ARG_TYPE_ANY_3, FunctionArgumentTypeOptions()
-                            .set_cardinality(FunctionArgumentType::OPTIONAL)
-                            .set_argument_name("o1", kPositionalOrNamed));
-    function->AddSignature({ARG_ARRAY_TYPE_ANY_3,
+        ARG_KIND_EXPR_ANY_3,
+        FunctionArgumentTypeOptions()
+            .set_cardinality(FunctionArgumentType::OPTIONAL)
+            .set_argument_name("o1", kPositionalOrNamed));
+    function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_3,
                             {optional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_ARRAY_TYPE_ANY_3 arguments + ARG_TYPE_ANY_3 result.
+  // ARG_KIND_EXPR_ARRAY_ANY_3 arguments + ARG_KIND_EXPR_ANY_3 result.
   {
     auto function = std::make_unique<Function>(
         "fn_arg_type_array_any_3_result_type_any_3", "sample_functions", mode);
     const FunctionArgumentType named_optional(
-        ARG_ARRAY_TYPE_ANY_3,
+        ARG_KIND_EXPR_ARRAY_ANY_3,
         FunctionArgumentTypeOptions()
             .set_cardinality(FunctionArgumentType::OPTIONAL)
             .set_argument_name("o1", kNamedOnly));
-    function->AddSignature({ARG_TYPE_ANY_3,
+    function->AddSignature({ARG_KIND_EXPR_ANY_3,
                             {named_optional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_ARRAY_TYPE_ANY_3 arguments + ARG_ARRAY_TYPE_ANY_3 result.
+  // ARG_KIND_EXPR_ARRAY_ANY_3 arguments + ARG_KIND_EXPR_ARRAY_ANY_3
+  // result.
   {
     auto function = std::make_unique<Function>(
         "fn_repeated_array_any_3_return_type_array_any_3", "sample_functions",
         mode);
     const FunctionArgumentType repeated(
-        ARG_ARRAY_TYPE_ANY_3, FunctionArgumentTypeOptions().set_cardinality(
-                                  FunctionArgumentType::REPEATED));
-    function->AddSignature({ARG_ARRAY_TYPE_ANY_3,
+        ARG_KIND_EXPR_ARRAY_ANY_3,
+        FunctionArgumentTypeOptions().set_cardinality(
+            FunctionArgumentType::REPEATED));
+    function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_3,
                             {repeated},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // Arguments and return type are both ARG_TYPE_ANY_4.
+  // Arguments and return type are both ARG_KIND_EXPR_ANY_4.
   {
     auto function = std::make_unique<Function>("fn_with_arg_type_any_4",
                                                "sample_functions", mode);
-    const FunctionArgumentType positional(ARG_TYPE_ANY_4);
-    function->AddSignature({ARG_TYPE_ANY_4,
+    const FunctionArgumentType positional(ARG_KIND_EXPR_ANY_4);
+    function->AddSignature({ARG_KIND_EXPR_ANY_4,
                             {positional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_TYPE_ANY_4 arguments + ARRAY_ARG_TYPE_ANY_4 result.
+  // ARG_KIND_EXPR_ANY_4 arguments + ARRAY_ARG_KIND_EXPR_ANY_4 result.
   {
     auto function = std::make_unique<Function>("fn_arg_type_any_4_array_result",
                                                "sample_functions", mode);
     const FunctionArgumentType optional(
-        ARG_TYPE_ANY_4, FunctionArgumentTypeOptions()
-                            .set_cardinality(FunctionArgumentType::OPTIONAL)
-                            .set_argument_name("o1", kPositionalOrNamed));
-    function->AddSignature({ARG_ARRAY_TYPE_ANY_4,
+        ARG_KIND_EXPR_ANY_4,
+        FunctionArgumentTypeOptions()
+            .set_cardinality(FunctionArgumentType::OPTIONAL)
+            .set_argument_name("o1", kPositionalOrNamed));
+    function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_4,
                             {optional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_ARRAY_TYPE_ANY_4 arguments + ARG_TYPE_ANY_4 result.
+  // ARG_KIND_EXPR_ARRAY_ANY_4 arguments + ARG_KIND_EXPR_ANY_4 result.
   {
     auto function = std::make_unique<Function>(
         "fn_arg_type_array_any_4_result_type_any_4", "sample_functions", mode);
     const FunctionArgumentType named_optional(
-        ARG_ARRAY_TYPE_ANY_4,
+        ARG_KIND_EXPR_ARRAY_ANY_4,
         FunctionArgumentTypeOptions()
             .set_cardinality(FunctionArgumentType::OPTIONAL)
             .set_argument_name("o1", kNamedOnly));
-    function->AddSignature({ARG_TYPE_ANY_4,
+    function->AddSignature({ARG_KIND_EXPR_ANY_4,
                             {named_optional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_ARRAY_TYPE_ANY_4 arguments + ARG_ARRAY_TYPE_ANY_4 result.
+  // ARG_KIND_EXPR_ARRAY_ANY_4 arguments + ARG_KIND_EXPR_ARRAY_ANY_4
+  // result.
   {
     auto function = std::make_unique<Function>(
         "fn_repeated_array_any_4_return_type_array_any_4", "sample_functions",
         mode);
     const FunctionArgumentType repeated(
-        ARG_ARRAY_TYPE_ANY_4, FunctionArgumentTypeOptions().set_cardinality(
-                                  FunctionArgumentType::REPEATED));
-    function->AddSignature({ARG_ARRAY_TYPE_ANY_4,
+        ARG_KIND_EXPR_ARRAY_ANY_4,
+        FunctionArgumentTypeOptions().set_cardinality(
+            FunctionArgumentType::REPEATED));
+    function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_4,
                             {repeated},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // Arguments and return type are both ARG_TYPE_ANY_5.
+  // Arguments and return type are both ARG_KIND_EXPR_ANY_5.
   {
     auto function = std::make_unique<Function>("fn_with_arg_type_any_5",
                                                "sample_functions", mode);
-    const FunctionArgumentType positional(ARG_TYPE_ANY_5);
-    function->AddSignature({ARG_TYPE_ANY_5,
+    const FunctionArgumentType positional(ARG_KIND_EXPR_ANY_5);
+    function->AddSignature({ARG_KIND_EXPR_ANY_5,
                             {positional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_TYPE_ANY_5 arguments + ARRAY_ARG_TYPE_ANY_5 result.
+  // ARG_KIND_EXPR_ANY_5 arguments + ARRAY_ARG_KIND_EXPR_ANY_5 result.
   {
     auto function = std::make_unique<Function>("fn_arg_type_any_5_array_result",
                                                "sample_functions", mode);
     const FunctionArgumentType optional(
-        ARG_TYPE_ANY_5, FunctionArgumentTypeOptions()
-                            .set_cardinality(FunctionArgumentType::OPTIONAL)
-                            .set_argument_name("o1", kPositionalOrNamed));
-    function->AddSignature({ARG_ARRAY_TYPE_ANY_5,
+        ARG_KIND_EXPR_ANY_5,
+        FunctionArgumentTypeOptions()
+            .set_cardinality(FunctionArgumentType::OPTIONAL)
+            .set_argument_name("o1", kPositionalOrNamed));
+    function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_5,
                             {optional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_ARRAY_TYPE_ANY_5 arguments + ARG_TYPE_ANY_5 result.
+  // ARG_KIND_EXPR_ARRAY_ANY_5 arguments + ARG_KIND_EXPR_ANY_5 result.
   {
     auto function = std::make_unique<Function>(
         "fn_arg_type_array_any_5_result_type_any_5", "sample_functions", mode);
     const FunctionArgumentType named_optional(
-        ARG_ARRAY_TYPE_ANY_5,
+        ARG_KIND_EXPR_ARRAY_ANY_5,
         FunctionArgumentTypeOptions()
             .set_cardinality(FunctionArgumentType::OPTIONAL)
             .set_argument_name("o1", kNamedOnly));
-    function->AddSignature({ARG_TYPE_ANY_5,
+    function->AddSignature({ARG_KIND_EXPR_ANY_5,
                             {named_optional},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
 
-  // ARG_ARRAY_TYPE_ANY_5 arguments + ARG_ARRAY_TYPE_ANY_5 result.
+  // ARG_KIND_EXPR_ARRAY_ANY_5 arguments + ARG_KIND_EXPR_ARRAY_ANY_5
+  // result.
   {
     auto function = std::make_unique<Function>(
         "fn_repeated_array_any_5_return_type_array_any_5", "sample_functions",
         mode);
     const FunctionArgumentType repeated(
-        ARG_ARRAY_TYPE_ANY_5, FunctionArgumentTypeOptions().set_cardinality(
-                                  FunctionArgumentType::REPEATED));
-    function->AddSignature({ARG_ARRAY_TYPE_ANY_5,
+        ARG_KIND_EXPR_ARRAY_ANY_5,
+        FunctionArgumentTypeOptions().set_cardinality(
+            FunctionArgumentType::REPEATED));
+    function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_5,
                             {repeated},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
@@ -4430,9 +5186,10 @@ void SampleCatalogImpl::LoadFunctions2() {
   // Aggregate function with argument alias support.
   {
     FunctionArgumentType aliased(
-        ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_alias_kind(
-                            FunctionEnums::ARGUMENT_ALIASED));
-    FunctionArgumentType non_aliased(ARG_TYPE_ANY_2);
+        ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_argument_alias_kind(
+            FunctionEnums::ARGUMENT_ALIASED));
+    FunctionArgumentType non_aliased(ARG_KIND_EXPR_ANY_2);
     std::vector<FunctionSignature> function_signatures = {
         {types_->get_int64(), {aliased, non_aliased}, /*context_id=*/-1}};
     catalog_->AddOwnedFunction(
@@ -4442,9 +5199,10 @@ void SampleCatalogImpl::LoadFunctions2() {
   // Analytic functions with argument alias support.
   {
     FunctionArgumentType aliased(
-        ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_alias_kind(
-                            FunctionEnums::ARGUMENT_ALIASED));
-    FunctionArgumentType non_aliased(ARG_TYPE_ANY_2);
+        ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentTypeOptions().set_argument_alias_kind(
+            FunctionEnums::ARGUMENT_ALIASED));
+    FunctionArgumentType non_aliased(ARG_KIND_EXPR_ANY_2);
     std::vector<FunctionSignature> function_signatures = {
         {types_->get_int64(), {aliased, non_aliased}, /*context_id=*/-1}};
     catalog_->AddOwnedFunction(
@@ -4464,7 +5222,7 @@ void SampleCatalogImpl::LoadFunctions2() {
     {
       const FunctionArgumentType arg_1(types_->get_bool());
       const FunctionArgumentType arg_2(types_->get_bool());
-      function->AddSignature({ARG_TYPE_ARBITRARY,
+      function->AddSignature({ARG_KIND_EXPR_ARBITRARY,
                               {arg_1, arg_2},
                               /*context_id=*/-1});
     }
@@ -4475,7 +5233,7 @@ void SampleCatalogImpl::LoadFunctions2() {
           FunctionArgumentTypeOptions().set_argument_alias_kind(
               FunctionEnums::ARGUMENT_ALIASED));
       const FunctionArgumentType arg_2(types_->get_int64());
-      function->AddSignature({ARG_TYPE_ARBITRARY,
+      function->AddSignature({ARG_KIND_EXPR_ARBITRARY,
                               {arg_1, arg_2},
                               /*context_id=*/-1});
     }
@@ -4489,7 +5247,7 @@ void SampleCatalogImpl::LoadFunctions2() {
           types_->get_string(),
           FunctionArgumentTypeOptions().set_argument_alias_kind(
               FunctionEnums::ARGUMENT_ALIASED));
-      function->AddSignature({ARG_TYPE_ARBITRARY,
+      function->AddSignature({ARG_KIND_EXPR_ARBITRARY,
                               {arg_1, arg_2},
                               /*context_id=*/-1});
     }
@@ -4507,7 +5265,7 @@ void SampleCatalogImpl::LoadFunctions2() {
               .set_cardinality(FunctionArgumentType::OPTIONAL)
               .set_default(values::Int64(100)));
       function->AddSignature(
-          {ARG_TYPE_ARBITRARY,
+          {ARG_KIND_EXPR_ARBITRARY,
            {optional_supports_alias, optional_not_supports_alias},
            /*context_id=*/-1});
     }
@@ -4524,7 +5282,7 @@ void SampleCatalogImpl::LoadFunctions2() {
           types_->get_string(), FunctionArgumentTypeOptions().set_cardinality(
                                     FunctionArgumentType::REPEATED));
       function->AddSignature(
-          {ARG_TYPE_ARBITRARY,
+          {ARG_KIND_EXPR_ARBITRARY,
            {positional, repeated_supports_alias, repeated_not_supports_alias},
            /*context_id=*/-1});
     }
@@ -4533,13 +5291,13 @@ void SampleCatalogImpl::LoadFunctions2() {
   // Window function with named lambda.
   {
     FunctionArgumentType named_lambda = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1}, ARG_TYPE_ANY_1,
+        {ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_argument_name("named_lambda",
                                                         kNamedOnly));
     Function* function =
         new Function("afn_named_lambda", "sample_functions", Function::ANALYTIC,
-                     {{ARG_TYPE_ANY_1,
-                       {ARG_TYPE_ANY_1, named_lambda},
+                     {{ARG_KIND_EXPR_ANY_1,
+                       {ARG_KIND_EXPR_ANY_1, named_lambda},
                        /*context_id=*/-1}},
                      FunctionOptions(FunctionOptions::ORDER_REQUIRED,
                                      /*window_framing_support_in=*/false));
@@ -4548,27 +5306,27 @@ void SampleCatalogImpl::LoadFunctions2() {
   // Scalar function with named lambda.
   {
     FunctionArgumentType named_lambda = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1}, ARG_TYPE_ANY_1,
+        {ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_argument_name("named_lambda",
                                                         kNamedOnly));
     Function* function =
         new Function("fn_named_lambda", "sample_functions", Function::SCALAR,
-                     {{ARG_TYPE_ANY_1,
-                       {ARG_TYPE_ANY_1, named_lambda},
+                     {{ARG_KIND_EXPR_ANY_1,
+                       {ARG_KIND_EXPR_ANY_1, named_lambda},
                        /*context_id=*/-1}});
     catalog_->AddOwnedFunction(function);
   }
   // Aggregate function with named lambda.
   {
     FunctionArgumentType named_lambda = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1}, ARG_TYPE_ANY_1,
+        {ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions()
             .set_argument_name("named_lambda", kNamedOnly)
             .set_is_not_aggregate());
     Function* function = new Function("fn_aggregate_named_lambda",
                                       "sample_functions", Function::AGGREGATE,
-                                      {{ARG_TYPE_ANY_1,
-                                        {ARG_TYPE_ANY_1, named_lambda},
+                                      {{ARG_KIND_EXPR_ANY_1,
+                                        {ARG_KIND_EXPR_ANY_1, named_lambda},
                                         /*context_id=*/-1}});
     catalog_->AddOwnedFunction(function);
   }
@@ -4577,17 +5335,17 @@ void SampleCatalogImpl::LoadFunctions2() {
   // order.
   {
     FunctionArgumentType named_1 = FunctionArgumentType(
-        ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_name(
-                            "named_1", kPositionalOrNamed));
+        ARG_KIND_EXPR_ANY_1, FunctionArgumentTypeOptions().set_argument_name(
+                                 "named_1", kPositionalOrNamed));
     FunctionArgumentType named_2 = FunctionArgumentType(
-        ARG_TYPE_ANY_2, FunctionArgumentTypeOptions().set_argument_name(
-                            "named_2", kPositionalOrNamed));
+        ARG_KIND_EXPR_ANY_2, FunctionArgumentTypeOptions().set_argument_name(
+                                 "named_2", kPositionalOrNamed));
     FunctionArgumentType named_only_lambda = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_2}, ARG_TYPE_ANY_3,
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_2}, ARG_KIND_EXPR_ANY_3,
         FunctionArgumentTypeOptions().set_argument_name("named_lambda",
                                                         kPositionalOrNamed));
     std::vector<FunctionSignature> function_signatures = {
-        {ARG_TYPE_ANY_3,
+        {ARG_KIND_EXPR_ANY_3,
          {named_1, named_2, named_only_lambda},
          /*context_id=*/-1}};
     catalog_->AddOwnedFunction(
@@ -4597,16 +5355,16 @@ void SampleCatalogImpl::LoadFunctions2() {
   // Function with multiple named arguments.
   {
     FunctionArgumentType named_lambda_1 = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1}, ARG_TYPE_ANY_2,
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_2,
         FunctionArgumentTypeOptions().set_argument_name("named_lambda_1",
                                                         kPositionalOrNamed));
     FunctionArgumentType named_lambda_2 = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1}, ARG_TYPE_ANY_3,
+        {ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_3,
         FunctionArgumentTypeOptions().set_argument_name("named_lambda_2",
                                                         kPositionalOrNamed));
     std::vector<FunctionSignature> function_signatures = {
-        {ARG_TYPE_ANY_3,
-         {ARG_TYPE_ANY_1, named_lambda_1, named_lambda_2},
+        {ARG_KIND_EXPR_ANY_3,
+         {ARG_KIND_EXPR_ANY_1, named_lambda_1, named_lambda_2},
          /*context_id=*/-1}};
     catalog_->AddOwnedFunction(
         new Function("fn_multiple_named_lambda_arguments", "sample_functions",
@@ -4679,7 +5437,7 @@ void SampleCatalogImpl::LoadFunctions2() {
                                                "sample_functions", mode);
     // Signature with custom annotation callback.
     const StructType* struct_type;
-    GOOGLESQL_CHECK_OK(type_factory()->MakeStructType(
+    GOOGLESQL_RETURN_IF_ERROR(type_factory()->MakeStructType(
         {{"key", type_factory()->get_string()},
          {"value", type_factory()->get_string()}},
         &struct_type));
@@ -4703,13 +5461,14 @@ void SampleCatalogImpl::LoadFunctions2() {
     const Type* array_string_type = nullptr;
     const Type* result_array_type = nullptr;
     {
-      GOOGLESQL_CHECK_OK(types_->MakeArrayType(types_->get_string(), &array_string_type));
+      GOOGLESQL_RETURN_IF_ERROR(
+          types_->MakeArrayType(types_->get_string(), &array_string_type));
       const StructType* struct_type;
-      GOOGLESQL_CHECK_OK(type_factory()->MakeStructType(
+      GOOGLESQL_RETURN_IF_ERROR(type_factory()->MakeStructType(
           {{"key", type_factory()->get_string()},
            {"value", type_factory()->get_string()}},
           &struct_type));
-      GOOGLESQL_CHECK_OK(types_->MakeArrayType(struct_type, &result_array_type));
+      GOOGLESQL_RETURN_IF_ERROR(types_->MakeArrayType(struct_type, &result_array_type));
     }
     // Signature with custom annotation callback.
     function->AddSignature(
@@ -4757,8 +5516,8 @@ void SampleCatalogImpl::LoadFunctions2() {
   {
     auto function = std::make_unique<Function>(
         "fn_req_any_array_returns_any_arg", "sample_functions", mode);
-    function->AddSignature({ARG_TYPE_ANY_1,
-                            {ARG_ARRAY_TYPE_ANY_1},
+    function->AddSignature({ARG_KIND_EXPR_ANY_1,
+                            {ARG_KIND_EXPR_ARRAY_ANY_1},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4766,8 +5525,8 @@ void SampleCatalogImpl::LoadFunctions2() {
   {
     auto function = std::make_unique<Function>(
         "fn_map_type_any_1_2_return_type_any_1", "sample_functions", mode);
-    function->AddSignature({ARG_TYPE_ANY_1,
-                            {ARG_MAP_TYPE_ANY_1_2},
+    function->AddSignature({ARG_KIND_EXPR_ANY_1,
+                            {ARG_KIND_EXPR_MAP_ANY_1_2},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4775,8 +5534,8 @@ void SampleCatalogImpl::LoadFunctions2() {
   {
     auto function = std::make_unique<Function>(
         "fn_map_type_any_1_2_return_type_any_2", "sample_functions", mode);
-    function->AddSignature({ARG_TYPE_ANY_2,
-                            {ARG_MAP_TYPE_ANY_1_2},
+    function->AddSignature({ARG_KIND_EXPR_ANY_2,
+                            {ARG_KIND_EXPR_MAP_ANY_1_2},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4787,10 +5546,10 @@ void SampleCatalogImpl::LoadFunctions2() {
     auto function = std::make_unique<Function>(
         "fn_req_map_type_any_1_2_req_any_1_opt_any_2_returns_any_2",
         "sample_functions", mode);
-    function->AddSignature({ARG_TYPE_ANY_2,
-                            {ARG_MAP_TYPE_ANY_1_2,
-                             ARG_TYPE_ANY_1,
-                             {ARG_TYPE_ANY_2, FunctionEnums::OPTIONAL}},
+    function->AddSignature({ARG_KIND_EXPR_ANY_2,
+                            {ARG_KIND_EXPR_MAP_ANY_1_2,
+                             ARG_KIND_EXPR_ANY_1,
+                             {ARG_KIND_EXPR_ANY_2, FunctionEnums::OPTIONAL}},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4799,8 +5558,8 @@ void SampleCatalogImpl::LoadFunctions2() {
   {
     auto function = std::make_unique<Function>(
         "fn_any_1_any_2_return_map_type_any_1_2", "sample_functions", mode);
-    function->AddSignature({ARG_MAP_TYPE_ANY_1_2,
-                            {ARG_TYPE_ANY_1, ARG_TYPE_ANY_2},
+    function->AddSignature({ARG_KIND_EXPR_MAP_ANY_1_2,
+                            {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_2},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4809,7 +5568,7 @@ void SampleCatalogImpl::LoadFunctions2() {
     auto function = std::make_unique<Function>(
         "fn_map_type_any_1_2_any_2_return_bool", "sample_functions", mode);
     function->AddSignature({types_->get_bool(),
-                            {ARG_MAP_TYPE_ANY_1_2, ARG_TYPE_ANY_2},
+                            {ARG_KIND_EXPR_MAP_ANY_1_2, ARG_KIND_EXPR_ANY_2},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4845,9 +5604,9 @@ void SampleCatalogImpl::LoadFunctions2() {
   {
     auto function = std::make_unique<Function>(
         "fn_alternating_repeated_arg_pair", "sample_functions", mode);
-    function->AddSignature({ARG_MAP_TYPE_ANY_1_2,
-                            {{ARG_TYPE_ANY_1, FunctionEnums::REPEATED},
-                             {ARG_TYPE_ANY_2, FunctionEnums::REPEATED}},
+    function->AddSignature({ARG_KIND_EXPR_MAP_ANY_1_2,
+                            {{ARG_KIND_EXPR_ANY_1, FunctionEnums::REPEATED},
+                             {ARG_KIND_EXPR_ANY_2, FunctionEnums::REPEATED}},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4855,10 +5614,10 @@ void SampleCatalogImpl::LoadFunctions2() {
   {
     auto function = std::make_unique<Function>(
         "fn_alternating_repeated_arg_triple", "sample_functions", mode);
-    function->AddSignature({ARG_MAP_TYPE_ANY_1_2,
-                            {{ARG_TYPE_ANY_1, FunctionEnums::REPEATED},
-                             {ARG_TYPE_ANY_2, FunctionEnums::REPEATED},
-                             {ARG_TYPE_ANY_3, FunctionEnums::REPEATED}},
+    function->AddSignature({ARG_KIND_EXPR_MAP_ANY_1_2,
+                            {{ARG_KIND_EXPR_ANY_1, FunctionEnums::REPEATED},
+                             {ARG_KIND_EXPR_ANY_2, FunctionEnums::REPEATED},
+                             {ARG_KIND_EXPR_ANY_3, FunctionEnums::REPEATED}},
                             /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
@@ -4868,11 +5627,14 @@ void SampleCatalogImpl::LoadFunctions2() {
     auto function = std::make_unique<Function>(
         "fn_array_type_any_1_and_array_type_any_2_return_map_type_any_1_2",
         "sample_functions", mode);
-    function->AddSignature({ARG_MAP_TYPE_ANY_1_2,
-                            {ARG_ARRAY_TYPE_ANY_1, ARG_ARRAY_TYPE_ANY_2},
-                            /*context_id=*/-1});
+    function->AddSignature(
+        {ARG_KIND_EXPR_MAP_ANY_1_2,
+         {ARG_KIND_EXPR_ARRAY_ANY_1, ARG_KIND_EXPR_ARRAY_ANY_2},
+         /*context_id=*/-1});
     catalog_->AddOwnedFunction(std::move(function));
   }
+
+  return absl::OkStatus();
 
   // Do not add more to this function. Instead, use RegisterForSampleCatalog
   // inside an unnamed namespace. Context: Under some compilation modes all
@@ -4891,7 +5653,7 @@ RegisterForSampleCatalog fn_range_any_1_returns_bool =
       catalog_->AddOwnedFunction(new Function(
           "fn_range_any_1_returns_bool", "sample_functions", Function::SCALAR,
           {{types_->get_bool(),
-            {ARG_RANGE_TYPE_ANY_1},
+            {ARG_KIND_EXPR_RANGE_ANY_1},
             /*context_id=*/-1}}));
     });
 RegisterForSampleCatalog fn_range_any_1_any_1_returns_bool =
@@ -4904,12 +5666,12 @@ RegisterForSampleCatalog fn_range_any_1_any_1_returns_bool =
           new Function("fn_range_any_1_any_1_returns_bool", "sample_functions",
                        Function::SCALAR,
                        {{types_->get_bool(),
-                         {ARG_RANGE_TYPE_ANY_1, ARG_TYPE_ANY_1},
+                         {ARG_KIND_EXPR_RANGE_ANY_1, ARG_KIND_EXPR_ANY_1},
                          /*context_id=*/-1}}));
     });
 }  // namespace
 
-void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
+absl::Status SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
   // Adds an scalar function that takes multiple optional named arguments with
   // some of them having default values.
   Function* function = new Function(
@@ -4956,16 +5718,16 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
                 FunctionArgumentTypeOptions()
                     .set_argument_name("a0", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::REQUIRED)},
-               {ARG_TYPE_ANY_1,
+               {ARG_KIND_EXPR_ANY_1,
                 FunctionArgumentTypeOptions()
                     .set_argument_name("o0", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::OPTIONAL)},
-               {ARG_TYPE_ANY_2,
+               {ARG_KIND_EXPR_ANY_2,
                 FunctionArgumentTypeOptions()
                     .set_argument_name("o1", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_default(values::String("o1_default"))},
-               {ARG_TYPE_ANY_1,
+               {ARG_KIND_EXPR_ANY_1,
                 FunctionArgumentTypeOptions()
                     .set_argument_name("o2", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
@@ -4990,16 +5752,16 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
                 FunctionArgumentTypeOptions()
                     .set_argument_name("a0", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::REQUIRED)},
-               {ARG_TYPE_ANY_1,
+               {ARG_KIND_EXPR_ANY_1,
                 FunctionArgumentTypeOptions()
                     .set_argument_name("o0", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::OPTIONAL)},
-               {ARG_TYPE_ANY_2,
+               {ARG_KIND_EXPR_ANY_2,
                 FunctionArgumentTypeOptions()
                     .set_argument_name("o1", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_default(values::String("o1_default"))},
-               {ARG_TYPE_ANY_1,
+               {ARG_KIND_EXPR_ANY_1,
                 FunctionArgumentTypeOptions()
                     .set_argument_name("o2", kPositionalOrNamed)
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
@@ -5053,7 +5815,7 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
                 FunctionArgumentTypeOptions()
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_default(values::String("abc"))},
-               {ARG_TYPE_ANY_1,
+               {ARG_KIND_EXPR_ANY_1,
                 FunctionArgumentTypeOptions()
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_default(values::String("def"))},
@@ -5075,13 +5837,14 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
                {types_->get_string(),
                 FunctionArgumentTypeOptions().set_cardinality(
                     FunctionArgumentType::REQUIRED)},
-               {ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_cardinality(
-                                    FunctionArgumentType::OPTIONAL)},
-               {ARG_TYPE_ANY_2,
+               {ARG_KIND_EXPR_ANY_1,
+                FunctionArgumentTypeOptions().set_cardinality(
+                    FunctionArgumentType::OPTIONAL)},
+               {ARG_KIND_EXPR_ANY_2,
                 FunctionArgumentTypeOptions()
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_default(values::String("o1_default"))},
-               {ARG_TYPE_ANY_1,
+               {ARG_KIND_EXPR_ANY_1,
                 FunctionArgumentTypeOptions()
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_default(values::Int32(5))},
@@ -5119,16 +5882,17 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
            /*context_id=*/-1},
       },
       FunctionOptions());
-  GOOGLESQL_CHECK_OK(function->signatures()[0].IsValid(ProductMode::PRODUCT_EXTERNAL));
+  GOOGLESQL_RETURN_IF_ERROR(
+      function->signatures()[0].IsValid(ProductMode::PRODUCT_EXTERNAL));
   catalog_->AddOwnedFunction(function);
 
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_optional_named_default_args"},
       {FunctionSignature(
-          /*result_type=*/ARG_TYPE_RELATION,
+          /*result_type=*/ARG_KIND_RELATION,
           /*arguments=*/
           {
-              {ARG_TYPE_RELATION,
+              {ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("relation", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::REQUIRED)},
@@ -5156,10 +5920,10 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_optional_named_default_args_templated"},
       {FunctionSignature(
-          /*result_type=*/ARG_TYPE_RELATION,
+          /*result_type=*/ARG_KIND_RELATION,
           /*arguments=*/
           {
-              {ARG_TYPE_RELATION,
+              {ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("relation", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::REQUIRED)},
@@ -5167,16 +5931,16 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
                FunctionArgumentTypeOptions()
                    .set_argument_name("r1", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::REQUIRED)},
-              {ARG_TYPE_ANY_1,
+              {ARG_KIND_EXPR_ANY_1,
                FunctionArgumentTypeOptions()
                    .set_argument_name("o0", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)},
-              {ARG_TYPE_ANY_2,
+              {ARG_KIND_EXPR_ANY_2,
                FunctionArgumentTypeOptions()
                    .set_argument_name("o1", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)
                    .set_default(values::Double(3.14))},
-              {ARG_TYPE_ANY_1,
+              {ARG_KIND_EXPR_ANY_1,
                FunctionArgumentTypeOptions()
                    .set_argument_name("o2", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)
@@ -5187,10 +5951,10 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_optional_unnamed_default_args"},
       {FunctionSignature(
-          /*result_type=*/ARG_TYPE_RELATION,
+          /*result_type=*/ARG_KIND_RELATION,
           /*arguments=*/
           {
-              {ARG_TYPE_RELATION, FunctionArgumentTypeOptions().set_cardinality(
+              {ARG_KIND_RELATION, FunctionArgumentTypeOptions().set_cardinality(
                                       FunctionArgumentType::REQUIRED)},
               {types_->get_bool(),
                FunctionArgumentTypeOptions().set_cardinality(
@@ -5212,21 +5976,22 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_optional_unnamed_default_args_templated"},
       {FunctionSignature(
-          /*result_type=*/ARG_TYPE_RELATION,
+          /*result_type=*/ARG_KIND_RELATION,
           /*arguments=*/
           {
-              {ARG_TYPE_RELATION, FunctionArgumentTypeOptions().set_cardinality(
+              {ARG_KIND_RELATION, FunctionArgumentTypeOptions().set_cardinality(
                                       FunctionArgumentType::REQUIRED)},
               {types_->get_bool(),
                FunctionArgumentTypeOptions().set_cardinality(
                    FunctionArgumentType::REQUIRED)},
-              {ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_cardinality(
-                                   FunctionArgumentType::OPTIONAL)},
-              {ARG_TYPE_ANY_2,
+              {ARG_KIND_EXPR_ANY_1,
+               FunctionArgumentTypeOptions().set_cardinality(
+                   FunctionArgumentType::OPTIONAL)},
+              {ARG_KIND_EXPR_ANY_2,
                FunctionArgumentTypeOptions()
                    .set_cardinality(FunctionArgumentType::OPTIONAL)
                    .set_default(values::String("xyz"))},
-              {ARG_TYPE_ANY_1,
+              {ARG_KIND_EXPR_ANY_1,
                FunctionArgumentTypeOptions()
                    .set_cardinality(FunctionArgumentType::OPTIONAL)
                    .set_default(values::Int32(-1))},
@@ -5237,10 +6002,10 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_optional_unnamed_named"},
       {FunctionSignature(
-          /*result_type=*/ARG_TYPE_RELATION,
+          /*result_type=*/ARG_KIND_RELATION,
           /*arguments=*/
           {
-              {ARG_TYPE_RELATION, FunctionArgumentTypeOptions().set_cardinality(
+              {ARG_KIND_RELATION, FunctionArgumentTypeOptions().set_cardinality(
                                       FunctionArgumentType::REQUIRED)},
               {types_->get_bool(),
                FunctionArgumentTypeOptions().set_cardinality(
@@ -5260,10 +6025,10 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_optional_unnamed_named_default"},
       {FunctionSignature(
-          /*result_type=*/ARG_TYPE_RELATION,
+          /*result_type=*/ARG_KIND_RELATION,
           /*arguments=*/
           {
-              {ARG_TYPE_RELATION, FunctionArgumentTypeOptions().set_cardinality(
+              {ARG_KIND_RELATION, FunctionArgumentTypeOptions().set_cardinality(
                                       FunctionArgumentType::REQUIRED)},
               {types_->get_bool(),
                FunctionArgumentTypeOptions().set_cardinality(
@@ -5306,15 +6071,16 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
       },
       FunctionOptions());
   catalog_->AddOwnedFunction(function);
-  GOOGLESQL_CHECK_OK(function->signatures()[0].IsValid(ProductMode::PRODUCT_EXTERNAL));
+  GOOGLESQL_RETURN_IF_ERROR(
+      function->signatures()[0].IsValid(ProductMode::PRODUCT_EXTERNAL));
 
   // A scalar function with one optional argument of any type, returning that
   // type.
   function = new Function("fn_optional_any_arg_returns_any", "sample_functions",
                           Function::SCALAR,
                           /*function_signatures=*/
-                          {{ARG_TYPE_ANY_1,
-                            {{ARG_TYPE_ANY_1, FunctionEnums::OPTIONAL}},
+                          {{ARG_KIND_EXPR_ANY_1,
+                            {{ARG_KIND_EXPR_ANY_1, FunctionEnums::OPTIONAL}},
                             /*context_id=*/-1}},
                           FunctionOptions());
   catalog_->AddOwnedFunction(std::move(function));
@@ -5324,30 +6090,32 @@ void SampleCatalogImpl::LoadFunctionsWithDefaultArguments() {
   function = new Function("fn_optional_any_arg_returns_any_array",
                           "sample_functions", Function::SCALAR,
                           /*function_signatures=*/
-                          {{ARG_ARRAY_TYPE_ANY_1,
-                            {{ARG_TYPE_ANY_1, FunctionEnums::OPTIONAL}},
+                          {{ARG_KIND_EXPR_ARRAY_ANY_1,
+                            {{ARG_KIND_EXPR_ANY_1, FunctionEnums::OPTIONAL}},
                             /*context_id=*/-1}},
                           FunctionOptions());
   catalog_->AddOwnedFunction(std::move(function));
 
   // A scalar function with a required array of any type and an optional of any
   // type, returning the element type.
-  function = new Function(
-      "fn_req_any_array_optional_any_arg_returns_any_arg", "sample_functions",
-      Function::SCALAR,
-      /*function_signatures=*/
-      {{ARG_TYPE_ANY_1,
-        {ARG_ARRAY_TYPE_ANY_1, {ARG_TYPE_ANY_1, FunctionEnums::OPTIONAL}},
-        /*context_id=*/-1}},
-      FunctionOptions());
+  function = new Function("fn_req_any_array_optional_any_arg_returns_any_arg",
+                          "sample_functions", Function::SCALAR,
+                          /*function_signatures=*/
+                          {{ARG_KIND_EXPR_ANY_1,
+                            {ARG_KIND_EXPR_ARRAY_ANY_1,
+                             {ARG_KIND_EXPR_ANY_1, FunctionEnums::OPTIONAL}},
+                            /*context_id=*/-1}},
+                          FunctionOptions());
   catalog_->AddOwnedFunction(std::move(function));
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
+absl::Status SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   // Return an empty struct as the result type for now.
   // The function resolver will dynamically compute a different result type at
   // analysis time based on the function SQL body.
-  const FunctionArgumentType result_type(ARG_TYPE_ARBITRARY);
+  const FunctionArgumentType result_type(ARG_KIND_EXPR_ARBITRARY);
   int context_id = 0;
 
   // Add a UDF with a simple valid templated SQL body.
@@ -5388,7 +6156,8 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   // Add a UDF with a valid templated SQL body that refers to an argument.
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_return_any_scalar_arg"},
-      FunctionSignature(result_type, {FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(result_type,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("x")));
 
@@ -5397,7 +6166,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_arg_plus_integer"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("x + 42")));
@@ -5408,7 +6177,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_arg_plus_integer_accept_dollars_col_name"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"$col1"},
@@ -5419,7 +6188,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_arg_concat_string"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5430,9 +6199,9 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_arg_concat_two_strings"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED),
-                         FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                         FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x", "y"},
@@ -5444,7 +6213,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_arg_proto_field_access"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5534,9 +6303,9 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_duplicate_arg_names"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED),
-                         FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                         FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x", "x"},
@@ -5545,7 +6314,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_like_any"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5568,7 +6337,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_one_templated_arg_return_int32"},
       FunctionSignature(types::Int32Type(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("x")));
@@ -5580,7 +6349,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_one_templated_arg_return_int64"},
       FunctionSignature(types::Int64Type(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("x")));
@@ -5592,7 +6361,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_one_templated_arg_return_date"},
       FunctionSignature(types::DateType(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("x")));
@@ -5605,11 +6374,11 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   std::vector<StructType::StructField> fields;
   fields.emplace_back("int_field", types::Int64Type());
   fields.emplace_back("string_field", types::StringType());
-  GOOGLESQL_CHECK_OK(type_factory()->MakeStructType(fields, &return_type));
+  GOOGLESQL_RETURN_IF_ERROR(type_factory()->MakeStructType(fields, &return_type));
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_one_templated_arg_return_struct_int64_string"},
       FunctionSignature(return_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("x")));
@@ -5621,7 +6390,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_return_42_return_type_string"},
       FunctionSignature(types::StringType(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("42")));
@@ -5629,7 +6398,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_return_42_return_type_int32"},
       FunctionSignature(types::Int32Type(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("42")));
@@ -5637,7 +6406,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_return_999999999999999_return_type_int32"},
       FunctionSignature(types::Int32Type(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5645,9 +6414,9 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
 
   catalog_->AddOwnedFunction(std::make_unique<TemplatedSQLFunction>(
       std::vector<std::string>{"udf_any_and_string_args_return_string_arg"},
-      FunctionSignature(FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                              FunctionArgumentType::REQUIRED),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED),
                          FunctionArgumentType(types::StringType(),
                                               FunctionArgumentType::REQUIRED)},
@@ -5657,9 +6426,9 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
 
   catalog_->AddOwnedFunction(std::make_unique<TemplatedSQLFunction>(
       std::vector<std::string>{"udf_any_and_double_args_return_any"},
-      FunctionSignature(FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                              FunctionArgumentType::REQUIRED),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED),
                          FunctionArgumentType(types::DoubleType(),
                                               FunctionArgumentType::REQUIRED)},
@@ -5668,13 +6437,13 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
       ParseResumeLocation::FromString("IF(x < 0, 'a', 'b')")));
 
   const ArrayType* double_array_type = nullptr;
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       type_factory()->MakeArrayType(types::DoubleType(), &double_array_type));
   catalog_->AddOwnedFunction(std::make_unique<TemplatedSQLFunction>(
       std::vector<std::string>{"udf_any_and_double_array_args_return_any"},
-      FunctionSignature(FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                              FunctionArgumentType::REQUIRED),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED),
                          FunctionArgumentType(double_array_type,
                                               FunctionArgumentType::REQUIRED)},
@@ -5746,9 +6515,9 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(std::make_unique<TemplatedSQLFunction>(
       std::vector<std::string>{"uda_any_and_string_args_return_string"},
       FunctionSignature(
-          FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                FunctionArgumentType::REQUIRED),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::REQUIRED),
            FunctionArgumentType(types::StringType(), required_non_agg_options)},
           context_id++),
@@ -5758,25 +6527,25 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
 
   catalog_->AddOwnedFunction(std::make_unique<TemplatedSQLFunction>(
       std::vector<std::string>{"uda_any_and_double_args_return_any"},
-      FunctionSignature(
-          FunctionArgumentType(ARG_TYPE_ARBITRARY,
-                               FunctionArgumentType::REQUIRED),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY, required_non_agg_options),
-           FunctionArgumentType(types::DoubleType(),
-                                FunctionArgumentType::REQUIRED)},
-          context_id++),
+      FunctionSignature(FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
+                                             FunctionArgumentType::REQUIRED),
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
+                                              required_non_agg_options),
+                         FunctionArgumentType(types::DoubleType(),
+                                              FunctionArgumentType::REQUIRED)},
+                        context_id++),
       /*argument_names=*/std::vector<std::string>{"a", "x"},
       ParseResumeLocation::FromString("STRING_AGG(IF(x < 0, 'a', 'b'))"),
       Function::AGGREGATE));
 
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       type_factory()->MakeArrayType(types::DoubleType(), &double_array_type));
   catalog_->AddOwnedFunction(std::make_unique<TemplatedSQLFunction>(
       std::vector<std::string>{"uda_any_and_double_array_args_return_any"},
       FunctionSignature(
-          FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                FunctionArgumentType::REQUIRED),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::REQUIRED),
            FunctionArgumentType(double_array_type, required_non_agg_options)},
           context_id++),
@@ -5791,7 +6560,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   // See discussion in: b/285159284.
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"WrappedGroupRows"},
-      FunctionSignature(result_type, {ARG_TYPE_ARBITRARY}, context_id++),
+      FunctionSignature(result_type, {ARG_KIND_EXPR_ARBITRARY}, context_id++),
       /*argument_names=*/{"e"},
       ParseResumeLocation::FromString(
           R"sql(
@@ -5802,21 +6571,21 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
 
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"WrappedMultiLevelAgg"},
-      FunctionSignature(result_type, {ARG_TYPE_ARBITRARY}, context_id++),
+      FunctionSignature(result_type, {ARG_KIND_EXPR_ARBITRARY}, context_id++),
       /*argument_names=*/{"e"},
       ParseResumeLocation::FromString("SUM(e GROUP BY e)"),
       Function::AGGREGATE));
 
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"WrappedAggWithWhereModifier"},
-      FunctionSignature(result_type, {ARG_TYPE_ARBITRARY}, context_id++),
+      FunctionSignature(result_type, {ARG_KIND_EXPR_ARBITRARY}, context_id++),
       /*argument_names=*/{"e"},
       ParseResumeLocation::FromString("SUM(e WHERE e > 10)"),
       Function::AGGREGATE));
 
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"WrappedAggWithHavingModifier"},
-      FunctionSignature(result_type, {ARG_TYPE_ARBITRARY}, context_id++),
+      FunctionSignature(result_type, {ARG_KIND_EXPR_ARBITRARY}, context_id++),
       /*argument_names=*/{"e"},
       ParseResumeLocation::FromString("SUM(e GROUP BY e HAVING COUNT(*) > 10)"),
       Function::AGGREGATE));
@@ -5824,7 +6593,8 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   // Invalid UDA
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"InvalidReferenceUda"},
-      FunctionSignature(result_type, {ARG_TYPE_ARBITRARY, ARG_TYPE_ARBITRARY},
+      FunctionSignature(result_type,
+                        {ARG_KIND_EXPR_ARBITRARY, ARG_KIND_EXPR_ARBITRARY},
                         context_id++),
       /*argument_names=*/{"value", "key"},
       ParseResumeLocation::FromString("SUM(value GROUP BY key)"),
@@ -5863,7 +6633,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
           std::vector<std::string>{"templated_scalar_definer_rights"},
           FunctionSignature(
               result_type,
-              {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+              {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                     FunctionArgumentType::REQUIRED)},
               context_id++),
           /*argument_names=*/std::vector<std::string>{"x"},
@@ -5879,7 +6649,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_collate_function"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5890,7 +6660,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_collate_function_in_array"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5901,7 +6671,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_collate_function_in_struct"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5912,7 +6682,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_collate_function_return_string"},
       FunctionSignature(types::StringType(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5923,7 +6693,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"uda_templated_aggregate_with_min_collate_function"},
       FunctionSignature(result_type,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
@@ -5935,7 +6705,7 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"udf_templated_typeof_function"},
       FunctionSignature(types::StringType(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"}, ParseResumeLocation::FromString("TYPEOF(x)")));
@@ -5945,11 +6715,13 @@ void SampleCatalogImpl::LoadTemplatedSQLUDFs() {
   catalog_->AddOwnedFunction(new TemplatedSQLFunction(
       {"nested_udf_templated_typeof_function"},
       FunctionSignature(types::StringType(),
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*argument_names=*/{"x"},
       ParseResumeLocation::FromString("udf_templated_typeof_function(x)")));
+
+  return absl::OkStatus();
 }
 
 absl::Status SampleCatalogImpl::LoadAmlBasedPropertyGraphs() {
@@ -6091,13 +6863,25 @@ absl::Status SampleCatalogImpl::LoadAmlBasedPropertyGraphs() {
   AddOwnedTable(group);
 
   GOOGLESQL_RETURN_IF_ERROR(LoadBasicAmlPropertyGraph());
+  GOOGLESQL_RETURN_IF_ERROR(LoadBasicAmlWithTimestampsPropertyGraph());
   GOOGLESQL_RETURN_IF_ERROR(LoadEnhancedAmlPropertyGraph());
 
   return absl::OkStatus();
 }
 
 absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraph() {
-  std::vector<std::string> property_graph_name_path{"aml"};
+  return LoadBasicAmlPropertyGraphImpl("aml", /*with_timestamps=*/false);
+}
+
+absl::Status SampleCatalogImpl::LoadBasicAmlWithTimestampsPropertyGraph() {
+  return LoadBasicAmlPropertyGraphImpl("aml_with_timestamps",
+                                       /*with_timestamps=*/true);
+}
+
+absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraphImpl(
+    std::string property_graph_name_path_arg, bool with_timestamps) {
+  std::vector<std::string> property_graph_name_path{
+      std::move(property_graph_name_path_arg)};
 
   const Table* person = nullptr;
   const Table* account = nullptr;
@@ -6123,6 +6907,14 @@ absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraph() {
           "targetAccountId", property_graph_name_path, types_->get_int64());
   auto amount_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
       "amount", property_graph_name_path, types_->get_uint64());
+  std::unique_ptr<SimpleGraphPropertyDeclaration> time_property_dcl;
+  std::unique_ptr<SimpleGraphPropertyDeclaration> startdate_property_dcl;
+  if (with_timestamps) {
+    time_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+        "time", property_graph_name_path, types_->get_timestamp());
+    startdate_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+        "startDate", property_graph_name_path, types_->get_timestamp());
+  }
   auto name_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
       "name", property_graph_name_path, types_->get_string());
   auto bday_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
@@ -6167,6 +6959,9 @@ absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraph() {
   auto property_dcls_person_own_acc =
       absl::flat_hash_set<const GraphPropertyDeclaration*>{
           personId_property_dcl.get(), accountId_property_dcl.get()};
+  if (with_timestamps) {
+    property_dcls_person_own_acc.insert(startdate_property_dcl.get());
+  }
   auto person_own_acc_label = std::make_unique<SimpleGraphElementLabel>(
       "PersonOwnAccount", property_graph_name_path,
       property_dcls_person_own_acc);
@@ -6175,6 +6970,9 @@ absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraph() {
       absl::flat_hash_set<const GraphPropertyDeclaration*>{
           accountId_property_dcl.get(), target_account_id_property_dcl.get(),
           amount_property_dcl.get()};
+  if (with_timestamps) {
+    property_dcls_transfer.insert(time_property_dcl.get());
+  }
   auto transfer_label = std::make_unique<SimpleGraphElementLabel>(
       "Transfer", property_graph_name_path, property_dcls_transfer);
 
@@ -6339,6 +7137,18 @@ absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraph() {
   owned_resolved_graph_property_definitions_.push_back(
       std::move(pa_accountid_col_ref));
 
+  if (with_timestamps) {
+    auto startdate_col_ref = MakeResolvedCatalogColumnRef(
+        types_->get_timestamp(), person_own_acc->FindColumnByName("startDate"));
+    auto startdate_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+        startdate_property_dcl.get(), "startDate");
+    InternalPropertyGraph::InternalSetResolvedExpr(startdate_prop_def.get(),
+                                                   startdate_col_ref.get());
+    property_defs_person_own_acc.push_back(std::move(startdate_prop_def));
+    owned_resolved_graph_property_definitions_.push_back(
+        std::move(startdate_col_ref));
+  }
+
   auto person_own_acc_edge_table = std::make_unique<const SimpleGraphEdgeTable>(
       person_own_acc->Name(), property_graph_name_path, person_own_acc,
       std::vector<int>{0, 1},
@@ -6382,6 +7192,18 @@ absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraph() {
   owned_resolved_graph_property_definitions_.push_back(
       std::move(amount_col_ref));
 
+  if (with_timestamps) {
+    auto time_col_ref = MakeResolvedCatalogColumnRef(
+        types_->get_timestamp(), transfer->FindColumnByName("time"));
+    auto time_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+        time_property_dcl.get(), "time");
+    InternalPropertyGraph::InternalSetResolvedExpr(time_prop_def.get(),
+                                                   time_col_ref.get());
+    property_defs_transfer.push_back(std::move(time_prop_def));
+    owned_resolved_graph_property_definitions_.push_back(
+        std::move(time_col_ref));
+  }
+
   auto transfer_edge_table = std::make_unique<const SimpleGraphEdgeTable>(
       transfer->Name(), property_graph_name_path, transfer,
       std::vector<int>{0, 1, 2},
@@ -6424,6 +7246,10 @@ absl::Status SampleCatalogImpl::LoadBasicAmlPropertyGraph() {
   property_dcls.push_back(std::move(syndicateid_property_dcl));
   property_dcls.push_back(std::move(syndicatename_property_dcl));
   property_dcls.push_back(std::move(syndicatedata_property_dcl));
+  if (with_timestamps) {
+    property_dcls.push_back(std::move(startdate_property_dcl));
+    property_dcls.push_back(std::move(time_property_dcl));
+  }
 
   auto property_graph = std::make_unique<SimplePropertyGraph>(
       std::move(property_graph_name_path), std::move(node_tables),
@@ -6809,7 +7635,160 @@ absl::Status SampleCatalogImpl::LoadEnhancedAmlPropertyGraph() {
   return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadMultiSrcDstEdgePropertyGraphs() {
+absl::Status SampleCatalogImpl::LoadDmlTestPropertyGraph() {
+  const std::vector<std::string> property_graph_name_path{"aml_dml"};
+
+  // Define the table with writable and non-writable columns.
+  auto* insert_test_table = new SimpleTable(
+      "InsertTestTable",
+      {
+          new SimpleColumn("InsertTestTable", "id", types_->get_int64(),
+                           {.is_writable_column = true}),
+          new SimpleColumn("InsertTestTable", "val", types_->get_string(),
+                           {.is_writable_column = true}),
+          new SimpleColumn("InsertTestTable", "readonly_col",
+                           types_->get_string(), {.is_writable_column = false}),
+      },
+      true /* take_ownership */);
+  GOOGLESQL_RET_CHECK_OK(insert_test_table->SetPrimaryKey({0}));
+  AddOwnedTable(insert_test_table);
+
+  // Property Declaration
+  auto id_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+      "id", property_graph_name_path, types_->get_int64());
+  auto val_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+      "val", property_graph_name_path, types_->get_string());
+  auto readonly_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+      "readonly_col", property_graph_name_path, types_->get_string());
+  auto derived_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+      "derived_col", property_graph_name_path, types_->get_string());
+  auto derived_func_property_dcl =
+      std::make_unique<SimpleGraphPropertyDeclaration>(
+          "derived_func_col", property_graph_name_path, types_->get_string());
+  auto measure_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+      "measure_col", property_graph_name_path, types_->get_int64(),
+      /*type_annotation_map=*/nullptr,
+      GraphPropertyDeclaration::Kind::kMeasure);
+
+  // Labels
+  auto property_dcls = absl::flat_hash_set<const GraphPropertyDeclaration*>{
+      id_property_dcl.get(),           val_property_dcl.get(),
+      readonly_property_dcl.get(),     derived_property_dcl.get(),
+      derived_func_property_dcl.get(), measure_property_dcl.get()};
+  auto label = std::make_unique<SimpleGraphElementLabel>(
+      "TestLabel", property_graph_name_path, property_dcls);
+
+  std::vector<std::unique_ptr<const GraphPropertyDefinition>> property_defs;
+
+  // 1. Simple column ref (writable)
+  auto id_col_ref = MakeResolvedCatalogColumnRef(
+      types_->get_int64(), insert_test_table->FindColumnByName("id"));
+  auto id_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+      id_property_dcl.get(), "id");
+  InternalPropertyGraph::InternalSetResolvedExpr(id_prop_def.get(),
+                                                 id_col_ref.get());
+  property_defs.push_back(std::move(id_prop_def));
+  owned_resolved_graph_property_definitions_.push_back(std::move(id_col_ref));
+
+  // 2. Simple column ref (writable)
+  auto val_col_ref = MakeResolvedCatalogColumnRef(
+      types_->get_string(), insert_test_table->FindColumnByName("val"));
+  auto val_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+      val_property_dcl.get(), "val");
+  InternalPropertyGraph::InternalSetResolvedExpr(val_prop_def.get(),
+                                                 val_col_ref.get());
+  property_defs.push_back(std::move(val_prop_def));
+  owned_resolved_graph_property_definitions_.push_back(std::move(val_col_ref));
+
+  // 3. Simple column ref (non-writable)
+  auto readonly_col_ref = MakeResolvedCatalogColumnRef(
+      types_->get_string(),
+      insert_test_table->FindColumnByName("readonly_col"));
+  auto readonly_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+      readonly_property_dcl.get(), "readonly_col");
+  InternalPropertyGraph::InternalSetResolvedExpr(readonly_prop_def.get(),
+                                                 readonly_col_ref.get());
+  property_defs.push_back(std::move(readonly_prop_def));
+  owned_resolved_graph_property_definitions_.push_back(
+      std::move(readonly_col_ref));
+
+  // 4.1 Derived property (literal)
+  auto derived_expr = MakeResolvedLiteral(Value::String("!"));
+  auto derived_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+      derived_property_dcl.get(), "'!'");
+  InternalPropertyGraph::InternalSetResolvedExpr(derived_prop_def.get(),
+                                                 derived_expr.get());
+  property_defs.push_back(std::move(derived_prop_def));
+  owned_resolved_graph_property_definitions_.push_back(std::move(derived_expr));
+
+  // 4.2 Derived property (function call)
+  std::unique_ptr<const AnalyzerOutput> derived_func_out;
+  AnalyzerOptions options;
+  options.SetLookupCatalogColumnCallback(
+      [insert_test_table](
+          const std::string& column_name) -> absl::StatusOr<const Column*> {
+        const Column* column = insert_test_table->FindColumnByName(column_name);
+        if (column == nullptr) {
+          return absl::NotFoundError(
+              absl::StrCat("Cannot find column ", column_name));
+        }
+        return column;
+      });
+  GOOGLESQL_RET_CHECK_OK(AnalyzeExpression("CONCAT(val, '!')", options, catalog_.get(),
+                                 types_, &derived_func_out));
+
+  auto derived_func_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+      derived_func_property_dcl.get(), "CONCAT(val, '!')");
+  InternalPropertyGraph::InternalSetResolvedExpr(
+      derived_func_prop_def.get(), derived_func_out->resolved_expr());
+  property_defs.push_back(std::move(derived_func_prop_def));
+  sql_object_artifacts_.push_back(std::move(derived_func_out));
+
+  // 5. Measure property
+  auto measure_expr = MakeResolvedLiteral(Value::Int64(0));
+  auto measure_prop_def = std::make_unique<SimpleGraphPropertyDefinition>(
+      measure_property_dcl.get(), "0");
+  InternalPropertyGraph::InternalSetResolvedExpr(measure_prop_def.get(),
+                                                 measure_expr.get());
+  property_defs.push_back(std::move(measure_prop_def));
+  owned_resolved_graph_property_definitions_.push_back(std::move(measure_expr));
+
+  // Node Table
+  auto node_table = std::make_unique<const SimpleGraphNodeTable>(
+      insert_test_table->Name(), property_graph_name_path, insert_test_table,
+      std::vector<int>{0},
+      absl::flat_hash_set<const GraphElementLabel*>{label.get()},
+      std::move(property_defs));
+
+  // Graph
+  std::vector<std::unique_ptr<const GraphNodeTable>> node_tables;
+  node_tables.push_back(std::move(node_table));
+
+  std::vector<std::unique_ptr<const GraphEdgeTable>> edge_tables;
+
+  std::vector<std::unique_ptr<const GraphElementLabel>> labels;
+  labels.push_back(std::move(label));
+
+  std::vector<std::unique_ptr<const GraphPropertyDeclaration>>
+      property_declarations;
+  property_declarations.push_back(std::move(id_property_dcl));
+  property_declarations.push_back(std::move(val_property_dcl));
+  property_declarations.push_back(std::move(readonly_property_dcl));
+  property_declarations.push_back(std::move(derived_property_dcl));
+  property_declarations.push_back(std::move(derived_func_property_dcl));
+  property_declarations.push_back(std::move(measure_property_dcl));
+
+  auto property_graph = std::make_unique<SimplePropertyGraph>(
+      std::move(property_graph_name_path), std::move(node_tables),
+      std::move(edge_tables), std::move(labels),
+      std::move(property_declarations));
+
+  catalog_->AddOwnedPropertyGraph(std::move(property_graph));
+
+  return absl::OkStatus();
+}
+
+absl::Status SampleCatalogImpl::LoadMultiSrcDstEdgePropertyGraphs() {
   const std::vector<std::string> property_graph_name_path{"aml_multi"};
   typedef std::pair<std::string, const Type*> NameAndType;
 
@@ -6818,7 +7797,7 @@ void SampleCatalogImpl::LoadMultiSrcDstEdgePropertyGraphs() {
                                          {"namespace", types_->get_int64()},
                                          {"version", types_->get_int64()},
                                          {"value", types_->get_string()}});
-  GOOGLESQL_CHECK_OK(entity->SetPrimaryKey({0, 1, 2}));
+  GOOGLESQL_RETURN_IF_ERROR(entity->SetPrimaryKey({0, 1, 2}));
   AddOwnedTable(entity);
 
   auto* relation = new SimpleTable(
@@ -6828,7 +7807,7 @@ void SampleCatalogImpl::LoadMultiSrcDstEdgePropertyGraphs() {
                                {"namespace", types_->get_int64()},
                                {"type", types_->get_int64()},
                                {"value", types_->get_string()}});
-  GOOGLESQL_CHECK_OK(relation->SetPrimaryKey({0, 1, 2, 3}));
+  GOOGLESQL_RETURN_IF_ERROR(relation->SetPrimaryKey({0, 1, 2, 3}));
   AddOwnedTable(relation);
 
   // Property Declaration
@@ -6920,6 +7899,8 @@ void SampleCatalogImpl::LoadMultiSrcDstEdgePropertyGraphs() {
       std::move(property_graph_name_path), std::move(node_tables),
       std::move(edge_tables), std::move(labels), std::move(property_dcls));
   catalog_->AddOwnedPropertyGraph(std::move(property_graph));
+
+  return absl::OkStatus();
 }
 
 // The loading function is based on the schema below, featuring dynamic
@@ -6958,7 +7939,8 @@ void SampleCatalogImpl::LoadMultiSrcDstEdgePropertyGraphs() {
 //     DYNAMIC PROPERTIES (edgeJsonProp)
 //  );
 
-void SampleCatalogImpl::LoadPropertyGraphWithDynamicMultiLabelsAndProperties() {
+absl::Status
+SampleCatalogImpl::LoadPropertyGraphWithDynamicMultiLabelsAndProperties() {
   const std::vector<std::string> property_graph_name_path{"aml_dynamic_multi"};
   typedef std::pair<std::string, const Type*> NameAndType;
 
@@ -6969,7 +7951,7 @@ void SampleCatalogImpl::LoadPropertyGraphWithDynamicMultiLabelsAndProperties() {
                                {"nodeLabelCol", types::StringArrayType()},
                                {"code", types_->get_int64()},
                                {"nodeJsonProp", types_->get_json()}});
-  GOOGLESQL_CHECK_OK(graph_dynamic_node_source_table->SetPrimaryKey({0}));
+  GOOGLESQL_RETURN_IF_ERROR(graph_dynamic_node_source_table->SetPrimaryKey({0}));
   AddOwnedTable(graph_dynamic_node_source_table);
 
   auto* graph_dynamic_edge_source_table = new SimpleTable(
@@ -6979,7 +7961,7 @@ void SampleCatalogImpl::LoadPropertyGraphWithDynamicMultiLabelsAndProperties() {
                                {"edgeLabelCol", types_->get_string()},
                                {"category", types_->get_string()},
                                {"edgeJsonProp", types_->get_json()}});
-  GOOGLESQL_CHECK_OK(graph_dynamic_edge_source_table->SetPrimaryKey({0, 1}));
+  GOOGLESQL_RETURN_IF_ERROR(graph_dynamic_edge_source_table->SetPrimaryKey({0, 1}));
   AddOwnedTable(graph_dynamic_edge_source_table);
 
   // Property declarations
@@ -7225,6 +8207,8 @@ void SampleCatalogImpl::LoadPropertyGraphWithDynamicMultiLabelsAndProperties() {
       std::move(property_graph_name_path), std::move(node_tables),
       std::move(edge_tables), std::move(labels), std::move(property_dcls));
   catalog_->AddOwnedPropertyGraph(std::move(property_graph));
+
+  return absl::OkStatus();
 }
 
 // The loading function is based on below schema with dynamic label and
@@ -7262,7 +8246,8 @@ void SampleCatalogImpl::LoadPropertyGraphWithDynamicMultiLabelsAndProperties() {
 //     DYNAMIC LABEL (edgeLabelCol)
 //     DYNAMIC PROPERTIES (edgeJsonProp)
 //  )
-void SampleCatalogImpl::LoadPropertyGraphWithDynamicLabelAndProperties() {
+absl::Status
+SampleCatalogImpl::LoadPropertyGraphWithDynamicLabelAndProperties() {
   const std::vector<std::string> property_graph_name_path{"aml_dynamic"};
   typedef std::pair<std::string, const Type*> NameAndType;
 
@@ -7272,7 +8257,7 @@ void SampleCatalogImpl::LoadPropertyGraphWithDynamicLabelAndProperties() {
                                {"nodeLabelCol", types_->get_string()},
                                {"code", types_->get_int64()},
                                {"nodeJsonProp", types_->get_json()}});
-  GOOGLESQL_CHECK_OK(graph_dynamic_node_source_table->SetPrimaryKey({0}));
+  GOOGLESQL_RETURN_IF_ERROR(graph_dynamic_node_source_table->SetPrimaryKey({0}));
   AddOwnedTable(graph_dynamic_node_source_table);
 
   auto* graph_dynamic_edge_source_table = new SimpleTable(
@@ -7282,7 +8267,7 @@ void SampleCatalogImpl::LoadPropertyGraphWithDynamicLabelAndProperties() {
                                {"edgeLabelCol", types_->get_string()},
                                {"category", types_->get_string()},
                                {"edgeJsonProp", types_->get_json()}});
-  GOOGLESQL_CHECK_OK(graph_dynamic_edge_source_table->SetPrimaryKey({0, 1}));
+  GOOGLESQL_RETURN_IF_ERROR(graph_dynamic_edge_source_table->SetPrimaryKey({0, 1}));
   AddOwnedTable(graph_dynamic_edge_source_table);
 
   // Property declaration
@@ -7530,9 +8515,119 @@ void SampleCatalogImpl::LoadPropertyGraphWithDynamicLabelAndProperties() {
       std::move(property_graph_name_path), std::move(node_tables),
       std::move(edge_tables), std::move(labels), std::move(property_dcls));
   catalog_->AddOwnedPropertyGraph(std::move(property_graph));
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadCompositeKeyPropertyGraphs() {
+absl::Status
+SampleCatalogImpl::LoadPropertyGraphWithReadOnlyDynamicProperties() {
+  const std::vector<std::string> property_graph_name_path{
+      "aml_dynamic_read_only"};
+
+  auto* graph_dynamic_node_source_table = new SimpleTable(
+      "DynamicGraphNodeReadOnly",
+      {
+          new SimpleColumn("DynamicGraphNodeReadOnly", "id",
+                           types_->get_int64(), {.is_writable_column = true}),
+          new SimpleColumn("DynamicGraphNodeReadOnly", "nodeLabelCol",
+                           types_->get_string(), {.is_writable_column = false}),
+          new SimpleColumn("DynamicGraphNodeReadOnly", "nodeJsonProp",
+                           types_->get_json(), {.is_writable_column = false}),
+      },
+      /*take_ownership=*/true);
+  GOOGLESQL_RETURN_IF_ERROR(graph_dynamic_node_source_table->SetPrimaryKey({0}));
+  AddOwnedTable(graph_dynamic_node_source_table);
+
+  // Property declaration
+  auto id_property_dcl = std::make_unique<SimpleGraphPropertyDeclaration>(
+      "id", property_graph_name_path, types_->get_int64());
+  auto node_json_prop_property_dcl =
+      std::make_unique<SimpleGraphPropertyDeclaration>(
+          "nodeJsonProp", property_graph_name_path, types_->get_json());
+
+  // Labels
+  auto entity_label_dcl = std::make_unique<SimpleGraphElementLabel>(
+      "Entity", property_graph_name_path,
+      absl::flat_hash_set<const GraphPropertyDeclaration*>{});
+
+  std::vector<std::unique_ptr<const GraphPropertyDefinition>>
+      property_defs_node;
+
+  // Static property definitions.
+  auto graph_node_id_column_ref = MakeResolvedCatalogColumnRef(
+      types_->get_int64(),
+      graph_dynamic_node_source_table->FindColumnByName("id"));
+  auto graph_node_id_prop_ref = std::make_unique<SimpleGraphPropertyDefinition>(
+      id_property_dcl.get(), "id");
+  InternalPropertyGraph::InternalSetResolvedExpr(
+      graph_node_id_prop_ref.get(), graph_node_id_column_ref.get());
+  property_defs_node.push_back(std::move(graph_node_id_prop_ref));
+  owned_resolved_graph_property_definitions_.push_back(
+      std::move(graph_node_id_column_ref));
+
+  auto graph_node_json_prop_column_ref = MakeResolvedCatalogColumnRef(
+      types_->get_json(),
+      graph_dynamic_node_source_table->FindColumnByName("nodeJsonProp"));
+  const ResolvedExpr* graph_node_json_prop_column_ref_ptr =
+      graph_node_json_prop_column_ref.get();
+  owned_resolved_graph_property_definitions_.push_back(
+      std::move(graph_node_json_prop_column_ref));
+
+  auto graph_node_json_prop_prop_ref =
+      std::make_unique<SimpleGraphPropertyDefinition>(
+          node_json_prop_property_dcl.get(), "nodeJsonProp");
+  InternalPropertyGraph::InternalSetResolvedExpr(
+      graph_node_json_prop_prop_ref.get(), graph_node_json_prop_column_ref_ptr);
+  property_defs_node.push_back(std::move(graph_node_json_prop_prop_ref));
+
+  auto graph_node_label_col_ref = MakeResolvedCatalogColumnRef(
+      types_->get_string(),
+      graph_dynamic_node_source_table->FindColumnByName("nodeLabelCol"));
+  const ResolvedExpr* graph_node_label_col_ref_ptr =
+      graph_node_label_col_ref.get();
+  owned_resolved_graph_property_definitions_.push_back(
+      std::move(graph_node_label_col_ref));
+
+  // Dynamic label.
+  auto graph_node_dynamic_label =
+      std::make_unique<SimpleGraphDynamicLabel>("nodeLabelCol");
+  InternalPropertyGraph::InternalSetResolvedExpr(graph_node_dynamic_label.get(),
+                                                 graph_node_label_col_ref_ptr);
+
+  // Dynamic properties.
+  auto graph_node_dynamic_properties =
+      std::make_unique<SimpleGraphDynamicProperties>("nodeJsonProp");
+  InternalPropertyGraph::InternalSetResolvedExpr(
+      graph_node_dynamic_properties.get(), graph_node_json_prop_column_ref_ptr);
+
+  auto dynamic_graph_node_table = std::make_unique<const SimpleGraphNodeTable>(
+      graph_dynamic_node_source_table->Name(), property_graph_name_path,
+      graph_dynamic_node_source_table, std::vector<int>{0},
+      absl::flat_hash_set<const GraphElementLabel*>{entity_label_dcl.get()},
+      std::move(property_defs_node), std::move(graph_node_dynamic_label),
+      std::move(graph_node_dynamic_properties));
+
+  // Add all entities to property graph
+  std::vector<std::unique_ptr<const GraphNodeTable>> node_tables;
+  node_tables.push_back(std::move(dynamic_graph_node_table));
+  std::vector<std::unique_ptr<const GraphEdgeTable>> edge_tables;
+
+  std::vector<std::unique_ptr<const GraphElementLabel>> labels;
+  labels.push_back(std::move(entity_label_dcl));
+
+  std::vector<std::unique_ptr<const GraphPropertyDeclaration>> properties;
+  properties.push_back(std::move(id_property_dcl));
+  properties.push_back(std::move(node_json_prop_property_dcl));
+
+  auto property_graph = std::make_unique<SimplePropertyGraph>(
+      property_graph_name_path, std::move(node_tables), std::move(edge_tables),
+      std::move(labels), std::move(properties));
+
+  catalog_->AddOwnedPropertyGraph(std::move(property_graph));
+  return absl::OkStatus();
+}
+
+absl::Status SampleCatalogImpl::LoadCompositeKeyPropertyGraphs() {
   std::vector<std::string> property_graph_name_path{"aml_composite_key"};
   typedef std::pair<std::string, const Type*> NameAndType;
 
@@ -7541,7 +8636,7 @@ void SampleCatalogImpl::LoadCompositeKeyPropertyGraphs() {
       std::vector<NameAndType>{{"key_int", types_->get_int64()},
                                {"key_string", types_->get_string()},
                                {"value", types_->get_string()}});
-  GOOGLESQL_CHECK_OK(entity->SetPrimaryKey({0, 1}));
+  GOOGLESQL_RETURN_IF_ERROR(entity->SetPrimaryKey({0, 1}));
   AddOwnedTable(entity);
 
   auto* relation = new SimpleTable(
@@ -7550,7 +8645,7 @@ void SampleCatalogImpl::LoadCompositeKeyPropertyGraphs() {
                                {"dest_entity_key_int", types_->get_int64()},
                                {"entity_key_string", types_->get_string()},
                                {"value", types_->get_string()}});
-  GOOGLESQL_CHECK_OK(relation->SetPrimaryKey({0, 1, 2}));
+  GOOGLESQL_RETURN_IF_ERROR(relation->SetPrimaryKey({0, 1, 2}));
   AddOwnedTable(relation);
 
   // Property Declaration
@@ -7657,6 +8752,8 @@ void SampleCatalogImpl::LoadCompositeKeyPropertyGraphs() {
       std::move(property_graph_name_path), std::move(node_tables),
       std::move(edge_tables), std::move(labels), std::move(property_dcls));
   catalog_->AddOwnedPropertyGraph(std::move(property_graph));
+
+  return absl::OkStatus();
 }
 
 namespace {
@@ -7741,7 +8838,7 @@ static TVFRelation GetOutputSchemaWithTwoTypes(
   return TVFRelation(columns);
 }
 
-void SampleCatalogImpl::LoadTableValuedFunctions1() {
+absl::Status SampleCatalogImpl::LoadTableValuedFunctions1() {
   TVFRelation empty_output_schema({});
 
   const std::vector<OutputColumn> kOutputColumnsAllTypes =
@@ -7758,8 +8855,10 @@ void SampleCatalogImpl::LoadTableValuedFunctions1() {
       TVFRelation::ValueTable(types_->get_int64());
 
   // Generate an output schema that returns a proto value table.
-  TVFRelation output_schema_proto_value_table = TVFRelation::ValueTable(
-      GetProtoType(googlesql_test::TestExtraPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(const Type* proto_testextrapb,
+                   GetProtoType(googlesql_test::TestExtraPB::descriptor()));
+  TVFRelation output_schema_proto_value_table =
+      TVFRelation::ValueTable(proto_testextrapb);
 
   // Generate an output schema that returns every possible type.
   TVFRelation::ColumnList columns;
@@ -7824,15 +8923,15 @@ void SampleCatalogImpl::LoadTableValuedFunctions1() {
   // argument of that type.
   const std::vector<std::pair<std::string, SignatureArgumentKind>>
       kSignatureArgumentKinds = {
-          {"arg_type_any_1", ARG_TYPE_ANY_1},
-          {"arg_type_any_2", ARG_TYPE_ANY_2},
-          {"arg_array_type_any_1", ARG_ARRAY_TYPE_ANY_1},
-          {"arg_array_type_any_2", ARG_ARRAY_TYPE_ANY_2},
-          {"arg_proto_any", ARG_PROTO_ANY},
-          {"arg_struct_any", ARG_STRUCT_ANY},
-          {"arg_enum_any", ARG_ENUM_ANY},
-          {"arg_type_relation", ARG_TYPE_RELATION},
-          {"arg_type_arbitrary", ARG_TYPE_ARBITRARY},
+          {"arg_type_any_1", ARG_KIND_EXPR_ANY_1},
+          {"arg_type_any_2", ARG_KIND_EXPR_ANY_2},
+          {"arg_array_type_any_1", ARG_KIND_EXPR_ARRAY_ANY_1},
+          {"arg_array_type_any_2", ARG_KIND_EXPR_ARRAY_ANY_2},
+          {"arg_proto_any", ARG_KIND_EXPR_PROTO_ANY},
+          {"arg_struct_any", ARG_KIND_EXPR_STRUCT_ANY},
+          {"arg_enum_any", ARG_KIND_EXPR_ENUM_ANY},
+          {"arg_type_relation", ARG_KIND_RELATION},
+          {"arg_type_arbitrary", ARG_KIND_EXPR_ARBITRARY},
       };
   for (const std::pair<std::string, SignatureArgumentKind>& kv :
        kSignatureArgumentKinds) {
@@ -7865,32 +8964,184 @@ void SampleCatalogImpl::LoadTableValuedFunctions1() {
                          context_id++)},
       output_schema_two_types));
 
-  // Add a TVF with a repeating final argument of ARG_TYPE_ANY_1.
+  // Add a TVF with a repeating final argument of ARG_KIND_EXPR_ANY_1.
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_repeating_any_one_type_args"},
       {FunctionSignature(FunctionArgumentType::RelationWithSchema(
                              output_schema_two_types,
                              /*extra_relation_input_columns_allowed=*/false),
-                         {FunctionArgumentType(ARG_TYPE_ANY_1,
+                         {FunctionArgumentType(ARG_KIND_EXPR_ANY_1,
                                                FunctionArgumentType::REPEATED)},
                          context_id++)},
       output_schema_two_types));
 
-  // Add a TVF with a repeating final argument of ARG_TYPE_ARBITRARY.
+  // Add a TVF with a repeating final argument of ARG_KIND_EXPR_ARBITRARY.
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_repeating_arbitrary_type_args"},
       {FunctionSignature(FunctionArgumentType::RelationWithSchema(
                              output_schema_two_types,
                              /*extra_relation_input_columns_allowed=*/false),
-                         {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+                         {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                                FunctionArgumentType::REPEATED)},
                          context_id++)},
       output_schema_two_types));
 
+  // PassthroughTVF(TABLE): Passes through the input relation without changes.
+  TableValuedFunctionOptions resolved_passthrough_options;
+  resolved_passthrough_options.set_is_passthrough(true);
+  resolved_passthrough_options.set_compute_result_type_callback(
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& arguments,
+         const AnalyzerOptions& analyzer_options)
+          -> absl::StatusOr<std::shared_ptr<TVFSignature>> {
+        const TVFRelation& input_schema = arguments[0].relation();
+        return TVFSignature::Create(arguments, input_schema,
+                                    TVFSignatureOptions());
+      });
+
+  catalog_->AddOwnedTableValuedFunction(
+      new TableValuedFunction(std::vector<std::string>{"PassthroughTVF"}, "",
+                              std::vector<FunctionSignature>{FunctionSignature(
+                                  FunctionArgumentType::AnyRelation(),
+                                  {FunctionArgumentType::AnyRelation()},
+                                  /*context_id=*/-1)},
+                              resolved_passthrough_options));
+
+  // PassthroughDropTVF(TABLE, string): Drops the column specified by the second
+  // argument.
+  TableValuedFunctionOptions drop_options;
+  drop_options.set_is_passthrough(true);
+  drop_options.set_compute_result_type_callback(
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& arguments,
+         const AnalyzerOptions& analyzer_options)
+          -> absl::StatusOr<std::shared_ptr<TVFSignature>> {
+        const TVFRelation& input_schema = arguments[0].relation();
+        absl::StatusOr<InputArgumentType> arg1_type =
+            arguments[1].GetScalarArgType();
+        if (!arg1_type.ok() || !arg1_type->is_literal() ||
+            !arg1_type->literal_value()->type()->IsString()) {
+          return absl::InvalidArgumentError(
+              "Second argument must be a string literal");
+        }
+        std::string drop_col = arg1_type->literal_value()->string_value();
+
+        TVFPassthroughInfo passthrough_info;
+        passthrough_info.columns_to_drop.push_back(drop_col);
+
+        TVFSignatureOptions options;
+        options.passthrough_info = passthrough_info;
+        return TVFSignature::Create(arguments, input_schema, options);
+      });
+
+  catalog_->AddOwnedTableValuedFunction(new TableValuedFunction(
+      std::vector<std::string>{"PassthroughDropTVF"}, "",
+      std::vector<FunctionSignature>{
+          FunctionSignature(FunctionArgumentType::AnyRelation(),
+                            {FunctionArgumentType::AnyRelation(),
+                             FunctionArgumentType(types_->get_string())},
+                            /*context_id=*/-1)},
+      drop_options));
+
+  // PassthroughExtendTVF(TABLE, string): Adds a new column.
+  // The column name is specified by the second argument.
+  // The input column with the same name (if any) is kept.
+  TableValuedFunctionOptions extend_options;
+  extend_options.set_is_passthrough(true);
+  extend_options.set_compute_result_type_callback(
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& arguments,
+         const AnalyzerOptions& analyzer_options)
+          -> absl::StatusOr<std::shared_ptr<TVFSignature>> {
+        const TVFRelation& input_schema = arguments[0].relation();
+        absl::StatusOr<InputArgumentType> arg1_type =
+            arguments[1].GetScalarArgType();
+        if (!arg1_type.ok() || !arg1_type->is_literal() ||
+            !arg1_type->literal_value()->type()->IsString()) {
+          return absl::InvalidArgumentError(
+              "Second argument must be a string literal");
+        }
+        std::string new_col = arg1_type->literal_value()->string_value();
+
+        TVFRelation::ColumnList output_columns = input_schema.columns();
+        output_columns.push_back(
+            TVFSchemaColumn(new_col, type_factory->get_int64()));
+
+        TVFSignatureOptions options;
+        return TVFSignature::Create(arguments, TVFRelation(output_columns),
+                                    options);
+      });
+
+  catalog_->AddOwnedTableValuedFunction(new TableValuedFunction(
+      std::vector<std::string>{"PassthroughExtendTVF"}, "",
+      std::vector<FunctionSignature>{
+          FunctionSignature(FunctionArgumentType::AnyRelation(),
+                            {FunctionArgumentType::AnyRelation(),
+                             FunctionArgumentType(types_->get_string())},
+                            /*context_id=*/-1)},
+      extend_options));
+
+  // PassthroughDropExtendTVF(TABLE, string, string): Drops the column specified
+  // by the second argument and adds a column specified by the third argument.
+  TableValuedFunctionOptions drop_extend_options;
+  drop_extend_options.set_is_passthrough(true);
+  drop_extend_options.set_compute_result_type_callback(
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& arguments,
+         const AnalyzerOptions& analyzer_options)
+          -> absl::StatusOr<std::shared_ptr<TVFSignature>> {
+        const TVFRelation& input_schema = arguments[0].relation();
+        absl::StatusOr<InputArgumentType> arg1_type =
+            arguments[1].GetScalarArgType();
+        if (!arg1_type.ok() || !arg1_type->is_literal() ||
+            !arg1_type->literal_value()->type()->IsString()) {
+          return absl::InvalidArgumentError(
+              "Second argument must be a string literal");
+        }
+        std::string drop_col = arg1_type->literal_value()->string_value();
+
+        absl::StatusOr<InputArgumentType> arg2_type =
+            arguments[2].GetScalarArgType();
+        if (!arg2_type.ok() || !arg2_type->is_literal() ||
+            !arg2_type->literal_value()->type()->IsString()) {
+          return absl::InvalidArgumentError(
+              "Third argument must be a string literal");
+        }
+        std::string new_col = arg2_type->literal_value()->string_value();
+
+        TVFRelation::ColumnList output_columns;
+        TVFPassthroughInfo passthrough_info;
+        passthrough_info.columns_to_drop.push_back(drop_col);
+
+        output_columns = input_schema.columns();
+        output_columns.push_back(
+            TVFSchemaColumn(new_col, type_factory->get_int64()));
+
+        TVFSignatureOptions options;
+        options.passthrough_info = passthrough_info;
+        return TVFSignature::Create(arguments, TVFRelation(output_columns),
+                                    options);
+      });
+
+  catalog_->AddOwnedTableValuedFunction(new TableValuedFunction(
+      std::vector<std::string>{"PassthroughDropExtendTVF"}, "",
+      std::vector<FunctionSignature>{
+          FunctionSignature(FunctionArgumentType::AnyRelation(),
+                            {FunctionArgumentType::AnyRelation(),
+                             FunctionArgumentType(types_->get_string()),
+                             FunctionArgumentType(types_->get_string())},
+                            /*context_id=*/-1)},
+      drop_extend_options));
+
   // Stop here to avoid hitting lint limits for function length.
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadTableValuedFunctions2() {
+absl::Status SampleCatalogImpl::LoadTableValuedFunctions2() {
   TVFRelation empty_output_schema({});
 
   const std::vector<OutputColumn> kOutputColumnsAllTypes =
@@ -7904,8 +9155,10 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
       TVFRelation::ValueTable(types_->get_int64());
 
   // Generate an output schema that returns a proto value table.
-  TVFRelation output_schema_proto_value_table = TVFRelation::ValueTable(
-      GetProtoType(googlesql_test::TestExtraPB::descriptor()));
+  GOOGLESQL_ASSIGN_OR_RETURN(const Type* proto_testextrapb,
+                   GetProtoType(googlesql_test::TestExtraPB::descriptor()));
+  TVFRelation output_schema_proto_value_table =
+      TVFRelation::ValueTable(proto_testextrapb);
 
   TVFRelation output_schema_two_types_with_pseudo_columns(
       {TVFSchemaColumn(kOutputColumnsAllTypes[0].name,
@@ -7918,14 +9171,13 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
                        /*is_pseudo_column_in=*/true)});
 
   // Generate an output schema that returns an int64 value table.
-  TVFRelation output_schema_value_table_with_pseudo_columns =
-      TVFRelation::ValueTable(
-          GetProtoType(googlesql_test::TestExtraPB::descriptor()),
-          {TVFSchemaColumn("RowId", types_->get_int64(),
-                           /*is_pseudo_column_in=*/true),
-           TVFSchemaColumn("PartitionName", types_->get_string(),
-                           /*is_pseudo_column_in=*/true)})
-          .value();
+  GOOGLESQL_ASSIGN_OR_RETURN(TVFRelation output_schema_value_table_with_pseudo_columns,
+                   TVFRelation::ValueTable(
+                       proto_testextrapb,
+                       {TVFSchemaColumn("RowId", types_->get_int64(),
+                                        /*is_pseudo_column_in=*/true),
+                        TVFSchemaColumn("PartitionName", types_->get_string(),
+                                        /*is_pseudo_column_in=*/true)}));
 
   int64_t context_id = 0;
 
@@ -8020,7 +9272,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
   // be the same as the input schema.
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_one_relation_arg_output_schema_is_input_schema"},
-      {FunctionSignature(ARG_TYPE_RELATION,
+      {FunctionSignature(ARG_KIND_RELATION,
                          {FunctionArgumentType::AnyRelation()},
                          context_id++)}));
 
@@ -8031,7 +9283,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
       {FunctionSignature(FunctionArgumentType::RelationWithSchema(
                              output_schema_int64_value_table,
                              /*extra_relation_input_columns_allowed=*/false),
-                         {FunctionArgumentType(ARG_TYPE_RELATION,
+                         {FunctionArgumentType(ARG_KIND_RELATION,
                                                FunctionArgumentType::OPTIONAL)},
                          context_id++)},
       output_schema_int64_value_table));
@@ -8040,7 +9292,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
   // schema is set to be the same as the input schema of the relation argument.
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_one_relation_arg_output_schema_is_input_schema_plus_int64_arg"},
-      {FunctionSignature(ARG_TYPE_RELATION,
+      {FunctionSignature(ARG_KIND_RELATION,
                          {FunctionArgumentType::AnyRelation(),
                           FunctionArgumentType(types::Int64Type())},
                          context_id++)}));
@@ -8049,7 +9301,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
   // first relation argument to the output of the TVF.
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_two_relation_args_output_schema_is_input_schema"},
-      {FunctionSignature(ARG_TYPE_RELATION,
+      {FunctionSignature(ARG_KIND_RELATION,
                          {FunctionArgumentType::AnyRelation(),
                           FunctionArgumentType::AnyRelation()},
                          context_id++)}));
@@ -8059,9 +9311,9 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
   // TVF.
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_two_relation_args_second_optional_output_schema_is_input_schema"},
-      {FunctionSignature(ARG_TYPE_RELATION,
+      {FunctionSignature(ARG_KIND_RELATION,
                          {FunctionArgumentType::AnyRelation(),
-                          FunctionArgumentType(ARG_TYPE_RELATION,
+                          FunctionArgumentType(ARG_KIND_RELATION,
                                                FunctionArgumentType::OPTIONAL)},
                          context_id++)}));
 
@@ -8073,9 +9325,9 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
                              output_schema_two_types,
                              /*extra_relation_input_columns_allowed=*/false),
                          {FunctionArgumentType::AnyModel(),
-                          FunctionArgumentType(ARG_TYPE_RELATION,
+                          FunctionArgumentType(ARG_KIND_RELATION,
                                                FunctionArgumentType::OPTIONAL),
-                          FunctionArgumentType(ARG_STRUCT_ANY,
+                          FunctionArgumentType(ARG_KIND_EXPR_STRUCT_ANY,
                                                FunctionArgumentType::OPTIONAL)},
                          context_id++)},
       output_schema_two_types));
@@ -8115,7 +9367,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
                          context_id++)},
       output_schema_proto_value_table));
 
-  // Add a TVF with exactly one argument of ARG_TYPE_RELATION and another
+  // Add a TVF with exactly one argument of ARG_KIND_RELATION and another
   // argument of type int64.
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_one_int64_arg_one_relation_arg"},
@@ -8127,7 +9379,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
                          context_id++)},
       output_schema_two_types));
 
-  // Add a TVF with exactly one argument of ARG_TYPE_RELATION and another
+  // Add a TVF with exactly one argument of ARG_KIND_RELATION and another
   // argument of type int64.
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_one_relation_arg_one_int64_arg"},
@@ -8152,14 +9404,14 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
       output_schema_two_types));
 
   // Add a TVF with one relation argument and also a repeating final argument of
-  // ARG_TYPE_ANY_1.
+  // ARG_KIND_EXPR_ANY_1.
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_one_relation_arg_repeating_any_one_type_args"},
       {FunctionSignature(FunctionArgumentType::RelationWithSchema(
                              output_schema_two_types,
                              /*extra_relation_input_columns_allowed=*/false),
                          {FunctionArgumentType::AnyRelation(),
-                          FunctionArgumentType(ARG_TYPE_ANY_1,
+                          FunctionArgumentType(ARG_KIND_EXPR_ANY_1,
                                                FunctionArgumentType::REPEATED)},
                          context_id++)},
       output_schema_two_types));
@@ -8256,6 +9508,8 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
 
   // Add a TVF with exactly one relation argument with a required input schema
   // of one enum column.
+  GOOGLESQL_ASSIGN_OR_RETURN(const Type* test_enum,
+                   GetEnumType(googlesql_test::TestEnum_descriptor()));
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_one_relation_arg_one_enum_input_column"},
       {FunctionSignature(
@@ -8263,9 +9517,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType::RelationWithSchema(
-              TVFRelation({TVFRelation::Column(
-                  kMyEnum,
-                  GetEnumType(googlesql_test::TestEnum_descriptor()))}),
+              TVFRelation({TVFRelation::Column(kMyEnum, test_enum)}),
               /*extra_relation_input_columns_allowed=*/true)},
           context_id++)},
       output_schema_two_types));
@@ -8308,8 +9560,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
                              output_schema_two_types,
                              /*extra_relation_input_columns_allowed=*/false),
                          {FunctionArgumentType::RelationWithSchema(
-                             TVFRelation::ValueTable(GetProtoType(
-                                 googlesql_test::TestExtraPB::descriptor())),
+                             TVFRelation::ValueTable(proto_testextrapb),
                              /*extra_relation_input_columns_allowed=*/true)},
                          context_id++)},
       output_schema_two_types));
@@ -8332,7 +9583,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
   // output schema.
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
       {"tvf_one_relation_arg_int64_input_value_table_forward_schema"},
-      {FunctionSignature(ARG_TYPE_RELATION,
+      {FunctionSignature(ARG_KIND_RELATION,
                          {FunctionArgumentType::RelationWithSchema(
                              TVFRelation::ValueTable(types::Int64Type()),
                              /*extra_relation_input_columns_allowed=*/true)},
@@ -8434,16 +9685,16 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
       types_->get_string(), FunctionArgumentTypeOptions().set_argument_name(
                                 "date_string", kPositionalOrNamed));
   const auto named_required_any_relation_arg = FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions().set_argument_name(
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions().set_argument_name(
                              "any_relation_arg", kPositionalOrNamed));
   const auto named_required_schema_relation_arg = FunctionArgumentType(
-      ARG_TYPE_RELATION,
+      ARG_KIND_RELATION,
       FunctionArgumentTypeOptions(
           output_schema_two_types,
           /*extra_relation_input_columns_allowed=*/false)
           .set_argument_name("schema_relation_arg", kPositionalOrNamed));
   const auto named_required_value_table_relation_arg = FunctionArgumentType(
-      ARG_TYPE_RELATION,
+      ARG_KIND_RELATION,
       FunctionArgumentTypeOptions(
           output_schema_proto_value_table,
           /*extra_relation_input_columns_allowed=*/false)
@@ -8459,7 +9710,7 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
           .set_cardinality(FunctionArgumentType::OPTIONAL)
           .set_argument_name("date_string", kPositionalOrNamed));
   const auto named_optional_any_relation_arg = FunctionArgumentType(
-      ARG_TYPE_RELATION,
+      ARG_KIND_RELATION,
       FunctionArgumentTypeOptions()
           .set_cardinality(FunctionArgumentType::OPTIONAL)
           .set_argument_name("any_relation_arg", kPositionalOrNamed));
@@ -8548,13 +9799,13 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
   {
     // Add a TVF with relation arg + scalar arg + named lambda.
     FunctionArgumentType relation_arg = FunctionArgumentType(
-        ARG_TYPE_RELATION, FunctionArgumentTypeOptions().set_argument_name(
+        ARG_KIND_RELATION, FunctionArgumentTypeOptions().set_argument_name(
                                "any_relation", kPositionalOrNamed));
     FunctionArgumentType scalar_arg = FunctionArgumentType(
-        ARG_TYPE_ANY_1, FunctionArgumentTypeOptions().set_argument_name(
-                            "any_scalar", kPositionalOrNamed));
+        ARG_KIND_EXPR_ANY_1, FunctionArgumentTypeOptions().set_argument_name(
+                                 "any_scalar", kPositionalOrNamed));
     FunctionArgumentType named_lambda_arg = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1}, ARG_TYPE_ANY_1,
+        {ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_argument_name("named_lambda",
                                                         kNamedOnly));
     catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
@@ -8595,37 +9846,40 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
                 .set_max_value(100));
     FunctionArgumentType scalar_arg_positional_must_support_equality =
         FunctionArgumentType(
-            ARG_STRUCT_ANY, FunctionArgumentTypeOptions()
-                                .set_cardinality(FunctionArgumentType::OPTIONAL)
-                                .set_must_support_equality(true));
+            ARG_KIND_EXPR_STRUCT_ANY,
+            FunctionArgumentTypeOptions()
+                .set_cardinality(FunctionArgumentType::OPTIONAL)
+                .set_must_support_equality(true));
     FunctionArgumentType scalar_arg_positional_must_support_ordering =
         FunctionArgumentType(
-            ARG_TYPE_ANY_1, FunctionArgumentTypeOptions()
-                                .set_cardinality(FunctionArgumentType::OPTIONAL)
-                                .set_must_support_ordering(true));
+            ARG_KIND_EXPR_ANY_1,
+            FunctionArgumentTypeOptions()
+                .set_cardinality(FunctionArgumentType::OPTIONAL)
+                .set_must_support_ordering(true));
     FunctionArgumentType scalar_arg_positional_must_support_grouping =
         FunctionArgumentType(
-            ARG_TYPE_ANY_2, FunctionArgumentTypeOptions()
-                                .set_cardinality(FunctionArgumentType::OPTIONAL)
-                                .set_must_support_grouping(true));
+            ARG_KIND_EXPR_ANY_2,
+            FunctionArgumentTypeOptions()
+                .set_cardinality(FunctionArgumentType::OPTIONAL)
+                .set_must_support_grouping(true));
     FunctionArgumentType
         scalar_arg_positional_array_element_must_support_equality =
             FunctionArgumentType(
-                ARG_ARRAY_TYPE_ANY_3,
+                ARG_KIND_EXPR_ARRAY_ANY_3,
                 FunctionArgumentTypeOptions()
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_array_element_must_support_equality(true));
     FunctionArgumentType
         scalar_arg_positional_array_element_must_support_ordering =
             FunctionArgumentType(
-                ARG_ARRAY_TYPE_ANY_4,
+                ARG_KIND_EXPR_ARRAY_ANY_4,
                 FunctionArgumentTypeOptions()
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_array_element_must_support_ordering(true));
     FunctionArgumentType
         scalar_arg_positional_array_element_must_support_grouping =
             FunctionArgumentType(
-                ARG_ARRAY_TYPE_ANY_5,
+                ARG_KIND_EXPR_ARRAY_ANY_5,
                 FunctionArgumentTypeOptions()
                     .set_cardinality(FunctionArgumentType::OPTIONAL)
                     .set_array_element_must_support_grouping(true));
@@ -8675,42 +9929,42 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
                 .set_max_value(100));
     FunctionArgumentType scalar_arg_named_must_support_equality =
         FunctionArgumentType(
-            ARG_STRUCT_ANY,
+            ARG_KIND_EXPR_STRUCT_ANY,
             FunctionArgumentTypeOptions()
                 .set_cardinality(FunctionArgumentType::OPTIONAL)
                 .set_argument_name("arg_4", FunctionEnums::POSITIONAL_OR_NAMED)
                 .set_must_support_equality(true));
     FunctionArgumentType scalar_arg_named_must_support_ordering =
         FunctionArgumentType(
-            ARG_TYPE_ANY_1,
+            ARG_KIND_EXPR_ANY_1,
             FunctionArgumentTypeOptions()
                 .set_cardinality(FunctionArgumentType::OPTIONAL)
                 .set_argument_name("arg_5", FunctionEnums::POSITIONAL_OR_NAMED)
                 .set_must_support_ordering(true));
     FunctionArgumentType scalar_arg_named_must_support_grouping =
         FunctionArgumentType(
-            ARG_TYPE_ANY_2,
+            ARG_KIND_EXPR_ANY_2,
             FunctionArgumentTypeOptions()
                 .set_cardinality(FunctionArgumentType::OPTIONAL)
                 .set_argument_name("arg_6", FunctionEnums::POSITIONAL_OR_NAMED)
                 .set_must_support_grouping(true));
     FunctionArgumentType scalar_arg_named_array_element_must_support_equality =
         FunctionArgumentType(
-            ARG_ARRAY_TYPE_ANY_3,
+            ARG_KIND_EXPR_ARRAY_ANY_3,
             FunctionArgumentTypeOptions()
                 .set_cardinality(FunctionArgumentType::OPTIONAL)
                 .set_argument_name("arg_7", FunctionEnums::POSITIONAL_OR_NAMED)
                 .set_array_element_must_support_equality(true));
     FunctionArgumentType scalar_arg_named_array_element_must_support_ordering =
         FunctionArgumentType(
-            ARG_ARRAY_TYPE_ANY_4,
+            ARG_KIND_EXPR_ARRAY_ANY_4,
             FunctionArgumentTypeOptions()
                 .set_cardinality(FunctionArgumentType::OPTIONAL)
                 .set_argument_name("arg_8", FunctionEnums::POSITIONAL_OR_NAMED)
                 .set_array_element_must_support_ordering(true));
     FunctionArgumentType scalar_arg_named_array_element_must_support_grouping =
         FunctionArgumentType(
-            ARG_ARRAY_TYPE_ANY_5,
+            ARG_KIND_EXPR_ARRAY_ANY_5,
             FunctionArgumentTypeOptions()
                 .set_cardinality(FunctionArgumentType::OPTIONAL)
                 .set_argument_name("arg_9", FunctionEnums::POSITIONAL_OR_NAMED)
@@ -8765,12 +10019,13 @@ void SampleCatalogImpl::LoadTableValuedFunctions2() {
       Function::kGoogleSQLFunctionGroupName,
       {FunctionSignature(
           FunctionArgumentType::AnyRelation(),
-          {FunctionArgumentType(ARG_TYPE_RELATION,
+          {FunctionArgumentType(ARG_KIND_RELATION,
                                 FunctionArgumentTypeOptions().set_argument_name(
                                     "t", FunctionEnums::POSITIONAL_OR_NAMED))},
           context_id++)},
       TableValuedFunctionOptions().set_compute_result_type_callback(
           result_type_callback_with_empty_relation)));
+  return absl::OkStatus();
 }  // NOLINT(readability/fn_size)
 
 // Tests handling of optional relation arguments.
@@ -8838,7 +10093,7 @@ class TvfOptionalRelation : public FixedOutputSchemaTVF {
                     TVFRelation::ValueTable(types::Int64Type()),
                     /*extra_relation_input_columns_allowed=*/false),
                 {FunctionArgumentType(
-                    ARG_TYPE_RELATION,
+                    ARG_KIND_RELATION,
                     FunctionArgumentTypeOptions(
                         TVFRelation::ValueTable(types::Int64Type()),
                         /*extra_relation_input_columns_allowed=*/true)
@@ -9176,7 +10431,7 @@ class TvfIncrementBy : public ForwardInputSchemaToOutputSchemaTVF {
       : ForwardInputSchemaToOutputSchemaTVF(
             {R"(tvf_increment_by)"},
             {FunctionSignature(
-                ARG_TYPE_RELATION,
+                ARG_KIND_RELATION,
                 {FunctionArgumentType::AnyRelation(),
                  FunctionArgumentType(
                      types::Int64Type(),
@@ -9285,24 +10540,25 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithEvaluators() {
   catalog_->AddOwnedTableValuedFunction(new TvfSumAndDiff());
 }
 
-void SampleCatalogImpl::LoadFunctionsWithStructArgs() {
+absl::Status SampleCatalogImpl::LoadFunctionsWithStructArgs() {
   const std::vector<OutputColumn> kOutputColumnsAllTypes =
       GetOutputColumnsForAllTypes(types_);
   TVFRelation output_schema_two_types =
       GetOutputSchemaWithTwoTypes(kOutputColumnsAllTypes);
 
   const Type* array_string_type = nullptr;
-  GOOGLESQL_CHECK_OK(types_->MakeArrayType(types_->get_string(), &array_string_type));
+  GOOGLESQL_RETURN_IF_ERROR(
+      types_->MakeArrayType(types_->get_string(), &array_string_type));
 
   const Type* struct_type1 = nullptr;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType(
       {{"field1", array_string_type}, {"field2", array_string_type}},
       &struct_type1));
   const Type* struct_type2 = nullptr;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType({{"field1", array_string_type},
-                                   {"field2", array_string_type},
-                                   {"field3", array_string_type}},
-                                  &struct_type2));
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType({{"field1", array_string_type},
+                                          {"field2", array_string_type},
+                                          {"field3", array_string_type}},
+                                         &struct_type2));
 
   const auto named_struct_arg1 = FunctionArgumentType(
       struct_type1, FunctionArgumentTypeOptions().set_argument_name(
@@ -9329,6 +10585,8 @@ void SampleCatalogImpl::LoadFunctionsWithStructArgs() {
                           {named_struct_arg1, named_struct_arg2},
                           /*context_id=*/-1});
   catalog_->AddOwnedFunction(std::move(function));
+
+  return absl::OkStatus();
 }
 
 void SampleCatalogImpl::LoadTVFWithExtraColumns() {
@@ -9338,7 +10596,7 @@ void SampleCatalogImpl::LoadTVFWithExtraColumns() {
   catalog_->AddOwnedTableValuedFunction(
       new ForwardInputSchemaToOutputSchemaWithAppendedColumnTVF(
           {"tvf_append_columns"},
-          {FunctionSignature(ARG_TYPE_RELATION, {ARG_TYPE_RELATION},
+          {FunctionSignature(ARG_KIND_RELATION, {ARG_KIND_RELATION},
                              context_id++)},
           {TVFSchemaColumn("append_col_int64", types::Int64Type()),
            TVFSchemaColumn("append_col_int32", types::Int32Type()),
@@ -9360,19 +10618,19 @@ void SampleCatalogImpl::LoadTVFWithExtraColumns() {
   catalog_->AddOwnedTableValuedFunction(
       new ForwardInputSchemaToOutputSchemaWithAppendedColumnTVF(
           {"tvf_append_no_column"},
-          {FunctionSignature(ARG_TYPE_RELATION, {ARG_TYPE_RELATION},
+          {FunctionSignature(ARG_KIND_RELATION, {ARG_KIND_RELATION},
                              context_id++)},
           {}));
 
   const auto named_required_any_relation_arg = FunctionArgumentType(
-      ARG_TYPE_RELATION, FunctionArgumentTypeOptions().set_argument_name(
+      ARG_KIND_RELATION, FunctionArgumentTypeOptions().set_argument_name(
                              "any_relation_arg", kPositionalOrNamed));
 
   // Add a TVF with one required named "any table" relation argument.
   catalog_->AddOwnedTableValuedFunction(
       new ForwardInputSchemaToOutputSchemaWithAppendedColumnTVF(
           {"tvf_append_columns_any_relation_arg"},
-          {FunctionSignature(ARG_TYPE_RELATION,
+          {FunctionSignature(ARG_KIND_RELATION,
                              {named_required_any_relation_arg},
                              /*context_id=*/context_id++)},
           {TVFSchemaColumn("append_col_int32", types::Int32Type())}));
@@ -9576,7 +10834,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
   // be the same as the input schema. The TVF also triggers a deprecation
   // warning.
   FunctionSignature forward_deprecation_signature(
-      ARG_TYPE_RELATION, {FunctionArgumentType::AnyRelation()}, context_id++);
+      ARG_KIND_RELATION, {FunctionArgumentType::AnyRelation()}, context_id++);
   forward_deprecation_signature.SetAdditionalDeprecationWarnings(
       {CreateDeprecationWarning(/*id=*/16)});
   catalog_->AddOwnedTableValuedFunction(new ForwardInputSchemaToOutputSchemaTVF(
@@ -9592,10 +10850,10 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType::AnyModel(),
-           FunctionArgumentType(ARG_TYPE_RELATION,
+           FunctionArgumentType(ARG_KIND_RELATION,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_STRUCT_ANY,
+               ARG_KIND_EXPR_STRUCT_ANY,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9611,12 +10869,12 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType(
-               ARG_STRUCT_ANY,
+               ARG_KIND_EXPR_STRUCT_ANY,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("barfoo", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9632,12 +10890,12 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType(
-               ARG_PROTO_ANY,
+               ARG_KIND_EXPR_PROTO_ANY,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("barfoo", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9653,10 +10911,10 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType::AnyModel(),
-           FunctionArgumentType(ARG_TYPE_ARBITRARY,
+           FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9671,12 +10929,12 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
-           FunctionArgumentType(ARG_TYPE_ARBITRARY,
+           FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9692,10 +10950,10 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType::AnyRelation(),
-           FunctionArgumentType(ARG_TYPE_ARBITRARY,
+           FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9710,12 +10968,12 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_RELATION,
+          {FunctionArgumentType(ARG_KIND_RELATION,
                                 FunctionArgumentType::OPTIONAL),
-           FunctionArgumentType(ARG_TYPE_ARBITRARY,
+           FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9730,10 +10988,10 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY),
-           FunctionArgumentType(ARG_TYPE_MODEL, FunctionArgumentType::OPTIONAL),
+          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY),
+           FunctionArgumentType(ARG_KIND_MODEL, FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9748,11 +11006,11 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
-           FunctionArgumentType(ARG_TYPE_MODEL, FunctionArgumentType::OPTIONAL),
+           FunctionArgumentType(ARG_KIND_MODEL, FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9767,15 +11025,15 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("barfoo", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9790,43 +11048,43 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
-               ARG_TYPE_MODEL,
+               ARG_KIND_MODEL,
                FunctionArgumentTypeOptions()
                    .set_argument_name("foobar", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("barfoo", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
           context_id++)},
       output_schema_two_types));
 
-  // Add a TVF with a required table, a named optional table, a mandatory
-  // named table and a required mandatory named table.
+  // Add a TVF with a required table, a required positional-or-named table, a
+  // named optional table, and a mandatory named table.
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_required_named_optional_required_tables"},
       {FunctionSignature(
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_RELATION,
+          {FunctionArgumentType(ARG_KIND_RELATION,
                                 FunctionArgumentType::REQUIRED),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
-                   .set_argument_name("table2", kNamedOnly)
+                   .set_argument_name("table2", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::REQUIRED)),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("table3", kPositionalOrNamed)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("table4", kNamedOnly)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9843,7 +11101,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
                          {FunctionArgumentType::AnyModel(),
                           FunctionArgumentType(types::StringType(),
                                                FunctionArgumentType::OPTIONAL),
-                          FunctionArgumentType(ARG_TYPE_RELATION,
+                          FunctionArgumentType(ARG_KIND_RELATION,
                                                FunctionArgumentType::OPTIONAL)},
                          context_id++)},
       output_schema_two_types));
@@ -9857,7 +11115,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType::AnyModel(),
-           FunctionArgumentType(ARG_TYPE_RELATION,
+           FunctionArgumentType(ARG_KIND_RELATION,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
                types::StringType(),
@@ -9876,7 +11134,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(ARG_TYPE_RELATION,
+          {FunctionArgumentType(ARG_KIND_RELATION,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
                types::StringType(),
@@ -9895,12 +11153,12 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithDeprecationWarnings() {
               output_schema_two_types,
               /*extra_relation_input_columns_allowed=*/false),
           {FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("table1", kNamedOnly)
                    .set_cardinality(FunctionArgumentType::OPTIONAL)),
            FunctionArgumentType(
-               ARG_TYPE_RELATION,
+               ARG_KIND_RELATION,
                FunctionArgumentTypeOptions()
                    .set_argument_name("table2", kNamedOnly)
                    .set_cardinality(FunctionArgumentType::OPTIONAL))},
@@ -9986,6 +11244,15 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithMultipleSignatures() {
       tvf_relation));
 
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
+      {"tvf_overload_fixed_or_templated_relation"},
+      std::vector<FunctionSignature>{
+          FunctionSignature(tvf_schema, {tvf_schema}, context_id++),
+          FunctionSignature(tvf_schema, {FunctionArgumentType::AnyRelation()},
+                            context_id++),
+      },
+      tvf_relation));
+
+  catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_overload_templated_or_fixed_relation"},
       std::vector<FunctionSignature>{
           FunctionSignature(tvf_schema, {FunctionArgumentType::AnyRelation()},
@@ -10065,7 +11332,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithMultipleSignatures() {
 // `catalog`.
 static absl::Status AddTableBackedTvf(
     absl::string_view tvf_name, absl::Span<const TVFSchemaColumn> tvf_columns,
-    SimpleCatalog& catalog, bool is_value_table = false) {
+    SimpleCatalog& catalog, bool is_value_table) {
   std::string table_name = absl::StrCat("table_for_", tvf_name);
   std::vector<const Column*> columns;
   columns.reserve(tvf_columns.size());
@@ -10081,7 +11348,7 @@ static absl::Status AddTableBackedTvf(
   auto tvf = std::make_unique<TvfWithTableSchema>(
       std::vector<std::string>{std::string(tvf_name)},
       std::vector<FunctionSignature>{
-          FunctionSignature(ARG_TYPE_RELATION, /*arguments=*/{},
+          FunctionSignature(ARG_KIND_RELATION, /*arguments=*/{},
                             /*context_id=*/0, /*options=*/{}),
       },
       table.get());
@@ -10128,7 +11395,7 @@ absl::Status SampleCatalogImpl::LoadTvfsWithTableSchema() {
   catalog_->AddOwnedTableValuedFunction(std::make_unique<TvfWithTableSchema>(
       std::vector<std::string>{"tvf_lookup_table"},
       std::vector<FunctionSignature>{FunctionSignature(
-          ARG_TYPE_RELATION, /*arguments=*/{types_->get_string()},
+          ARG_KIND_RELATION, /*arguments=*/{types_->get_string()},
           /*context_id=*/0, /*options=*/{})}));
 
   return absl::OkStatus();
@@ -10136,7 +11403,7 @@ absl::Status SampleCatalogImpl::LoadTvfsWithTableSchema() {
 
 // Add a SQL table function to catalog starting from a full create table
 // function statement.
-void SampleCatalogImpl::AddSqlDefinedTableFunctionFromCreate(
+absl::Status SampleCatalogImpl::AddSqlDefinedTableFunctionFromCreate(
     absl::string_view create_table_function,
     const LanguageOptions& language_options, absl::string_view user_id_column) {
   // Ensure the language options used allow CREATE FUNCTION
@@ -10152,19 +11419,18 @@ void SampleCatalogImpl::AddSqlDefinedTableFunctionFromCreate(
   AnalyzerOptions analyzer_options;
   analyzer_options.set_language(language);
   std::unique_ptr<const AnalyzerOutput> analyzer_output;
-  CHECK_OK_UNLESS_DBG(AnalyzeStatement(create_table_function, analyzer_options,
-                                       catalog_.get(), catalog_->type_factory(),
-                                       &analyzer_output));
+  GOOGLESQL_RETURN_IF_ERROR(AnalyzeStatement(create_table_function, analyzer_options,
+                                   catalog_.get(), catalog_->type_factory(),
+                                   &analyzer_output));
   const ResolvedStatement* resolved = analyzer_output->resolved_statement();
-  ABSL_CHECK(resolved->Is<ResolvedCreateTableFunctionStmt>());
+  GOOGLESQL_RET_CHECK(resolved->Is<ResolvedCreateTableFunctionStmt>());
   const auto* resolved_create =
       resolved->GetAs<ResolvedCreateTableFunctionStmt>();
 
   std::unique_ptr<TableValuedFunction> function;
   if (resolved_create->query() != nullptr) {
     std::unique_ptr<SQLTableValuedFunction> sql_tvf;
-    CHECK_OK_UNLESS_DBG(
-        SQLTableValuedFunction::Create(resolved_create, &sql_tvf));
+    GOOGLESQL_RETURN_IF_ERROR(SQLTableValuedFunction::Create(resolved_create, &sql_tvf));
     function = std::move(sql_tvf);
   } else {
     function = std::make_unique<TemplatedSQLTVF>(
@@ -10174,139 +11440,141 @@ void SampleCatalogImpl::AddSqlDefinedTableFunctionFromCreate(
   }
 
   if (!user_id_column.empty()) {
-    GOOGLESQL_CHECK_OK(function->SetUserIdColumnNamePath({std::string(user_id_column)}));
+    GOOGLESQL_RETURN_IF_ERROR(
+        function->SetUserIdColumnNamePath({std::string(user_id_column)}));
   }
   catalog_->AddOwnedTableValuedFunction(std::move(function));
   sql_object_artifacts_.emplace_back(std::move(analyzer_output));
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
+absl::Status SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
     const LanguageOptions& language_options) {
   LanguageOptions language_options_with_aggregate_filtering = language_options;
   language_options_with_aggregate_filtering.EnableLanguageFeature(
       FEATURE_AGGREGATE_FILTERING);
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullarySelectWithUserId()
          AS SELECT 1 AS a, 2 AS b;)",
-      language_options, "a");
+      language_options, "a"));
 
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullarySelect()
          AS SELECT 1 AS a, 2 AS b;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullarySelectUnion()
          AS SELECT 1 AS a, 2 AS b
             UNION ALL
             SELECT 1, 4;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullarySelectCTE()
          AS WITH t AS (SELECT 1 AS a, 2 AS b) SELECT * FROM t;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullarySelectFromTvf()
          AS SELECT * FROM NullarySelect();)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullarySelectCallingScalarUDF()
          AS SELECT NullaryPi() AS pi;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullarySelectCallingLambdaArgFunction()
          AS SELECT ARRAY_FILTER([1, 2, 3], e -> e > 1) as arr;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION UnaryScalarArg(arg0 INT64)
          AS SELECT arg0;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION UnaryScalarArgMultipleReferences(arg0 INT64)
          AS SELECT arg0 + arg0 AS ret0, arg0 AS ret1;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION BinaryScalarArg(arg0 INT64, arg1 INT64)
          AS SELECT arg0, arg1, arg0 + arg1 AS ret2;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION UnaryScalarArgSubqueryReference(arg0 INT64)
          AS SELECT (SELECT arg0) AS ret0;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION UnaryScalarArgSubqueryWithReference(arg0 INT64)
          AS SELECT (WITH t AS (SELECT arg0) SELECT t.arg0 FROM t) AS ret0;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION UnaryTableArg(arg0 TABLE<a INT64>)
          AS SELECT * FROM arg0;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION UnaryTableArgColumnsUnused(arg0 TABLE<key INT64, value INT64>)
            AS SELECT 1 as result FROM arg0;)",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
             CREATE TABLE FUNCTION ScalarParamUsedAsTVFArgument(arg0 INT64)
             AS (SELECT * FROM UnaryScalarArg(arg0))
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION UnaryAbTableArg(arg0 TABLE<a INT64, b STRING>)
           AS SELECT * FROM arg0;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION UnaryAbTableArgSelfJoin(
             arg0 TABLE<a INT64, b STRING>)
           AS SELECT * FROM arg0 CROSS JOIN arg0 AS t1;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION UnaryAbTableArgScannedInCTE(
              arg0 TABLE<a INT64, b STRING>)
           AS WITH t AS (SELECT * FROM arg0) SELECT * FROM t;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION BinaryTableArg(
              arg0 TABLE<a INT64, b STRING>, arg1 TABLE<c INT64, d STRING>)
           AS SELECT * FROM arg0 CROSS JOIN arg1;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION BinaryAbTableArg(
             arg0 TABLE<a INT64, b STRING>, arg1 TABLE<a INT64, b STRING>)
           AS SELECT * FROM arg0 CROSS JOIN arg1;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION UnaryAbTableArgWithScalarArgs(
             x INT64, arg0 TABLE<a INT64, b STRING>, y STRING)
           AS SELECT * FROM arg0 WHERE arg0.a = x AND arg0.b = y;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION UnaryAbTableArgWithScalarArgsTempl(
             x ANY TYPE, arg0 ANY TABLE, y ANY TYPE)
           AS SELECT * FROM arg0 WHERE arg0.a = x AND arg0.b = y;
       )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION CallsUnaryAbTableArgWithScalarArgsTempl(
             ignored_param ANY TYPE)
           AS SELECT * FROM UnaryAbTableArgWithScalarArgsTempl(
               1, (SELECT 1 a, "2" b, DATE '2020-08-22' AS c), "b");
       )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION JoinsTableArgToScannedTable(
             arg_table TABLE<key INT64, value INT64>, arg_scalar STRING
@@ -10314,9 +11582,9 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
           AS SELECT arg_scalar AS c, *
           FROM TwoIntegers JOIN arg_table USING (key, value);
       )sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION TvfMultiAggGroupingConstants(
             TwoIntsTableArg TABLE<first INT64, second INT64>, int64_arg INT64)
@@ -10325,9 +11593,9 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
             SUM(first + int64_arg GROUP BY first) AS result
           FROM TwoIntsTableArg;
       )sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION TvfMultiAggGroupingConstantsWithStruct(
             arg_table TABLE<STRUCT<a STRUCT<b INT64>>>, int64_arg INT64)
@@ -10336,9 +11604,9 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
             SUM(arg_table.a.b + int64_arg GROUP BY arg_table.a) AS result
           FROM arg_table;
       )sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION TvfMultiAggNullary()
             AS
@@ -10346,9 +11614,9 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
           SELECT SUM(COUNT(a GROUP BY b) + COUNT(b GROUP BY a)
           GROUP BY a, b) as result FROM t;
         )sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION TvfMultiAggReferencesScannedTable(
             arg_table TABLE<key INT64, value INT64>, arg_scalar INT64
@@ -10358,9 +11626,9 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
           + arg_scalar AS result
           FROM TwoIntegers JOIN arg_table USING (key, value);
         )sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION TvfMultiAggScalarArgGroupingConst(
             arg_table TABLE<key INT64, value INT64>, arg_scalar INT64
@@ -10369,25 +11637,25 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
           SELECT SUM(COUNT(key) + arg_scalar GROUP BY value) as result
           FROM arg_table;
         )sql",
-      language_options);
+      language_options));
 
   // Functions for definer-rights inlining
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
         CREATE TABLE FUNCTION DefinerRightsTvf(a INT64) SQL SECURITY DEFINER
           AS SELECT * FROM  KeyValue WHERE KeyValue.Key = a; )sql",
-      language_options);
+      language_options));
 
   if (language_options.LanguageFeatureEnabled(FEATURE_COLLATION_SUPPORT) &&
       language_options.LanguageFeatureEnabled(FEATURE_ANNOTATION_FRAMEWORK)) {
-    AddSqlDefinedTableFunctionFromCreate(
+    GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
         R"(CREATE TABLE FUNCTION ScalarArgWithCollatedOutputCols(arg0 STRING)
          AS SELECT
            COLLATE(arg0, 'und:ci') AS col_ci,
            [COLLATE(arg0, 'und:ci')] AS col_array_ci,
            ([COLLATE(arg0, 'und:ci')], 1) AS col_struct_ci;)",
-        language_options);
-    AddSqlDefinedTableFunctionFromCreate(
+        language_options));
+    GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
         R"(CREATE TABLE FUNCTION TableArgWithCollatedOutputCols(
           arg0 TABLE<a STRING>)
          AS SELECT
@@ -10395,8 +11663,8 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
            [COLLATE(a, 'und:ci')] AS col_array_ci,
            ([COLLATE(a, 'und:ci')], 1) AS col_struct_ci
          FROM arg0;)",
-        language_options);
-    AddSqlDefinedTableFunctionFromCreate(
+        language_options));
+    GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
         R"(CREATE TABLE FUNCTION ValueTableArgWithCollatedOutputCols(
           arg0 TABLE<STRUCT<str_field STRING>>)
          AS SELECT
@@ -10404,97 +11672,98 @@ void SampleCatalogImpl::LoadNonTemplatedSqlTableValuedFunctions(
            [COLLATE(str_field, 'und:ci')] AS col_array_ci,
            ([COLLATE(str_field, 'und:ci')], 1) AS col_struct_ci
          FROM arg0;)",
-        language_options);
-    AddSqlDefinedTableFunctionFromCreate(
+        language_options));
+    GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
         R"(CREATE TABLE FUNCTION ScalarArgWithCollatedOutputValueTableCol(
           arg0 STRING)
          AS SELECT AS VALUE COLLATE(arg0, 'und:ci');)",
-        language_options);
-    AddSqlDefinedTableFunctionFromCreate(
+        language_options));
+    GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
         R"(CREATE TABLE FUNCTION ScalarArgsOfCollatableTypes(
           arg0 STRING, arg1 ARRAY<STRING>, arg2 STRUCT<STRING, INT64>)
          AS SELECT arg0, arg1, arg2;)",
-        language_options);
+        language_options));
   }
   if (language_options.LanguageFeatureEnabled(FEATURE_ORDER_BY_IN_AGGREGATE)) {
-    AddSqlDefinedTableFunctionFromCreate(
+    GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
         R"sql(
           CREATE TABLE FUNCTION UnaryTableArgAggregatedWithOrderBy(
              arg0 TABLE<a INT64>)
           AS WITH t AS (SELECT ARRAY_AGG(a ORDER BY a) AS arr FROM arg0)
              SELECT * FROM t;
         )sql",
-        language_options);
+        language_options));
   }
 
   // We want a TVF whose name is close to a scalar function to trigger
   // Did you mean logic when accidentally calling the TVF.
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"(CREATE TABLE FUNCTION NullaryPIT()
          AS SELECT 3.141 AS a;)",
-      language_options);
+      language_options));
 
-  AddSqlDefinedTableFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
         CREATE TABLE FUNCTION select_star_from_pseudo_columns_table(
             table_with_pseudo_columns ANY TABLE)
         AS SELECT * FROM table_with_pseudo_columns;
       )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
         CREATE TABLE FUNCTION select_pseudo_columns_from_table(
             table_with_pseudo_columns ANY TABLE)
         AS SELECT key, Filename, RowId FROM table_with_pseudo_columns;
       )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
         CREATE TABLE FUNCTION select_dot_pseudo_columns_from_table(
             table_with_pseudo_columns ANY TABLE)
         AS SELECT t.key, t.Filename, t.RowId FROM table_with_pseudo_columns t;
       )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
         CREATE TABLE FUNCTION no_arg_tvf_containing_filter_returns_one()
         AS (
           (SELECT COUNT(* WHERE x > 2) AS result FROM UNNEST([1,2,3]) AS x)
         );
       )sql",
-      language_options_with_aggregate_filtering);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options_with_aggregate_filtering));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
         CREATE TABLE FUNCTION templated_tvf_containing_filter_returns_one(unused ANY TABLE)
         AS (
           (SELECT COUNT(* WHERE x > 2) AS result FROM UNNEST([1,2,3]) AS x)
         );
       )sql",
-      language_options_with_aggregate_filtering);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options_with_aggregate_filtering));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION select_all_from_pseudo_columns_value_table(
               value_table_with_pseudo_columns ANY TABLE)
           AS SELECT * FROM value_table_with_pseudo_columns;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION select_pseudo_columns_from_value_table(
               value_table_with_pseudo_columns ANY TABLE)
           AS SELECT t, Filename, RowId FROM value_table_with_pseudo_columns t;
         )sql",
-      language_options);
-  AddSqlDefinedTableFunctionFromCreate(
+      language_options));
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedTableFunctionFromCreate(
       R"sql(
           CREATE TABLE FUNCTION select_dot_pseudo_columns_from_value_table(
               value_table_with_pseudo_columns ANY TABLE)
           AS SELECT t, t.Filename, t.RowId FROM value_table_with_pseudo_columns t;
         )sql",
-      language_options);
+      language_options));
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
+absl::Status SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   const std::string kColumnNameKey = "key";
   const std::string kColumnNameDate = "date";
   int context_id = 0;
@@ -10502,13 +11771,13 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // Add a TVF with a simple valid templated SQL body.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_one"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{}, ParseResumeLocation::FromString("select 1 as x")));
 
   // Add a templated SQL TVF that calls another templated SQL TVF.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_call_tvf_templated_select_one"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString(
           "select * from tvf_templated_select_one()")));
@@ -10516,7 +11785,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // Add a templated SQL TVF that calls another templated SQL TVF twice.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_call_tvf_templated_select_one_twice"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString(
           "select * from tvf_templated_select_one() union all "
@@ -10525,7 +11794,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // Add a TVF with a valid templated SQL body that refers to a scalar argument.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_int64_arg"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType(types::Int64Type())},
                         context_id++),
       /*arg_name_list=*/{"x"}, ParseResumeLocation::FromString("select x")));
@@ -10534,7 +11803,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // with a name that is potentially ambiguous with an in scope column name.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_int64_arg_with_name_ambiguity"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType(types::Int64Type())},
                         context_id++),
       /*arg_name_list=*/{"x"},
@@ -10543,8 +11812,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // Add a TVF with a valid templated SQL body that refers to a scalar argument.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_any_scalar_arg"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*arg_name_list=*/{"x"}, ParseResumeLocation::FromString("select x")));
 
@@ -10553,8 +11822,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // scalar type.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_scalar_arg_plus_integer"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*arg_name_list=*/{"x"},
@@ -10565,8 +11834,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument of any scalar type.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_scalar_arg_plus_integer_accept_dollars_col_name"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*arg_name_list=*/{"$col1"},
@@ -10577,8 +11846,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument of any scalar type.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_scalar_arg_plus_integer_return_dollars_col_name"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*arg_name_list=*/{"x"},
@@ -10589,8 +11858,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // scalar type.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_scalar_arg_concat_string"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*arg_name_list=*/{"x"},
@@ -10601,8 +11870,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument of any scalar type.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_scalar_arg_proto_field_access"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*arg_name_list=*/{"x"},
@@ -10612,7 +11881,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument using specific column names.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_relation_arg_using_column_names"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"t"},
       ParseResumeLocation::FromString("select key, value from t")));
@@ -10621,7 +11890,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // a templated input table argument.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_a"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"x"},
       ParseResumeLocation::FromString("select a from x")));
@@ -10630,7 +11899,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument using "select *".
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_relation_arg_using_select_star"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"t"},
       ParseResumeLocation::FromString("select * from t")));
@@ -10639,7 +11908,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument but does not use its columns.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_relation_arg_columns_unused"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"t"},
       ParseResumeLocation::FromString("select 1 as result from t")));
@@ -10648,7 +11917,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // using "select 1". The TVF is missing an output column name.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_relation_arg_using_select_one"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"t"},
       ParseResumeLocation::FromString("(select 1 from t limit 1)")));
@@ -10657,7 +11926,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument and also a table in the catalog.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_relation_arg_and_catalog_table"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"t"},
       ParseResumeLocation::FromString(
@@ -10667,7 +11936,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // arguments and uses a SQL WITH clause.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_two_relation_args"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation(),
                          FunctionArgumentType::AnyRelation()},
                         context_id++),
@@ -10679,8 +11948,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
 
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_multi_agg_valid_grouping_constants"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*arg_name_list=*/{"int64_arg"},
@@ -10689,8 +11958,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
 
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_multi_agg_invalid_grouping_constants"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY,
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                               FunctionArgumentType::REQUIRED)},
                         context_id++),
       /*arg_name_list=*/{"int64_arg"},
@@ -10699,7 +11968,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
 
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_multi_agg_valid_grouping_constants_with_struct"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"arg_table"},
       ParseResumeLocation::FromString(
@@ -10708,7 +11977,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
 
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_call_udf_with_multi_agg"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"arg_table"},
       ParseResumeLocation::FromString("SELECT NullaryWithMultilevelAgg() AS "
@@ -10716,7 +11985,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
 
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_call_uda_with_multi_agg"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType::AnyRelation()}, context_id++),
       /*arg_name_list=*/{"arg_table"},
       ParseResumeLocation::FromString(
@@ -10728,7 +11997,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_scalar_and_relation_args"},
       FunctionSignature(
-          ARG_TYPE_RELATION,
+          ARG_KIND_RELATION,
           {FunctionArgumentType(types::Int64Type()),
            FunctionArgumentType::RelationWithSchema(
                TVFRelation({{kColumnNameKey, types::Int64Type()}}),
@@ -10741,7 +12010,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // relation argument.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_scalar_and_relation_args_no_schema"},
-      FunctionSignature(ARG_TYPE_RELATION,
+      FunctionSignature(ARG_KIND_RELATION,
                         {FunctionArgumentType(types::Int64Type()),
                          FunctionArgumentType::AnyRelation()},
                         context_id++),
@@ -10753,11 +12022,11 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   const StructType* arg_type = nullptr;
   std::vector<StructType::StructField> fields{{"y", types::Int64Type()},
                                               {"z", types::StringType()}};
-  GOOGLESQL_CHECK_OK(type_factory()->MakeStructType(fields, &arg_type));
+  GOOGLESQL_RETURN_IF_ERROR(type_factory()->MakeStructType(fields, &arg_type));
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_with_struct_param"},
       FunctionSignature(
-          ARG_TYPE_RELATION,
+          ARG_KIND_RELATION,
           {FunctionArgumentType(arg_type), FunctionArgumentType::AnyRelation()},
           context_id++),
       /*arg_name_list=*/{"x", "t"},
@@ -10768,7 +12037,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_scalar_date_and_relation_args"},
       FunctionSignature(
-          ARG_TYPE_RELATION,
+          ARG_KIND_RELATION,
           {FunctionArgumentType(types::DateType()),
            FunctionArgumentType::RelationWithSchema(
                TVFRelation({{kColumnNameDate, types::DateType()}}),
@@ -10782,8 +12051,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // argument of any type and a relation argument of any table.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_any_scalar_and_relation_args"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY),
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY),
                          FunctionArgumentType::AnyRelation()},
                         context_id++),
       /*arg_name_list=*/{"s", "t"},
@@ -10793,27 +12062,27 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // column name.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_one_missing_col_name"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{}, ParseResumeLocation::FromString("select 1")));
 
   // Add an invalid templated SQL TVF with a parse error in the function body.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_parse_error"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{}, ParseResumeLocation::FromString("a b c d e")));
 
   // Add an invalid templated SQL TVF with an analysis error in the function
   // body.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_analysis_error"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString("select * from invalidtable")));
 
   // Add an invalid templated SQL TVF where the function body is not a query.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_function_body_not_query"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString(
           "insert keyvalue (key, value) values (1, 'one')")));
@@ -10822,7 +12091,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // parameter.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_function_body_refer_to_parameter"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString(
           "select @test_param_bool from keyvalue")));
@@ -10830,26 +12099,26 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // Add an invalid templated SQL TVF where the function body is empty.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_function_body_empty"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{}, ParseResumeLocation::FromString("")));
 
   // Add an invalid templated SQL TVF that directly calls itself.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
-      {"tvf_recursive"}, FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      {"tvf_recursive"}, FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString("select * from tvf_recursive()")));
 
   // Add two invalid templated SQL TVFs that indirectly call themselves.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_calls_self_indirectly_1"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString(
           "select * from tvf_calls_self_indirectly_2()")));
 
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_calls_self_indirectly_2"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString(
           "select * from tvf_calls_self_indirectly_1()")));
@@ -10858,7 +12127,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // original templated SQL TVF again, to make sure cycle detection works.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_calls_udf_calls_same_tvf"},
-      FunctionSignature(ARG_TYPE_RELATION, {}, context_id++),
+      FunctionSignature(ARG_KIND_RELATION, {}, context_id++),
       /*arg_name_list=*/{},
       ParseResumeLocation::FromString(
           "select udf_calls_tvf_calls_same_udf()")));
@@ -10866,7 +12135,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // Add a templated SQL TVF that calls a TVF that triggers a deprecation
   // warning.
   FunctionSignature deprecation_warning_signature(
-      ARG_TYPE_RELATION, /*arguments=*/{}, context_id++);
+      ARG_KIND_RELATION, /*arguments=*/{}, context_id++);
   deprecation_warning_signature.SetAdditionalDeprecationWarnings(
       {CreateDeprecationWarning(/*id=*/1001)});
   catalog_->AddOwnedTableValuedFunction(
@@ -10880,21 +12149,23 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
       FunctionArgumentType::RelationWithSchema(
           TVFRelation({{kColumnNameKey, types::Int64Type()}}),
           /*extra_relation_input_columns_allowed=*/true),
-      /*arguments=*/{FunctionArgumentType(ARG_TYPE_ARBITRARY)}, context_id++);
+      /*arguments=*/{FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
+      context_id++);
   FunctionSignature signature_return_key_int64_and_value_string_cols(
       FunctionArgumentType::RelationWithSchema(
           TVFRelation({{kColumnNameKey, types::Int64Type()},
                        {kColumnNameValue, types::StringType()}}),
           /*extra_relation_input_columns_allowed=*/true),
       /*arguments=*/
-      {FunctionArgumentType(ARG_TYPE_ARBITRARY),
-       FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY),
+       FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
       context_id++);
   FunctionSignature signature_return_value_table_string_col(
       FunctionArgumentType::RelationWithSchema(
           TVFRelation::ValueTable(types::StringType()),
           /*extra_relation_input_columns_allowed=*/true),
-      /*arguments=*/{FunctionArgumentType(ARG_TYPE_ARBITRARY)}, context_id++);
+      /*arguments=*/{FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
+      context_id++);
 
   // Add a templated TVF with a required signature of a single INT64 column
   // named "key".
@@ -10970,9 +12241,9 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // function over input scalar argument.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_collated_output_columns_with_collate_function"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY),
-                         FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY),
+                         FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*arg_name_list=*/{"x", "y"},
       ParseResumeLocation::FromString(
@@ -10984,8 +12255,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // collated table column.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_collated_output_columns_with_collated_column_ref"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*arg_name_list=*/{"x"},
       ParseResumeLocation::FromString(
@@ -10996,8 +12267,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // relation argument.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_collated_output_columns_with_relation_arg"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_RELATION),
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_RELATION),
                          FunctionArgumentType(types::Int64Type())},
                         context_id++),
       /*arg_name_list=*/{"x", "y"},
@@ -11010,9 +12281,9 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // column.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_collated_output_column_as_value_table"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY),
-                         FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY),
+                         FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*arg_name_list=*/{"x", "y"},
       ParseResumeLocation::FromString(
@@ -11041,8 +12312,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // rewriter.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_typeof_function"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*arg_name_list=*/{"x"},
       ParseResumeLocation::FromString(R"sql(select TYPEOF(x) AS col)sql")));
@@ -11051,8 +12322,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   {
     catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
         {"tvf_templated_select_typeof_function_with_anonymization_info"},
-        FunctionSignature(ARG_TYPE_RELATION,
-                          {FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+        FunctionSignature(ARG_KIND_RELATION,
+                          {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                           context_id++),
         /*arg_name_list=*/{"x"},
         ParseResumeLocation::FromString(
@@ -11067,7 +12338,7 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
         FunctionSignature(
             FunctionArgumentType::AnyRelation(),
             {FunctionArgumentType::AnyRelation(),
-             FunctionArgumentType(ARG_TYPE_ARBITRARY,
+             FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY,
                                   FunctionArgumentType::REQUIRED)},
             /*context_id=*/1),
         /*arg_name_list=*/{"InputTable", "threshold"},
@@ -11086,8 +12357,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // A templated TVF which calls a templated TVF.
   catalog_->AddOwnedTableValuedFunction(new TemplatedSQLTVF(
       {"tvf_templated_select_nested_typeof_function"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*arg_name_list=*/{"x"},
       ParseResumeLocation::FromString(
@@ -11096,8 +12367,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // Add a templated definer-rights TVF
   auto templated_definer_rights_tvf = std::make_unique<TemplatedSQLTVF>(
       std::vector<std::string>{"definer_rights_templated_tvf"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_ARBITRARY)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)},
                         context_id++),
       /*arg_name_list=*/std::vector<std::string>{"x"},
       ParseResumeLocation::FromString("select * from KeyValue WHERE key = x"));
@@ -11110,8 +12381,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   // constructor.
   auto templated_proto_braced_ctor_tvf = std::make_unique<TemplatedSQLTVF>(
       std::vector<std::string>{"templated_proto_braced_ctor_tvf"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_RELATION)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_RELATION)},
                         context_id++),
       /*arg_name_list=*/std::vector<std::string>{"T"},
       ParseResumeLocation::FromString(R"sql(
@@ -11121,8 +12392,8 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
       std::move(templated_proto_braced_ctor_tvf));
   auto templated_struct_braced_ctor_tvf = std::make_unique<TemplatedSQLTVF>(
       std::vector<std::string>{"templated_struct_braced_ctor_tvf"},
-      FunctionSignature(ARG_TYPE_RELATION,
-                        {FunctionArgumentType(ARG_TYPE_RELATION)},
+      FunctionSignature(ARG_KIND_RELATION,
+                        {FunctionArgumentType(ARG_KIND_RELATION)},
                         context_id++),
       /*arg_name_list=*/std::vector<std::string>{"T"},
       ParseResumeLocation::FromString(R"sql(
@@ -11130,9 +12401,11 @@ void SampleCatalogImpl::LoadTemplatedSQLTableValuedFunctions() {
   FROM T)sql"));
   catalog_->AddOwnedTableValuedFunction(
       std::move(templated_struct_braced_ctor_tvf));
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadTableValuedFunctionsWithAnonymizationUid() {
+absl::Status SampleCatalogImpl::LoadTableValuedFunctionsWithAnonymizationUid() {
   // Generate an output schema that returns every possible type.
   const std::vector<OutputColumn> output_columns =
       GetOutputColumnsForAllTypes(types_);
@@ -11159,24 +12432,25 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithAnonymizationUid() {
           FunctionArgumentType::RelationWithSchema(
               output_schema_all_types,
               /*extra_relation_input_columns_allowed=*/false),
-          FunctionArgumentTypeList({FunctionArgumentType(ARG_TYPE_RELATION)}),
+          FunctionArgumentTypeList({FunctionArgumentType(ARG_KIND_RELATION)}),
           context_id++)},
       AnonymizationInfo::Create({"column_int64"}).value_or(nullptr),
       output_schema_all_types));
 
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_one_templated_arg_with_anonymization_uid"},
-      {FunctionSignature(
-          FunctionArgumentType::RelationWithSchema(
-              output_schema_all_types,
-              /*extra_relation_input_columns_allowed=*/false),
-          FunctionArgumentTypeList({FunctionArgumentType(ARG_TYPE_ARBITRARY)}),
-          context_id++)},
+      {FunctionSignature(FunctionArgumentType::RelationWithSchema(
+                             output_schema_all_types,
+                             /*extra_relation_input_columns_allowed=*/false),
+                         FunctionArgumentTypeList(
+                             {FunctionArgumentType(ARG_KIND_EXPR_ARBITRARY)}),
+                         context_id++)},
       AnonymizationInfo::Create({"column_int64"}).value_or(nullptr),
       output_schema_all_types));
 
-  TVFRelation output_schema_proto(
-      {{"user_info", GetProtoType(googlesql_test::TestExtraPB::descriptor())}});
+  GOOGLESQL_ASSIGN_OR_RETURN(const Type* proto_testextrapb,
+                   GetProtoType(googlesql_test::TestExtraPB::descriptor()));
+  TVFRelation output_schema_proto({{"user_info", proto_testextrapb}});
 
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_no_args_with_nested_anonymization_uid"},
@@ -11187,8 +12461,8 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithAnonymizationUid() {
       AnonymizationInfo::Create({"user_info", "int32_val1"}).value_or(nullptr),
       output_schema_proto));
 
-  TVFRelation output_schema_proto_value_table = TVFRelation::ValueTable(
-      GetProtoType(googlesql_test::TestExtraPB::descriptor()));
+  TVFRelation output_schema_proto_value_table =
+      TVFRelation::ValueTable(proto_testextrapb);
 
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_no_args_value_table_with_anonymization_uid"},
@@ -11199,9 +12473,10 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithAnonymizationUid() {
       AnonymizationInfo::Create({"int32_val1"}).value_or(nullptr),
       output_schema_proto_value_table));
 
+  GOOGLESQL_ASSIGN_OR_RETURN(const Type* proto_kitchensinkpb,
+                   GetProtoType(googlesql_test::KitchenSinkPB::descriptor()));
   TVFRelation output_schema_proto_value_table_with_nested_int =
-      TVFRelation::ValueTable(
-          GetProtoType(googlesql_test::KitchenSinkPB::descriptor()));
+      TVFRelation::ValueTable(proto_kitchensinkpb);
 
   catalog_->AddOwnedTableValuedFunction(new FixedOutputSchemaTVF(
       {"tvf_no_args_value_table_with_nested_anonymization_uid"},
@@ -11224,6 +12499,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithAnonymizationUid() {
       AnonymizationInfo::Create({"nested_value.nested_int64"})
           .value_or(nullptr),
       output_schema_proto_value_table_with_nested_int));
+  return absl::OkStatus();
 }
 
 void SampleCatalogImpl::LoadTableValuedFunctionsWithOptionalRelations() {
@@ -11236,7 +12512,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithOptionalRelations() {
           FunctionArgumentType::RelationWithSchema(
               output_schema,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(googlesql::ARG_TYPE_RELATION,
+          {FunctionArgumentType(googlesql::ARG_KIND_RELATION,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
                types_->get_string(),
@@ -11252,9 +12528,9 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithOptionalRelations() {
           FunctionArgumentType::RelationWithSchema(
               output_schema,
               /*extra_relation_input_columns_allowed=*/false),
-          {FunctionArgumentType(googlesql::ARG_TYPE_RELATION,
+          {FunctionArgumentType(googlesql::ARG_KIND_RELATION,
                                 FunctionArgumentType::OPTIONAL),
-           FunctionArgumentType(googlesql::ARG_TYPE_RELATION,
+           FunctionArgumentType(googlesql::ARG_KIND_RELATION,
                                 FunctionArgumentType::OPTIONAL),
            FunctionArgumentType(
                types_->get_string(),
@@ -11269,7 +12545,7 @@ void SampleCatalogImpl::LoadTableValuedFunctionsWithOptionalRelations() {
       {FunctionSignature(FunctionArgumentType::RelationWithSchema(
                              output_schema,
                              /*extra_relation_input_columns_allowed=*/false),
-                         {FunctionArgumentType(googlesql::ARG_TYPE_RELATION,
+                         {FunctionArgumentType(googlesql::ARG_KIND_RELATION,
                                                FunctionArgumentType::OPTIONAL),
                           FunctionArgumentType(googlesql::types::StringType(),
                                                FunctionArgumentType::OPTIONAL)},
@@ -11285,7 +12561,7 @@ void SampleCatalogImpl::AddProcedureWithArgumentType(std::string type_name,
   catalog_->AddOwnedProcedure(std::move(procedure));
 }
 
-void SampleCatalogImpl::LoadProcedures() {
+absl::Status SampleCatalogImpl::LoadProcedures() {
   Procedure* procedure = nullptr;
 
   // Procedure with no arguments.
@@ -11295,18 +12571,18 @@ void SampleCatalogImpl::LoadProcedures() {
 
   // Procedure with no arguments and void return type.
   procedure = new Procedure({"proc_no_args_void_return"},
-                            {ARG_TYPE_VOID, {}, -1 /* context */});
+                            {ARG_KIND_VOID, {}, -1 /* context */});
   catalog_->AddOwnedProcedure(procedure);
 
   // Procedure with arguments and void return type.
   procedure =
       new Procedure({"proc_with_args_void_return"},
-                    {ARG_TYPE_VOID, {types_->get_int64()}, -1 /* context */});
+                    {ARG_KIND_VOID, {types_->get_int64()}, -1 /* context */});
   catalog_->AddOwnedProcedure(procedure);
 
   // Add a procedure that takes a specific enum as an argument.
-  const EnumType* enum_TestEnum =
-      GetEnumType(googlesql_test::TestEnum_descriptor());
+  GOOGLESQL_ASSIGN_OR_RETURN(const EnumType* enum_TestEnum,
+                   GetEnumType(googlesql_test::TestEnum_descriptor()));
   procedure =
       new Procedure({"proc_on_TestEnum"},
                     {types_->get_bool(), {enum_TestEnum}, /*context_id=*/-1});
@@ -11325,16 +12601,16 @@ void SampleCatalogImpl::LoadProcedures() {
   catalog_->AddOwnedProcedure(procedure);
 
   // Add a procedure with templated arguments.
-  procedure =
-      new Procedure({"proc_on_any_any"}, {types_->get_int64(),
-                                          {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
-                                          /*context_id=*/-1});
+  procedure = new Procedure({"proc_on_any_any"},
+                            {types_->get_int64(),
+                             {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
+                             /*context_id=*/-1});
   catalog_->AddOwnedProcedure(procedure);
 
   // Add a procedure with templated arguments of arbitrary type.
   procedure = new Procedure({"proc_on_arbitrary_arbitrary"},
                             {types_->get_int64(),
-                             {ARG_TYPE_ARBITRARY, ARG_TYPE_ARBITRARY},
+                             {ARG_KIND_EXPR_ARBITRARY, ARG_KIND_EXPR_ARBITRARY},
                              /*context_id=*/-1});
   catalog_->AddOwnedProcedure(procedure);
 
@@ -11368,55 +12644,59 @@ void SampleCatalogImpl::LoadProcedures() {
   // Add a procedure with named_lambda.
   {
     FunctionArgumentType named_lambda = FunctionArgumentType::Lambda(
-        {ARG_TYPE_ANY_1}, ARG_TYPE_ANY_1,
+        {ARG_KIND_EXPR_ANY_1}, ARG_KIND_EXPR_ANY_1,
         FunctionArgumentTypeOptions().set_argument_name("named_lambda",
                                                         kNamedOnly));
     auto procedure = std::make_unique<Procedure>(
         std::vector<std::string>{"proc_on_named_lambda"},
         FunctionSignature{types_->get_int64(),
-                          {ARG_TYPE_ANY_1, named_lambda},
+                          {ARG_KIND_EXPR_ANY_1, named_lambda},
                           /*context_id=*/-1});
     catalog_->AddOwnedProcedure(std::move(procedure));
   }
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadConstants() {
+absl::Status SampleCatalogImpl::LoadConstants() {
   // Load constants that are owned by 'catalog_'.
   std::unique_ptr<SimpleConstant> int64_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"TestConstantInt64"},
-                                  Value::Int64(1L), &int64_constant));
+  GOOGLESQL_RETURN_IF_ERROR(
+      SimpleConstant::Create(std::vector<std::string>{"TestConstantInt64"},
+                             Value::Int64(1L), &int64_constant));
   catalog_->AddOwnedConstant(int64_constant.release());
   std::unique_ptr<SimpleConstant> string_constant;
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       SimpleConstant::Create(std::vector<std::string>{"TestConstantString"},
                              Value::String("foo"), &string_constant));
   catalog_->AddOwnedConstant(string_constant.release());
 
   std::unique_ptr<SimpleConstant> bool_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"TestConstantTrue"},
-                                  Value::Bool(true), &bool_constant));
+  GOOGLESQL_RETURN_IF_ERROR(
+      SimpleConstant::Create(std::vector<std::string>{"TestConstantTrue"},
+                             Value::Bool(true), &bool_constant));
   catalog_->AddOwnedConstant(std::move(bool_constant));
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"TestConstantFalse"},
-                                  Value::Bool(false), &bool_constant));
+  GOOGLESQL_RETURN_IF_ERROR(
+      SimpleConstant::Create(std::vector<std::string>{"TestConstantFalse"},
+                             Value::Bool(false), &bool_constant));
   catalog_->AddOwnedConstant(std::move(bool_constant));
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       SimpleConstant::Create(std::vector<std::string>{"TestConstantNullBool"},
                              Value::NullBool(), &bool_constant));
   catalog_->AddOwnedConstant(std::move(bool_constant));
 
   std::unique_ptr<SimpleConstant> string_constant_nonstandard_name;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"Test Constant-String"},
       Value::String("foo bar"), &string_constant_nonstandard_name));
   catalog_->AddOwnedConstant(string_constant_nonstandard_name.release());
 
   // Load a constant that is not owned by 'catalog_'.
-  const ProtoType* const proto_type =
-      GetProtoType(googlesql_test::KitchenSinkPB::descriptor());
+  GOOGLESQL_ASSIGN_OR_RETURN(const ProtoType* proto_type,
+                   GetProtoType(googlesql_test::KitchenSinkPB::descriptor()));
   googlesql_test::KitchenSinkPB proto_value;
   proto_value.set_int64_key_1(1);
   proto_value.set_int64_key_2(-999);
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"TestConstantProto"},
       Value::Proto(proto_type, proto_value.SerializeAsCord()),
       &owned_constant_));
@@ -11424,10 +12704,10 @@ void SampleCatalogImpl::LoadConstants() {
 
   // Load a constant that conflicts with a table.
   const StructType* table_struct_type;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType({{"key", types_->get_int32()}},
-                                  &table_struct_type));
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType({{"key", types_->get_int32()}},
+                                         &table_struct_type));
   std::unique_ptr<SimpleConstant> table_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"NameConflictTable"},
       Value::Struct(table_struct_type, {Value::Int32(-3456)}),
       &table_constant));
@@ -11435,26 +12715,28 @@ void SampleCatalogImpl::LoadConstants() {
 
   // Load a constant that conflicts with a value table.
   std::unique_ptr<SimpleConstant> value_table_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"Int32ValueTable"},
-                                  Value::Int32(3), &value_table_constant));
+  GOOGLESQL_RETURN_IF_ERROR(
+      SimpleConstant::Create(std::vector<std::string>{"Int32ValueTable"},
+                             Value::Int32(3), &value_table_constant));
   catalog_->AddOwnedConstant(value_table_constant.release());
 
   // Load a constant that conflicts with a type.
   std::unique_ptr<SimpleConstant> type_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"NameConflictType"},
-                                  Value::Bool(false), &type_constant));
+  GOOGLESQL_RETURN_IF_ERROR(
+      SimpleConstant::Create(std::vector<std::string>{"NameConflictType"},
+                             Value::Bool(false), &type_constant));
   catalog_->AddOwnedConstant(type_constant.release());
 
   // Load a constant that conflicts with zero-argument functions.
   std::unique_ptr<SimpleConstant> zero_argument_function_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"sort_count"},
-                                  Value::Int64(4),
-                                  &zero_argument_function_constant));
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(std::vector<std::string>{"sort_count"},
+                                         Value::Int64(4),
+                                         &zero_argument_function_constant));
   catalog_->AddOwnedConstant(zero_argument_function_constant.release());
 
   std::unique_ptr<SimpleConstant>
       zero_argument_function_constant_with_optional_parentheses;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"CURRENT_DATE"}, Value::Int64(4),
       &zero_argument_function_constant_with_optional_parentheses));
   catalog_->AddOwnedConstant(
@@ -11462,21 +12744,21 @@ void SampleCatalogImpl::LoadConstants() {
 
   // Load a constant that conflicts with a multi-argument function.
   std::unique_ptr<SimpleConstant> multi_argument_function_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"concat"},
-                                  Value::Int64(5),
-                                  &multi_argument_function_constant));
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(std::vector<std::string>{"concat"},
+                                         Value::Int64(5),
+                                         &multi_argument_function_constant));
   catalog_->AddOwnedConstant(multi_argument_function_constant.release());
 
   // Load a constant that conflicts with a zero-argument TVF.
   std::unique_ptr<SimpleConstant> zero_argument_tvf_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"tvf_no_args"},
-                                  Value::Int64(6),
-                                  &zero_argument_tvf_constant));
+  GOOGLESQL_RETURN_IF_ERROR(
+      SimpleConstant::Create(std::vector<std::string>{"tvf_no_args"},
+                             Value::Int64(6), &zero_argument_tvf_constant));
   catalog_->AddOwnedConstant(zero_argument_tvf_constant.release());
 
   // Load a constant that conflicts with a multi-argument TVF.
   std::unique_ptr<SimpleConstant> multi_argument_tvf_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"tvf_exactly_1_int64_arg"}, Value::Int64(7),
       &multi_argument_tvf_constant));
   catalog_->AddOwnedConstant(multi_argument_tvf_constant.release());
@@ -11484,23 +12766,23 @@ void SampleCatalogImpl::LoadConstants() {
   // Load a constant that conflicts with a zero-argument procedure.
   // The multi-argument case is handled in the nested catalog.
   std::unique_ptr<SimpleConstant> constant;
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       SimpleConstant::Create({"proc_no_args"}, Value::Bool(true), &constant));
   catalog_->AddOwnedConstant(constant.release());
 
   // Load a constant that conflicts with a catalog.
   const StructType* nested_struct_type;
-  GOOGLESQL_CHECK_OK(types_->MakeStructType(
+  GOOGLESQL_RETURN_IF_ERROR(types_->MakeStructType(
       {{"a", types_->get_int32()}, {"b", types_->get_int64()}},
       &nested_struct_type));
   const StructType* catalog_struct_type;
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       types_->MakeStructType({{"a", types_->get_int32()},
                               {"nested_catalog_catalog", nested_struct_type},
                               {"TestConstantBool", types_->get_bool()}},
                              &catalog_struct_type));
   std::unique_ptr<SimpleConstant> catalog_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"nested_catalog_with_catalog"},
       Value::Struct(catalog_struct_type,
                     {Value::Int32(-3456),
@@ -11513,57 +12795,59 @@ void SampleCatalogImpl::LoadConstants() {
   // Load a constant that conflicts with an expression column in standalone
   // expression resolution.
   std::unique_ptr<SimpleConstant> standalone_expression_constant;
-  GOOGLESQL_CHECK_OK(
+  GOOGLESQL_RETURN_IF_ERROR(
       SimpleConstant::Create(std::vector<std::string>{"column_KitchenSink"},
                              Value::Int64(8), &standalone_expression_constant));
   catalog_->AddOwnedConstant(standalone_expression_constant.release());
 
   // Load a constant with a name that resembles a system variable.
   std::unique_ptr<SimpleConstant> sysvar1_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"@@sysvar1"},
-                                  Value::Int64(8), &sysvar1_constant));
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(std::vector<std::string>{"@@sysvar1"},
+                                         Value::Int64(8), &sysvar1_constant));
   catalog_->AddOwnedConstant(sysvar1_constant.release());
 
   std::unique_ptr<SimpleConstant> sysvar2_constant;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"@@sysvar2"},
-                                  Value::Int64(8), &sysvar2_constant));
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(std::vector<std::string>{"@@sysvar2"},
+                                         Value::Int64(8), &sysvar2_constant));
   catalog_->AddOwnedConstant(sysvar2_constant.release());
 
   // Script variables are managed by the ScriptExecutor. Eventually, they get
   // put into the catalog as constants. For testing, we'll add some "variables"
   // here.
   std::unique_ptr<SimpleConstant> string_variable_foo;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"string_variable_foo"},
       Value::String("string_variable_foo_value"), &string_variable_foo));
   catalog_->AddOwnedConstant(std::move(string_variable_foo));
 
   std::unique_ptr<SimpleConstant> string_variable_bar;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"string_variable_bar"},
       Value::String("string_variable_bar_value"), &string_variable_bar));
   catalog_->AddOwnedConstant(std::move(string_variable_bar));
 
   std::unique_ptr<SimpleConstant> int_variable_foo;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(std::vector<std::string>{"int_variable_foo"},
-                                  Value::Int32(4), &int_variable_foo));
+  GOOGLESQL_RETURN_IF_ERROR(
+      SimpleConstant::Create(std::vector<std::string>{"int_variable_foo"},
+                             Value::Int32(4), &int_variable_foo));
   catalog_->AddOwnedConstant(std::move(int_variable_foo));
 
   // Load constants with report format enum types
   std::unique_ptr<SimpleConstant> PROTO_ENUM;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"PROTO_ENUM"},
       Value::Enum(types::DifferentialPrivacyReportFormatEnumType(),
                   functions::DifferentialPrivacyEnums::PROTO),
       &PROTO_ENUM));
   catalog_->AddOwnedConstant(PROTO_ENUM.release());
   std::unique_ptr<SimpleConstant> JSON_ENUM;
-  GOOGLESQL_CHECK_OK(SimpleConstant::Create(
+  GOOGLESQL_RETURN_IF_ERROR(SimpleConstant::Create(
       std::vector<std::string>{"JSON_ENUM"},
       Value::Enum(types::DifferentialPrivacyReportFormatEnumType(),
                   functions::DifferentialPrivacyEnums::JSON),
       &JSON_ENUM));
   catalog_->AddOwnedConstant(JSON_ENUM.release());
+  return absl::OkStatus();
 }
 
 void SampleCatalogImpl::LoadConnections() {
@@ -11605,7 +12889,7 @@ void SampleCatalogImpl::AddOwnedTable(SimpleTable* table) {
   googlesql_base::InsertOrDie(&tables_, table->Name(), table);
 }
 
-void SampleCatalogImpl::LoadWellKnownLambdaArgFunctions() {
+absl::Status SampleCatalogImpl::LoadWellKnownLambdaArgFunctions() {
   const Type* int64_type = types_->get_int64();
   const Type* bool_type = types_->get_bool();
 
@@ -11613,49 +12897,51 @@ void SampleCatalogImpl::LoadWellKnownLambdaArgFunctions() {
   auto function = std::make_unique<Function>(
       "fn_array_filter", "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {ARG_ARRAY_TYPE_ANY_1,
-       {ARG_ARRAY_TYPE_ANY_1,
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, bool_type)},
+      {ARG_KIND_EXPR_ARRAY_ANY_1,
+       {ARG_KIND_EXPR_ARRAY_ANY_1,
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, bool_type)},
        /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, FUNCTION<<T1>->BOOL>) -> <array<T1>>",
-           function->GetSignature(0)->DebugString());
-  function->AddSignature(
-      {ARG_ARRAY_TYPE_ANY_1,
-       {ARG_ARRAY_TYPE_ANY_1,
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_1, int64_type}, bool_type)},
-       /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, FUNCTION<(<T1>, INT64)->BOOL>) -> <array<T1>>",
-           function->GetSignature(1)->DebugString());
+  GOOGLESQL_RET_CHECK("(<array<T1>>, FUNCTION<<T1>->BOOL>) -> <array<T1>>" ==
+            function->GetSignature(0)->DebugString());
+  function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_1,
+                          {ARG_KIND_EXPR_ARRAY_ANY_1,
+                           FunctionArgumentType::Lambda(
+                               {ARG_KIND_EXPR_ANY_1, int64_type}, bool_type)},
+                          /*context_id=*/-1});
+  GOOGLESQL_RET_CHECK("(<array<T1>>, FUNCTION<(<T1>, INT64)->BOOL>) -> <array<T1>>" ==
+            function->GetSignature(1)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // Models ARRAY_TRANSFORM
   function = std::make_unique<Function>("fn_array_transform",
                                         "sample_functions", Function::SCALAR);
-  function->AddSignature(
-      {ARG_ARRAY_TYPE_ANY_2,
-       {ARG_ARRAY_TYPE_ANY_1,
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, ARG_TYPE_ANY_2)},
-       /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, FUNCTION<<T1>-><T2>>) -> <array<T2>>",
-           function->GetSignature(0)->DebugString());
-  function->AddSignature({ARG_ARRAY_TYPE_ANY_2,
-                          {ARG_ARRAY_TYPE_ANY_1,
-                           FunctionArgumentType::Lambda(
-                               {ARG_TYPE_ANY_1, int64_type}, ARG_TYPE_ANY_2)},
+  function->AddSignature({ARG_KIND_EXPR_ARRAY_ANY_2,
+                          {ARG_KIND_EXPR_ARRAY_ANY_1,
+                           FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1},
+                                                        ARG_KIND_EXPR_ANY_2)},
                           /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, FUNCTION<(<T1>, INT64)-><T2>>) -> <array<T2>>",
-           function->GetSignature(1)->DebugString());
+  GOOGLESQL_RET_CHECK("(<array<T1>>, FUNCTION<<T1>-><T2>>) -> <array<T2>>" ==
+            function->GetSignature(0)->DebugString());
+  function->AddSignature(
+      {ARG_KIND_EXPR_ARRAY_ANY_2,
+       {ARG_KIND_EXPR_ARRAY_ANY_1,
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1, int64_type},
+                                     ARG_KIND_EXPR_ANY_2)},
+       /*context_id=*/-1});
+  GOOGLESQL_RET_CHECK("(<array<T1>>, FUNCTION<(<T1>, INT64)-><T2>>) -> <array<T2>>" ==
+            function->GetSignature(1)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   function = std::make_unique<Function>("fn_fp_array_sort", "sample_functions",
                                         Function::SCALAR);
-  function->AddSignature({ARG_TYPE_ANY_1,
-                          {ARG_ARRAY_TYPE_ANY_1,
-                           FunctionArgumentType::Lambda(
-                               {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1}, int64_type)},
-                          /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, FUNCTION<(<T1>, <T1>)->INT64>) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  function->AddSignature(
+      {ARG_KIND_EXPR_ANY_1,
+       {ARG_KIND_EXPR_ARRAY_ANY_1,
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
+                                     int64_type)},
+       /*context_id=*/-1});
+  GOOGLESQL_RET_CHECK("(<array<T1>>, FUNCTION<(<T1>, <T1>)->INT64>) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // Models REDUCE function, which takes an input array, an initial state and a
@@ -11664,17 +12950,19 @@ void SampleCatalogImpl::LoadWellKnownLambdaArgFunctions() {
   function = std::make_unique<Function>("fn_fp_array_reduce",
                                         "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {ARG_TYPE_ANY_2,
-       {ARG_ARRAY_TYPE_ANY_1, ARG_TYPE_ANY_2,
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_2, ARG_TYPE_ANY_1},
-                                     ARG_TYPE_ANY_2)},
+      {ARG_KIND_EXPR_ANY_2,
+       {ARG_KIND_EXPR_ARRAY_ANY_1, ARG_KIND_EXPR_ANY_2,
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_2, ARG_KIND_EXPR_ANY_1},
+                                     ARG_KIND_EXPR_ANY_2)},
        /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, <T2>, FUNCTION<(<T2>, <T1>)-><T2>>) -> <T2>",
-           function->GetSignature(0)->DebugString());
+  GOOGLESQL_RET_CHECK("(<array<T1>>, <T2>, FUNCTION<(<T2>, <T1>)-><T2>>) -> <T2>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
+absl::Status SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
   const Type* int64_type = types_->get_int64();
   const Type* string_type = types_->get_string();
   const Type* bool_type = types_->get_bool();
@@ -11684,23 +12972,23 @@ void SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
   auto function = std::make_unique<Function>(
       "fn_fp_T_T_LAMBDA", "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {ARG_TYPE_ANY_1,
-       {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1,
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, bool_type)},
+      {ARG_KIND_EXPR_ANY_1,
+       {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, bool_type)},
        /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<T1>, <T1>, FUNCTION<<T1>->BOOL>) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  GOOGLESQL_RET_CHECK("(<T1>, <T1>, FUNCTION<<T1>->BOOL>) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // fn_fp_ArrayT_T is provided here to show current behavior to make it easier
   // for reader to understand fn_fp_ArrayT_T_LAMBDA.
   function = std::make_unique<Function>("fn_fp_ArrayT_T", "sample_functions",
                                         Function::SCALAR);
-  function->AddSignature({ARG_TYPE_ANY_1,
-                          {ARG_ARRAY_TYPE_ANY_1, ARG_TYPE_ANY_1},
+  function->AddSignature({ARG_KIND_EXPR_ANY_1,
+                          {ARG_KIND_EXPR_ARRAY_ANY_1, ARG_KIND_EXPR_ANY_1},
                           /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, <T1>) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  GOOGLESQL_RET_CHECK("(<array<T1>>, <T1>) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // Demostrate case where we don't have common super type for T1, due to
@@ -11708,12 +12996,12 @@ void SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
   function = std::make_unique<Function>("fn_fp_ArrayT_T_LAMBDA",
                                         "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {ARG_TYPE_ANY_1,
-       {ARG_ARRAY_TYPE_ANY_1, ARG_TYPE_ANY_1,
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, bool_type)},
+      {ARG_KIND_EXPR_ANY_1,
+       {ARG_KIND_EXPR_ARRAY_ANY_1, ARG_KIND_EXPR_ANY_1,
+        FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1}, bool_type)},
        /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<array<T1>>, <T1>, FUNCTION<<T1>->BOOL>) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  GOOGLESQL_RET_CHECK("(<array<T1>>, <T1>, FUNCTION<<T1>->BOOL>) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // Demonstrate that lambda argument type inference conflict with final
@@ -11721,12 +13009,12 @@ void SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
   function = std::make_unique<Function>("fn_fp_T_LAMBDA_RET_T",
                                         "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {ARG_TYPE_ANY_1,
-       {ARG_TYPE_ANY_1,
-        FunctionArgumentType::Lambda({ARG_TYPE_ANY_1}, ARG_TYPE_ANY_1)},
+      {ARG_KIND_EXPR_ANY_1,
+       {ARG_KIND_EXPR_ANY_1, FunctionArgumentType::Lambda({ARG_KIND_EXPR_ANY_1},
+                                                          ARG_KIND_EXPR_ANY_1)},
        /*context_id=*/-1});
-  ABSL_CHECK_EQ("(<T1>, FUNCTION<<T1>-><T1>>) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  GOOGLESQL_RET_CHECK("(<T1>, FUNCTION<<T1>-><T1>>) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   const auto named_required_format_arg = FunctionArgumentType(
@@ -11735,25 +13023,27 @@ void SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
   // Signature with lambda and named argument before lambda.
   function = std::make_unique<Function>("fn_fp_named_then_lambda",
                                         "sample_functions", Function::SCALAR);
-  function->AddSignature(
-      {ARG_TYPE_ANY_1,
-       {named_required_format_arg,
-        FunctionArgumentType::Lambda({int64_type}, ARG_TYPE_ANY_1)},
-       /*context_id=*/-1});
-  ABSL_CHECK_EQ("(STRING format_string, FUNCTION<INT64-><T1>>) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  const auto named_lambda_arg = FunctionArgumentType::Lambda(
+      {int64_type}, ARG_KIND_EXPR_ANY_1,
+      FunctionArgumentTypeOptions().set_argument_name("lambda",
+                                                      kPositionalOrNamed));
+  function->AddSignature({ARG_KIND_EXPR_ANY_1,
+                          {named_required_format_arg, named_lambda_arg},
+                          /*context_id=*/-1});
+  GOOGLESQL_RET_CHECK("(STRING format_string, FUNCTION<INT64-><T1>> lambda) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // Signature with lambda and named argument after lambda.
   function = std::make_unique<Function>("fn_fp_lambda_then_named",
                                         "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {ARG_TYPE_ANY_1,
-       {FunctionArgumentType::Lambda({int64_type}, ARG_TYPE_ANY_1),
+      {ARG_KIND_EXPR_ANY_1,
+       {FunctionArgumentType::Lambda({int64_type}, ARG_KIND_EXPR_ANY_1),
         named_required_format_arg},
        /*context_id=*/-1});
-  ABSL_CHECK_EQ("(FUNCTION<INT64-><T1>>, STRING format_string) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  GOOGLESQL_RET_CHECK("(FUNCTION<INT64-><T1>>, STRING format_string) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // Signature with lambda and repeated arguments after lambda.
@@ -11762,39 +13052,42 @@ void SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
   function = std::make_unique<Function>("fn_fp_lambda_then_repeated",
                                         "sample_functions", Function::SCALAR);
   function->AddSignature(
-      {ARG_TYPE_ANY_1,
-       {FunctionArgumentType::Lambda({int64_type}, ARG_TYPE_ANY_1),
+      {ARG_KIND_EXPR_ANY_1,
+       {FunctionArgumentType::Lambda({int64_type}, ARG_KIND_EXPR_ANY_1),
         repeated_arg},
        /*context_id=*/-1});
-  ABSL_CHECK_EQ("(FUNCTION<INT64-><T1>>, repeated INT64) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  GOOGLESQL_RET_CHECK("(FUNCTION<INT64-><T1>>, repeated INT64) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
   // Signature with lambda and repeated arguments before lambda.
   function = std::make_unique<Function>("fn_fp_repeated_arg_then_lambda",
                                         "sample_functions", Function::SCALAR);
-  function->AddSignature({ARG_TYPE_ANY_1,
-                          {repeated_arg, FunctionArgumentType::Lambda(
-                                             {int64_type}, ARG_TYPE_ANY_1)},
-                          /*context_id=*/-1});
-  ABSL_CHECK_EQ("(repeated INT64, FUNCTION<INT64-><T1>>) -> <T1>",
-           function->GetSignature(0)->DebugString());
+  function->AddSignature(
+      {ARG_KIND_EXPR_ANY_1,
+       {repeated_arg,
+        FunctionArgumentType::Lambda({int64_type}, ARG_KIND_EXPR_ANY_1)},
+       /*context_id=*/-1});
+  GOOGLESQL_RET_CHECK("(repeated INT64, FUNCTION<INT64-><T1>>) -> <T1>" ==
+            function->GetSignature(0)->DebugString());
   catalog_->AddOwnedFunction(function.release());
 
-  AddFunction(
-      "fn_fp_repeated_arg_then_lambda_string", Function::SCALAR,
-      {SignatureBuilder()
-           .AddArg(ArgBuilder().Repeated().String())
-           .AddArg(FunctionArgumentType::Lambda({string_type}, ARG_TYPE_ANY_1))
-           .Returns(ArgBuilder().T1())
-           .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction("fn_fp_repeated_arg_then_lambda_string",
+                              Function::SCALAR,
+                              {SignatureBuilder()
+                                   .AddArg(ArgBuilder().Repeated().String())
+                                   .AddArg(FunctionArgumentType::Lambda(
+                                       {string_type}, ARG_KIND_EXPR_ANY_1))
+                                   .Returns(ArgBuilder().T1())
+                                   .Build()}));
 
-  AddFunction("fn_fp_string_arg_then_lambda_no_arg", Function::SCALAR,
-              {SignatureBuilder()
-                   .AddArg(ArgBuilder().String())
-                   .AddArg(FunctionArgumentType::Lambda({}, ARG_TYPE_ANY_1))
-                   .Returns(ArgBuilder().T1())
-                   .Build()});
+  GOOGLESQL_RETURN_IF_ERROR(AddFunction(
+      "fn_fp_string_arg_then_lambda_no_arg", Function::SCALAR,
+      {SignatureBuilder()
+           .AddArg(ArgBuilder().String())
+           .AddArg(FunctionArgumentType::Lambda({}, ARG_KIND_EXPR_ANY_1))
+           .Returns(ArgBuilder().T1())
+           .Build()}));
 
   /*
   // Signature with lambda and repeated arguments before lambda.
@@ -11804,44 +13097,48 @@ void SampleCatalogImpl::LoadContrivedLambdaArgFunctions() {
       types_->get_string(), FunctionArgumentType::REPEATED);
 
   function->AddSignature(
-      {ARG_TYPE_ANY_1,
+      {ARG_KIND_EXPR_ANY_1,
        {repeated_string_arg,
-        FunctionArgumentType::Lambda({string_type}, ARG_TYPE_ANY_1)}});
-  catalog_->AddOwnedFunction(function.release());
+        FunctionArgumentType::Lambda({string_type},
+  ARG_KIND_EXPR_ANY_1)}}); catalog_->AddOwnedFunction(function.release());
   */
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::AddSqlDefinedFunction(
+absl::Status SampleCatalogImpl::AddSqlDefinedFunction(
     absl::string_view name, FunctionSignature signature,
     const std::vector<std::string>& argument_names,
     absl::string_view function_body_sql,
     const LanguageOptions& language_options) {
   AnalyzerOptions analyzer_options;
   analyzer_options.set_language(language_options);
-  ABSL_CHECK_EQ(argument_names.size(), signature.arguments().size());
+  GOOGLESQL_RET_CHECK(argument_names.size() == signature.arguments().size());
   for (int i = 0; i < argument_names.size(); ++i) {
-    ABSL_CHECK_NE(signature.argument(i).type(), nullptr);
-    GOOGLESQL_CHECK_OK(analyzer_options.AddExpressionColumn(
+    GOOGLESQL_RET_CHECK(signature.argument(i).type() != nullptr);
+    GOOGLESQL_RETURN_IF_ERROR(analyzer_options.AddExpressionColumn(
         argument_names[i], signature.argument(i).type()));
   }
   std::unique_ptr<const AnalyzerOutput> analyzer_output;
-  GOOGLESQL_CHECK_OK(AnalyzeExpressionForAssignmentToType(
+  GOOGLESQL_RETURN_IF_ERROR(AnalyzeExpressionForAssignmentToType(
       function_body_sql, analyzer_options, catalog_.get(),
       catalog_->type_factory(), signature.result_type().type(),
       &analyzer_output));
   std::unique_ptr<SQLFunction> function;
-  GOOGLESQL_CHECK_OK(SQLFunction::Create(name, FunctionEnums::SCALAR, {signature},
-                               /*function_options=*/{},
-                               analyzer_output->resolved_expr(), argument_names,
-                               /*aggregate_expression_list=*/{},
-                               /*parse_resume_location=*/{}, &function));
+  GOOGLESQL_RETURN_IF_ERROR(SQLFunction::Create(
+      name, FunctionEnums::SCALAR, {signature},
+      /*function_options=*/{}, analyzer_output->resolved_expr(), argument_names,
+      /*aggregate_expression_list=*/{},
+      /*parse_resume_location=*/{}, &function));
   catalog_->AddOwnedFunction(function.release());
   sql_object_artifacts_.emplace_back(std::move(analyzer_output));
+
+  return absl::OkStatus();
 }
 
 // Add a SQL function to catalog starting from a full create_function
 // statement.
-void SampleCatalogImpl::AddSqlDefinedFunctionFromCreate(
+absl::Status SampleCatalogImpl::AddSqlDefinedFunctionFromCreate(
     absl::string_view create_function, const LanguageOptions& language_options,
     bool inline_sql_functions,
     const FunctionOptions* /*absl_nullable*/ function_options) {
@@ -11867,57 +13164,60 @@ void SampleCatalogImpl::AddSqlDefinedFunctionFromCreate(
   analyzer_options.enable_rewrite(REWRITE_INLINE_SQL_UDAS,
                                   inline_sql_functions);
   sql_object_artifacts_.emplace_back();
-  CHECK_OK_UNLESS_DBG(AddFunctionFromCreateFunction(
+  RETURN_IF_ERROR_UNLESS_DBG(AddFunctionFromCreateFunction(
       create_function, analyzer_options, /*allow_persistent_function=*/true,
       function_options, sql_object_artifacts_.back(), *catalog_, *catalog_));
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadSqlFunctions(
+absl::Status SampleCatalogImpl::LoadSqlFunctions(
     const LanguageOptions& language_options) {
-  LoadScalarSqlFunctions(language_options);
-  LoadScalarSqlFunctionsFromStandardModule(language_options);
-  LoadDeepScalarSqlFunctions(language_options);
-  LoadScalarSqlFunctionTemplates(language_options);
-  LoadAggregateSqlFunctions(language_options);
+  GOOGLESQL_RETURN_IF_ERROR(LoadScalarSqlFunctions(language_options));
+  GOOGLESQL_RETURN_IF_ERROR(LoadScalarSqlFunctionsFromStandardModule(language_options));
+  GOOGLESQL_RETURN_IF_ERROR(LoadDeepScalarSqlFunctions(language_options));
+  GOOGLESQL_RETURN_IF_ERROR(LoadScalarSqlFunctionTemplates(language_options));
+  GOOGLESQL_RETURN_IF_ERROR(LoadAggregateSqlFunctions(language_options));
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadScalarSqlFunctions(
+absl::Status SampleCatalogImpl::LoadScalarSqlFunctions(
     const LanguageOptions& language_options) {
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION NullaryPi() RETURNS FLOAT64 AS (3.141597); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION NullaryWithSubquery()
           AS (EXISTS (SELECT 1 FROM UNNEST([1,2,3]) AS e WHERE e = 2)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION NullaryWithCommonTableExpression()
           AS (EXISTS (WITH t AS (SELECT [1,2,3] AS arr)
                       SELECT 1 FROM t, t.arr as e WHERE e = 2)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION NullaryWithLambda()
           AS (ARRAY_INCLUDES([1, 2, 3], e -> e = 2)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION NullaryWithSqlFunctionCallPreInlined()
           AS (NullaryPi()); )",
-      language_options, /*inline_sql_functions=*/true);
+      language_options, /*inline_sql_functions=*/true));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION NullaryWithSqlFunctionCallNotPreInlined()
           AS (NullaryPi()); )",
-      language_options, /*inline_sql_functions=*/false);
+      language_options, /*inline_sql_functions=*/false));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION UnaryIncrement(a INT64) AS ( a + 1 ); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(
         CREATE FUNCTION GroupingConstantFromUnnest(
           arr ARRAY<INT64>, int64_arg INT64)
@@ -11925,9 +13225,9 @@ void SampleCatalogImpl::LoadScalarSqlFunctions(
           (SELECT SUM(X GROUP BY X) FROM UNNEST(arr) AS X)
         );
       )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(
         CREATE FUNCTION GroupingConstantFromArg(
           arr ARRAY<INT64>, int64_arg INT64)
@@ -11935,34 +13235,34 @@ void SampleCatalogImpl::LoadScalarSqlFunctions(
           (SELECT SUM(int64_arg GROUP BY X) FROM UNNEST(arr) AS X)
         );
       )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(
         CREATE FUNCTION NullaryWithMultilevelAgg()
         AS (
           (SELECT SUM(x GROUP BY x) FROM UNNEST([1, 2, 3, 3]) AS x)
         );
       )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(
         CREATE FUNCTION NestedNullaryWithMultilevelAgg()
         AS (
           NullaryWithMultilevelAgg() + NullaryWithMultilevelAgg()
         );
       )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(
         CREATE FUNCTION NullaryUdfContainingFilterReturnsZero()
         AS (
           (SELECT COUNT(* WHERE false) FROM UNNEST([1]))
         );
       )",
-      language_options);
+      language_options));
 
   // Creating the function using AnalyzeExpressionForAssignmentToType results in
   // a function body expression with ResolvedExpressionColumn where arguments
@@ -11972,43 +13272,45 @@ void SampleCatalogImpl::LoadScalarSqlFunctions(
   FunctionSignature int_int = {int64_type,
                                {int64_type},
                                /*context_id=*/static_cast<int64_t>(0)};
-  AddSqlDefinedFunction("UnaryIncrementRefArg", int_int, {"a"}, "a + 1",
-                        language_options);
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunction("UnaryIncrementRefArg", int_int, {"a"},
+                                        "a + 1", language_options));
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadScalarSqlFunctionsFromStandardModule(
+absl::Status SampleCatalogImpl::LoadScalarSqlFunctionsFromStandardModule(
     const LanguageOptions& language_options) {
   // Function from sql/modules/math_utils/math_utils.sqlm
   // References each of its arguments more than once.
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION FloorDiv(n INT64, d INT64) RETURNS INT64
           AS ( DIV(n, d) - IF(n < 0 AND MOD(n, d) != 0, 1, 0) ); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
-      R"( CREATE FUNCTION IgnoresArg(a INT64) AS (1); )", language_options);
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
+      R"( CREATE FUNCTION IgnoresArg(a INT64) AS (1); )", language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION ReferencesArgsInsideSubquery(a INT64, b INT64)
           AS ((SELECT a + b)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION ReferencesArgInsideCte(a INT64)
           AS ((WITH t AS (SELECT a AS c) SELECT c FROM t)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION ReferencesArgOutsideCte(a INT64)
           AS ((WITH t AS (SELECT 1 AS c) SELECT c + a FROM t)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(  CREATE FUNCTION ReferencesArgInsideLambda(a INT64)
            AS (ARRAY_TRANSFORM([1, 2, 3], e->e = a)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION ReferencesArgsInsideLateralJoin(a INT64, b INT64)
             AS ((
             SELECT a + a
@@ -12023,184 +13325,190 @@ void SampleCatalogImpl::LoadScalarSqlFunctionsFromStandardModule(
               )
             ) AS t2
             )); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION scalar_function_definer_rights() SQL SECURITY DEFINER
               AS ((SELECT COUNT(*) FROM KeyValue)); )",
       language_options,
-      /*inline_sql_functions=*/true);
+      /*inline_sql_functions=*/true));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION stable_array_sort(arr ANY TYPE)
               AS ((SELECT ARRAY_AGG(e ORDER BY e, off)
                    FROM UNNEST(arr) AS e WITH OFFSET off)); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
         CREATE FUNCTION template_with_typed_arg(
             arg_any ANY TYPE, arg_string STRING)
         AS (arg_any IS NULL OR arg_string IS NULL);
       )sql",
-      language_options);
+      language_options));
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadDeepScalarSqlFunctions(
+absl::Status SampleCatalogImpl::LoadDeepScalarSqlFunctions(
     const LanguageOptions& language_options) {
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION CallsPi0() AS (NullaryPi());)", language_options,
-      /*inline_sql_functions=*/false);
+      /*inline_sql_functions=*/false));
 
   for (int i = 0; i < 25; ++i) {
-    AddSqlDefinedFunctionFromCreate(
+    GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
         absl::StrCat("CREATE FUNCTION CallsPi", i + 1, "() AS (CallsPi", i,
                      "());"),
-        language_options, /*inline_sql_functions=*/false);
+        language_options, /*inline_sql_functions=*/false));
   }
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadScalarSqlFunctionTemplates(
+absl::Status SampleCatalogImpl::LoadScalarSqlFunctionTemplates(
     const LanguageOptions& language_options) {
   // This function is logically equivalent to ARRAY_REVERSE
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(  CREATE FUNCTION REVERSE_ARRAY(input_arr ANY TYPE)
            AS (IF (input_arr IS NULL,
                    NULL,
                    ARRAY(SELECT e
                          FROM UNNEST(input_arr) AS e WITH OFFSET
                          ORDER BY OFFSET desc))); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION TimesTwo(arg ANY TYPE) AS (arg + arg); )",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"( CREATE FUNCTION SUM_DOUBLE_ARRAY(input_arr ANY TYPE)
           AS ((SELECT SUM(e)
                FROM UNNEST(ARRAY_TRANSFORM(input_arr, e->TimesTwo(e))) e));)",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(CREATE TEMP FUNCTION b290673529(thing_id ANY TYPE) RETURNS BOOL
             AS (
                thing_id IN (SELECT thing_id FROM (SELECT 1 AS thing_id))
             );
         )sql",
-      language_options, /*inline_sql_functions=*/false);
+      language_options, /*inline_sql_functions=*/false));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
         CREATE FUNCTION TemplatedUdfExplicitReturnType(arg1 ANY TYPE, arg2 ANY TYPE)
         RETURNS STRUCT<x STRING, y STRING> AS (
           STRUCT(arg1, arg2)
         );
       )sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"(CREATE FUNCTION TemplatedUdfContainingFilterReturnsCount(arg ANY TYPE) AS ((SELECT COUNT(arg WHERE true) FROM UNNEST([1]))); )",
-      language_options);
+      language_options));
+
+  return absl::OkStatus();
 }
 
-void SampleCatalogImpl::LoadAggregateSqlFunctions(
+absl::Status SampleCatalogImpl::LoadAggregateSqlFunctions(
     const LanguageOptions& language_options) {
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql( CREATE AGGREGATE FUNCTION NotAggregate() AS (1 + 1);)sql",
-      language_options);
+      language_options));
 
   // This function provides some open-box testing of the inliner in that it
   // enables a test to ensure columns internal to the function body are properly
   // re-mapped and don't result in column id collisions in the rewritten
   // query if the function is called twice.
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql( CREATE AGGREGATE FUNCTION NotAggregateInternalColumn() AS (
           (SELECT a + a FROM (SELECT 1 AS a))
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql( CREATE AGGREGATE FUNCTION CountStar() AS (COUNT(*));)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql( CREATE AGGREGATE FUNCTION CallsCountStar() AS (CountStar());)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION NotAggregateArgs(
         a INT64 NOT AGGREGATE
       ) AS (
         a + a
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION SumOfNotAggregateArg(
         not_agg_arg INT64 NOT AGGREGATE
       ) AS (
         SUM(not_agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION ExpressionOutsideSumOfNotAggregate(
         not_agg_arg INT64 NOT AGGREGATE
       ) AS (
         not_agg_arg + SUM(not_agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION ExpressionInsideSumOfNotAggregate(
         not_agg_arg INT64 NOT AGGREGATE
       ) AS (
         SUM(not_agg_arg + not_agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION SumOfAggregateArgs(
         agg_arg INT64
       ) AS (
         SUM(agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION MaxOfAggregateArgs(
         agg_arg INT64
       ) AS (
         MAX(agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION SumExpressionOfAggregateArgs(
         agg_arg INT64
       ) AS (
         SUM(agg_arg + agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION ExprOutsideSumExpressionOfAggregateArgs(
         agg_arg INT64
       ) AS (
         1 + SUM(agg_arg + agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION ExprOutsideAndInsideSum(
         agg_arg INT64,
@@ -12208,9 +13516,9 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
       ) AS (
         not_agg_arg + SUM(not_agg_arg + agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithHavingMax(
         agg_arg STRING,
@@ -12218,7 +13526,7 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
       ) AS (
         ARRAY_AGG(agg_arg HAVING MAX another_agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
   // TODO: Add example with ARRAY_AGG( ... ORDER BY ... )
   //    after that is enabled in UDA bodies.
@@ -12226,16 +13534,16 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
   // TODO: Add example with WITH GROUP ROWS( ... ) after that
   //     is enabled in UDA bodies.
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaTemplateWithHavingMax(
         agg_arg ANY TYPE
       ) AS (
         ARRAY_AGG(agg_arg.a HAVING MAX agg_arg.b)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaTemplateWithIgnoreNulls(
         agg_arg ANY TYPE
@@ -12246,11 +13554,11 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
           ARRAY_AGG(agg_arg) AS whatever_nulls
         )
       );)sql",
-      language_options);
+      language_options));
 
   // A token UDA with LIMIT in it. We can't do ORDER BY, so the use of LIMIT
   // is ... questionable.
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaTemplateWithLimitZero(
         agg_arg ANY TYPE
@@ -12259,18 +13567,18 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
           ARRAY_AGG(agg_arg LIMIT 0) AS ignore_nulls
         )
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaCallingAnotherUda(
         agg_arg ANY TYPE
       ) AS (
         CountStar() - COUNT(agg_arg.a)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaCallingAnotherUdaWithNonAggregateArgs(
         agg_arg INT64,
@@ -12278,9 +13586,9 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
       ) AS (
         ExprOutsideAndInsideSum(agg_arg + 1, non_agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaSafeCallingAnotherUdaWithNonAggregateArgs(
         agg_arg INT64,
@@ -12288,27 +13596,27 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
       ) AS (
         SAFE.ExprOutsideAndInsideSum(agg_arg + 1, non_agg_arg)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaInvokingUdf(
         agg_arg ANY TYPE
       ) AS (
         ExprOutsideAndInsideSum(TimesTwo(agg_arg), 3)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaInvokingSafeUdf(
         agg_arg ANY TYPE
       ) AS (
         ExprOutsideAndInsideSum(SAFE.TimesTwo(agg_arg), 3)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION SumOfValuesForDistinctKey(
         value INT64,
@@ -12316,12 +13624,12 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
       ) AS (
         SUM(ANY_VALUE(value) GROUP BY key)
       );)sql",
-      language_options);
+      language_options));
 
   // This function is intended to test grouping-constness for multi-level
   // aggregate functions in various scenarios (using struct field paths, in
   // subqueries, aggregate functions, etc.). Avoid altering it where possible.
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION ComplexUda3(value1 INT64, value2 INT64, key INT64, struct_arg STRUCT<e INT64, f STRUCT<c INT64, d STRUCT<a INT64, b STRING>>>) AS (
         CORR(
@@ -12335,37 +13643,37 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
           GROUP BY key, struct_arg.f
         )
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION NullaryUdaWithMultilevelAgg() AS (
         (SELECT SUM(x GROUP BY x) FROM UNNEST([1, 2, 3, 3]) AS x)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithMultilevelAggOrderBy(key INT64, value INT64) AS (
         ARRAY_AGG(MAX(value) GROUP BY key)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithMultilevelAggIgnoreNulls(key INT64, value INT64) AS (
         ARRAY_AGG(SUM(value) IGNORE NULLS GROUP BY key)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithMultilevelAggLimitDistinct(key INT64, value INT64) AS (
         ARRAY_AGG(DISTINCT SUM(value) GROUP BY key LIMIT 2)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithMultilevelAggMultiArg(
         arg1 INT64, arg2 INT64, arg3 STRING, arg4 BYTES) AS (
@@ -12374,37 +13682,37 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
             CORR(MAX(arg2), COUNT(*) GROUP BY arg4)
             GROUP BY arg1, arg2)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithMultilevelAggNonAggregateArgs(
         arg1 INT64, arg2 INT64, arg3 INT64 NOT AGGREGATE, arg4 INT64 NOT AGGREGATE) AS (
           arg4 + SUM(arg1 + CAST(arg3 AS INT64) GROUP BY arg1)
             / COUNT(arg2 + CAST(arg4 AS INT64) GROUP BY arg2)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithMultilevelAggNested(key INT64, value INT64) AS (
         SumOfValuesForDistinctKey(key, value) + COUNT(* GROUP BY key, value)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithWhereFilterModifier(arg1 INT64, arg2 INT64) AS (
         SUM(arg1 WHERE arg1 > arg2)
       );)sql",
-      language_options);
+      language_options));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaWithHavingFilterModifier(arg1 INT64, arg2 INT64) AS (
         SUM(MAX(arg1) GROUP BY arg2 HAVING MIN(arg1) > 10)
       );)sql",
-      language_options);
+      language_options));
 
   auto aggregate_calling_clauses_enabled = std::make_unique<FunctionOptions>();
   // FunctionOptions aggregate_calling_clauses_enabled;
@@ -12418,49 +13726,219 @@ void SampleCatalogImpl::LoadAggregateSqlFunctions(
       .set_supports_order_by(true)
       .set_uses_upper_case_sql_name(false);
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaConcreteWithOptionalCallingClausesEnabled(
         agg_arg INT64
       ) AS (  NULL );
       )sql",
       language_options, /*inline_sql_functions=*/false,
-      aggregate_calling_clauses_enabled.get());
+      aggregate_calling_clauses_enabled.get()));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaTemplateWithOptionalCallingClausesEnabled(
         agg_arg ANY TYPE
       ) AS (  NULL );
       )sql",
       language_options, /*inline_sql_functions=*/false,
-      aggregate_calling_clauses_enabled.get());
+      aggregate_calling_clauses_enabled.get()));
 
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION UdaInlinedOnCreate(x INT64) AS (
           SumExpressionOfAggregateArgs(x)
       );)sql",
-      language_options, /*inline_sql_functions=*/true);
+      language_options, /*inline_sql_functions=*/true));
 
   // Templated UDA which uses TYPEOF, so that the body can be rewritten by the
   // TemplatedFunctionCallRewriter.
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION TemplatedUdaCountIfTypeOfIsString(x ANY TYPE) AS (
           COUNTIF(TYPEOF(x) = 'STRING')
       );)sql",
-      language_options, /*inline_sql_functions=*/false);
+      language_options, /*inline_sql_functions=*/false));
 
   // Templated UDA which calls multiple UDAs, one of which has a body that can
   // be rewritten by the TemplatedFunctionCallRewriter.
-  AddSqlDefinedFunctionFromCreate(
+  GOOGLESQL_RETURN_IF_ERROR(AddSqlDefinedFunctionFromCreate(
       R"sql(
       CREATE AGGREGATE FUNCTION TemplatedUdaCallsRewritableUda(x ANY TYPE) AS (
           TemplatedUdaCountIfTypeOfIsString(x) + COUNT(*)
       );
       )sql",
-      language_options, /*inline_sql_functions=*/false);
+      language_options, /*inline_sql_functions=*/false));
+
+  return absl::OkStatus();
+}
+
+void SampleCatalogImpl::LoadRowTypeObjects() {
+  const std::vector<SimpleTable::NameAndType> key_value_columns = {
+      {"Key", types_->get_int64()}, {"Value", types_->get_string()}};
+  const std::vector<std::vector<Value>> key_value_contents = {
+      {Value::Int64(1), Value::String("a")},
+      {Value::Int64(2), Value::String("b")}};
+
+  // Copy of table `KeyValue` with ColumnListMode::LAZY.
+  LazySimpleTable* key_value_lazy_table = new LazySimpleTable(
+      "KeyValueLazy", Table::ColumnListMode::LAZY, key_value_columns);
+  key_value_lazy_table->SetContents(key_value_contents);
+  AddOwnedTable(key_value_lazy_table);
+
+  // Copy of table `KeyValue` with ColumnListMode::FIND_ONLY.
+  LazySimpleTable* key_value_find_only_table = new LazySimpleTable(
+      "KeyValueFindOnly", Table::ColumnListMode::FIND_ONLY, key_value_columns);
+  key_value_find_only_table->SetContents(key_value_contents);
+  AddOwnedTable(key_value_find_only_table);
+
+  // A TVF which returns a ROW type as one column.
+  TVFComputeResultTypeCallback result_type_callback_1 =
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& actual_arguments,
+         const AnalyzerOptions& analyzer_options)
+      -> absl::StatusOr<std::shared_ptr<googlesql::TVFSignature>> {
+    const Table* backing_table;
+    GOOGLESQL_RETURN_IF_ERROR(
+        catalog->FindTable(/*path=*/{"KeyValueFindOnly"}, &backing_table));
+    const RowType* row_type;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table, "tvf_returning_row_type.row_type_col", &row_type));
+    return std::make_unique<TVFSignature>(
+        actual_arguments,
+        TVFRelation({TVFSchemaColumn("normal_col_1", types::StringType()),
+                     TVFSchemaColumn("row_type_col", row_type),
+                     TVFSchemaColumn("normal_col_2", types::Int64Type())}),
+        TVFSignatureOptions{.row_type_rewrite_callback =
+                                TVFSignature::BaseRowTypeRewriteCallback});
+  };
+  catalog_->AddOwnedTableValuedFunction(new TableValuedFunction(
+      {"tvf_returning_row_type"}, "RowTypeTest",
+      {FunctionSignature(FunctionArgumentType::AnyRelation(), {},
+                         /*context_id=*/-1)},
+      TableValuedFunctionOptions()
+          .set_compute_result_type_callback(result_type_callback_1)
+          .AddRequiredLanguageFeature(FEATURE_ROW_TYPE)));
+
+  // A TVF which returns a ROW type value table.
+  TVFComputeResultTypeCallback result_type_callback_2 =
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& actual_arguments,
+         const AnalyzerOptions& analyzer_options)
+      -> absl::StatusOr<std::shared_ptr<googlesql::TVFSignature>> {
+    const Table* backing_table;
+    GOOGLESQL_RETURN_IF_ERROR(
+        catalog->FindTable(/*path=*/{"KeyValueFindOnly"}, &backing_table));
+    const RowType* row_type;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table, "tvf_returning_row_type_value_table", &row_type));
+    return std::make_unique<TVFSignature>(
+        actual_arguments, TVFRelation::ValueTable(row_type),
+        TVFSignatureOptions{.row_type_rewrite_callback =
+                                TVFSignature::BaseRowTypeRewriteCallback});
+  };
+  catalog_->AddOwnedTableValuedFunction(new TableValuedFunction(
+      {"tvf_returning_row_type_value_table"}, "RowTypeTest",
+      {FunctionSignature(FunctionArgumentType::AnyRelation(), {},
+                         /*context_id=*/-1)},
+      TableValuedFunctionOptions()
+          .set_compute_result_type_callback(result_type_callback_2)
+          .AddRequiredLanguageFeature(FEATURE_ROW_TYPE)));
+
+  // A TVF which returns multiple ROW type columns and pseudo-columns.
+  TVFComputeResultTypeCallback result_type_callback_3 =
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& actual_arguments,
+         const AnalyzerOptions& analyzer_options)
+      -> absl::StatusOr<std::shared_ptr<googlesql::TVFSignature>> {
+    const Table* backing_table;
+    GOOGLESQL_RETURN_IF_ERROR(
+        catalog->FindTable(/*path=*/{"KeyValueFindOnly"}, &backing_table));
+    const RowType* type_row_col_1;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table, "tvf_returning_multiple_row_type.row_col_1",
+        &type_row_col_1));
+    const RowType* type_row_col_2;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table, "tvf_returning_multiple_row_type.row_col_2",
+        &type_row_col_2));
+    const RowType* type_pseudo_row_1;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table, "tvf_returning_multiple_row_type.pseudo_row_1",
+        &type_pseudo_row_1));
+    const RowType* type_pseudo_row_2;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table, "tvf_returning_multiple_row_type.pseudo_row_2",
+        &type_pseudo_row_2));
+    return std::make_unique<TVFSignature>(
+        actual_arguments,
+        TVFRelation(
+            {TVFSchemaColumn("normal_col_1", types::StringType()),
+             TVFSchemaColumn("row_col_1", type_row_col_1),
+             TVFSchemaColumn("normal_col_2", types::Int64Type()),
+             TVFSchemaColumn("row_col_2", type_row_col_2),
+             TVFSchemaColumn("pseudo_normal_1", types::StringType(), true),
+             TVFSchemaColumn("pseudo_row_1", type_pseudo_row_1, true),
+             TVFSchemaColumn("pseudo_normal_2", types::Int64Type(), true),
+             TVFSchemaColumn("pseudo_row_2", type_pseudo_row_2, true)}),
+        TVFSignatureOptions{.row_type_rewrite_callback =
+                                TVFSignature::BaseRowTypeRewriteCallback});
+  };
+  catalog_->AddOwnedTableValuedFunction(new TableValuedFunction(
+      {"tvf_returning_multiple_row_type"}, "RowTypeTest",
+      {FunctionSignature(FunctionArgumentType::AnyRelation(), {},
+                         /*context_id=*/-1)},
+      TableValuedFunctionOptions()
+          .set_compute_result_type_callback(result_type_callback_3)
+          .AddRequiredLanguageFeature(FEATURE_ROW_TYPE)));
+
+  // A TVF which returns a ROW type value table with ROW-type pseudo-columns.
+  TVFComputeResultTypeCallback result_type_callback_4 =
+      [](Catalog* catalog, TypeFactory* type_factory,
+         const FunctionSignature& signature,
+         const std::vector<TVFInputArgumentType>& actual_arguments,
+         const AnalyzerOptions& analyzer_options)
+      -> absl::StatusOr<std::shared_ptr<googlesql::TVFSignature>> {
+    const Table* backing_table;
+    GOOGLESQL_RETURN_IF_ERROR(
+        catalog->FindTable(/*path=*/{"KeyValueFindOnly"}, &backing_table));
+    const RowType* row_type;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table, "tvf_returning_row_type_value_table_with_pseudo",
+        &row_type));
+    const RowType* type_pseudo_row_1;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table,
+        "tvf_returning_row_type_value_table_with_pseudo.type_pseudo_row_1",
+        &type_pseudo_row_1));
+    const RowType* type_pseudo_row_2;
+    GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeRowType(
+        backing_table,
+        "tvf_returning_row_type_value_table_with_pseudo.type_pseudo_row_2",
+        &type_pseudo_row_2));
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        TVFRelation relation_4,
+        TVFRelation::ValueTable(
+            row_type,
+            {TVFSchemaColumn("pseudo_normal_1", types::StringType(), true),
+             TVFSchemaColumn("pseudo_row_1", type_pseudo_row_1, true),
+             TVFSchemaColumn("pseudo_normal_2", types::Int64Type(), true),
+             TVFSchemaColumn("pseudo_row_2", type_pseudo_row_2, true)}));
+    return std::make_unique<TVFSignature>(
+        actual_arguments, relation_4,
+        TVFSignatureOptions{.row_type_rewrite_callback =
+                                TVFSignature::BaseRowTypeRewriteCallback});
+  };
+  catalog_->AddOwnedTableValuedFunction(new TableValuedFunction(
+      {"tvf_returning_row_type_value_table_with_pseudo"}, "RowTypeTest",
+      {FunctionSignature(FunctionArgumentType::AnyRelation(), {},
+                         /*context_id=*/-1)},
+      TableValuedFunctionOptions()
+          .set_compute_result_type_callback(result_type_callback_4)
+          .AddRequiredLanguageFeature(FEATURE_ROW_TYPE)));
 }
 
 void SampleCatalogImpl::ForceLinkProtoTypes() {

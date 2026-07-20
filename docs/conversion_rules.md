@@ -44,6 +44,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>BOOL</code></span><br /><span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br /><span><code>ENUM</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -56,6 +60,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>BOOL</code></span><br /><span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br /><span><code>ENUM</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -68,6 +76,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>BOOL</code></span><br /><span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br /><span><code>ENUM</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -80,6 +92,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>BOOL</code></span><br /><span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br /><span><code>ENUM</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -92,6 +108,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -104,6 +124,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -116,6 +140,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -128,6 +156,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -137,6 +169,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>BOOL</code></span><br /><span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>STRING</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -147,6 +183,10 @@ literals and parameters can also be coerced. See
 
 <span><code>BOOL</code></span><br /><span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>NUMERIC</code></span><br /><span><code>BIGNUMERIC</code></span><br /><span><code>FLOAT</code></span><br /><span><code>DOUBLE</code></span><br /><span><code>STRING</code></span><br /><span><code>BYTES</code></span><br /><span><code>DATE</code></span><br /><span><code>DATETIME</code></span><br /><span><code>TIME</code></span><br /><span><code>TIMESTAMP</code></span><br /><span><code>ENUM</code></span><br /><span><code>PROTO</code></span><br /><span><code>RANGE</code></span><br />
 
+        
+
+<span><code>JSON</code></span><br />
+
       </td>
       <td>&nbsp;</td>
     </tr>
@@ -156,6 +196,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>STRING</code></span><br /><span><code>BYTES</code></span><br /><span><code>PROTO</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -165,6 +209,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>STRING</code></span><br /><span><code>DATE</code></span><br /><span><code>DATETIME</code></span><br /><span><code>TIMESTAMP</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>
 
@@ -177,6 +225,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>STRING</code></span><br /><span><code>DATE</code></span><br /><span><code>DATETIME</code></span><br /><span><code>TIME</code></span><br /><span><code>TIMESTAMP</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -186,6 +238,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>STRING</code></span><br /><span><code>TIME</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -195,6 +251,19 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>STRING</code></span><br /><span><code>DATE</code></span><br /><span><code>DATETIME</code></span><br /><span><code>TIME</code></span><br /><span><code>TIMESTAMP</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
+</td>
+      <td>&nbsp;</td>
+    </tr>
+
+    <tr>
+      <td><code>INTERVAL</code></td>
+      <td>
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -204,6 +273,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>ARRAY</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -219,8 +292,30 @@ literals and parameters can also be coerced. See
 
 <span><code>INT32</code></span><br /><span><code>INT64</code></span><br /><span><code>UINT32</code></span><br /><span><code>UINT64</code></span><br /><span><code>STRING</code></span><br />
 
+        
+
+<span><code>JSON</code></span><br />
+
       </td>
       <td><code>ENUM</code> (with the same <code>ENUM</code> name)</td>
+    </tr>
+
+    <tr>
+      <td><code>UUID</code></td>
+      <td>
+
+<span><code>JSON</code></span><br />
+</td>
+      <td>&nbsp;</td>
+    </tr>
+
+    <tr>
+      <td><code>JSON</code></td>
+      <td>
+
+<span><code>JSON</code></span><br />
+</td>
+      <td>&nbsp;</td>
     </tr>
 
     <tr>
@@ -228,6 +323,10 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>STRUCT</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -243,6 +342,10 @@ literals and parameters can also be coerced. See
 
 <span><code>STRING</code></span><br /><span><code>BYTES</code></span><br />
 
+        
+
+<span><code>JSON</code></span><br />
+
       </td>
       <td><code>PROTO</code> (with the same <code>PROTO</code> name)</td>
     </tr>
@@ -252,6 +355,19 @@ literals and parameters can also be coerced. See
       <td>
 
 <span><code>RANGE</code></span><br /><span><code>STRING</code></span><br />
+
+        
+
+<span><code>JSON</code></span><br />
+</td>
+      <td>&nbsp;</td>
+    </tr>
+
+    <tr>
+      <td><code>GRAPH_ELEMENT</code></td>
+      <td>
+
+<span><code>JSON</code></span><br />
 </td>
       <td>&nbsp;</td>
     </tr>
@@ -422,6 +538,12 @@ GoogleSQL supports the following query parameter coercions:
 
 If the parameter value can't be coerced successfully to the target type, an
 error is provided.
+
+#### JSON comparison coercion 
+<a id="json_comparison_coercion"></a>
+
+GoogleSQL supports implicit coercion from non-`JSON` types to `JSON` when comparing a `JSON` value with a non-`JSON` value. For more information about this behavior and the supported types, see the <a href="https://github.com/google/googlesql/blob/master/docs/data-types.md#json_type_implicit_coercion">Implicit coercion</a>
+ section in the `JSON` type documentation.
 
 ### Supertypes
 
@@ -614,12 +736,12 @@ or more supertypes, including itself, which defines its set of supertypes.
     <tr>
       <td><code>GRAPH_ELEMENT</code></td>
       <td>
-        <code>GRAPH_ELEMENT</code>. A graph element can be a supertype of
-        another graph element if the following is true:
+        <code>GRAPH_ELEMENT</code>. Graph element <code>a</code> is a supertype
+        of graph element <code>b</code>if the following are true:
         <ul>
           <li>
-            Graph element <code>a</code> is a supertype of graph element
-            <code>b</code> and they're the same element kind.
+            Graph element <code>a</code> and <code>b</code> are the same
+            element kind.
           </li>
           <li>
             Graph element <code>a</code>'s property type list is a

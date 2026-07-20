@@ -29,19 +29,28 @@
 #include "googlesql/public/types/struct_type.h"
 #include "googlesql/public/types/type.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
 // static
+const Collation& Collation::EmptyCollation() {
+  static const Collation* kEmptyCollation = new Collation();
+  return *kEmptyCollation;
+}
+
+// static
 Collation Collation::MakeScalar(absl::string_view collation_name) {
   Collation collation;
-  collation.collation_name_ = SimpleValue::String(std::string(collation_name));
+  if (!collation_name.empty()) {
+    collation.collation_name_ =
+        SimpleValue::String(std::string(collation_name));
+  }
   return collation;
 }
 
