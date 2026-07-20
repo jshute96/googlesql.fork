@@ -20,8 +20,8 @@
 #include "googlesql/public/types/simple_value.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "absl/status/status.h"
-#include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
+#include "googlesql/base/ret_check.h"
 
 // TODO: Extracts helper functions and interfaces from this class.
 namespace googlesql {
@@ -85,6 +85,28 @@ absl::Status SampleAnnotation::CheckAndPropagateForGetStructField(
     GOOGLESQL_RETURN_IF_ERROR(CopyAnnotationRecursively(
         GetId(), struct_annotation_map->AsStructMap()->field(field_idx),
         result_annotation_map));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status SampleAnnotation::CheckAndPropagateForMakeMap(
+    const ResolvedMakeMap& make_map,
+    StructAnnotationMap* result_annotation_map) {
+  if (result_annotation_map == nullptr) {
+    return absl::OkStatus();
+  }
+  GOOGLESQL_RET_CHECK_EQ(result_annotation_map->num_fields(), 2);
+  for (const auto& entry : make_map.entry_list()) {
+    if (entry->key()->type_annotation_map() != nullptr) {
+      GOOGLESQL_RETURN_IF_ERROR(CopyAnnotationRecursively(
+          GetId(), entry->key()->type_annotation_map(),
+          result_annotation_map->mutable_field(0)));
+    }
+    if (entry->value()->type_annotation_map() != nullptr) {
+      GOOGLESQL_RETURN_IF_ERROR(CopyAnnotationRecursively(
+          GetId(), entry->value()->type_annotation_map(),
+          result_annotation_map->mutable_field(1)));
+    }
   }
   return absl::OkStatus();
 }

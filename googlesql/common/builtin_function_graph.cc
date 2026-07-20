@@ -40,12 +40,12 @@
 #include "absl/functional/bind_front.h"
 #include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -187,13 +187,12 @@ void GetGraphFunctions(TypeFactory* type_factory,
   const Type* bool_type = type_factory->get_bool();
   const Type* string_type = type_factory->get_string();
   const Type* int64_type = type_factory->get_int64();
-  const Type* json_type = type_factory->get_json();
   const ArrayType* string_array_type = types::StringArrayType();
 
   InsertFunction(
       functions, options, "$is_source_node", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_GRAPH_NODE, ARG_TYPE_GRAPH_EDGE},
+        {ARG_KIND_EXPR_GRAPH_NODE, ARG_KIND_EXPR_GRAPH_EDGE},
         FN_IS_SOURCE_NODE}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
@@ -205,7 +204,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$is_dest_node", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_GRAPH_NODE, ARG_TYPE_GRAPH_EDGE},
+        {ARG_KIND_EXPR_GRAPH_NODE, ARG_KIND_EXPR_GRAPH_EDGE},
         FN_IS_DEST_NODE}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
@@ -214,17 +213,19 @@ void GetGraphFunctions(TypeFactory* type_factory,
           .set_get_sql_callback(
               absl::bind_front(&InfixFunctionSQL, "IS DESTINATION OF")));
 
+  bool supports_safe_same = options.language_options.LanguageFeatureEnabled(
+      FEATURE_SQL_GRAPH_SAFE_SAME_ALL_DIFFERENT);
   // TODO: ALL_DIFFERENT(node, edge) does not work for now because
   // we don't support supertype between node and edge, though the standard
   // doesn't explicitly disable that.
   InsertFunction(
       functions, options, "all_different", Function::SCALAR,
       {{bool_type,
-        {{ARG_TYPE_GRAPH_ELEMENT, FunctionArgumentType::REPEATED}},
+        {{ARG_KIND_EXPR_GRAPH_ELEMENT, FunctionArgumentType::REPEATED}},
         FN_ALL_DIFFERENT_GRAPH_ELEMENT}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
-          .set_supports_safe_error_mode(false)
+          .set_supports_safe_error_mode(supports_safe_same)
           .set_sql_name("ALL_DIFFERENT")
           .set_pre_resolution_argument_constraint(
               absl::bind_front(&CheckMinArgs, "ALL_DIFFERENT", 2)));
@@ -235,11 +236,11 @@ void GetGraphFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "same", Function::SCALAR,
       {{bool_type,
-        {{ARG_TYPE_GRAPH_ELEMENT, FunctionArgumentType::REPEATED}},
+        {{ARG_KIND_EXPR_GRAPH_ELEMENT, FunctionArgumentType::REPEATED}},
         FN_SAME_GRAPH_ELEMENT}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
-          .set_supports_safe_error_mode(false)
+          .set_supports_safe_error_mode(supports_safe_same)
           .set_sql_name("SAME")
           .set_pre_resolution_argument_constraint(
               absl::bind_front(&CheckMinArgs, "SAME", 2)));
@@ -247,7 +248,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "property_exists", Function::SCALAR,
       {{bool_type,
-        {{ARG_TYPE_GRAPH_ELEMENT, string_type}},
+        {{ARG_KIND_EXPR_GRAPH_ELEMENT, string_type}},
         FN_PROPERTY_EXISTS}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
@@ -265,7 +266,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "labels", Function::SCALAR,
       {{string_array_type,
-        {{ARG_TYPE_GRAPH_ELEMENT}},
+        {{ARG_KIND_EXPR_GRAPH_ELEMENT}},
         FN_LABELS_GRAPH_ELEMENT}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
@@ -274,7 +275,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "property_names", Function::SCALAR,
       {{string_array_type,
-        {{ARG_TYPE_GRAPH_ELEMENT}},
+        {{ARG_KIND_EXPR_GRAPH_ELEMENT}},
         FN_PROPERTY_NAMES_GRAPH_ELEMENT}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
@@ -282,7 +283,9 @@ void GetGraphFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "element_id", Function::SCALAR,
-      {{string_type, {{ARG_TYPE_GRAPH_ELEMENT}}, FN_ELEMENT_ID_GRAPH_ELEMENT}},
+      {{string_type,
+        {{ARG_KIND_EXPR_GRAPH_ELEMENT}},
+        FN_ELEMENT_ID_GRAPH_ELEMENT}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
           .set_supports_safe_error_mode(false)
@@ -290,7 +293,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "source_node_id", Function::SCALAR,
-      {{string_type, {{ARG_TYPE_GRAPH_EDGE}}, FN_SOURCE_NODE_ID}},
+      {{string_type, {{ARG_KIND_EXPR_GRAPH_EDGE}}, FN_SOURCE_NODE_ID}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
           .set_supports_safe_error_mode(false)
@@ -298,7 +301,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "destination_node_id", Function::SCALAR,
-      {{string_type, {{ARG_TYPE_GRAPH_EDGE}}, FN_DESTINATION_NODE_ID}},
+      {{string_type, {{ARG_KIND_EXPR_GRAPH_EDGE}}, FN_DESTINATION_NODE_ID}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
           .set_supports_safe_error_mode(false)
@@ -306,72 +309,79 @@ void GetGraphFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "element_definition_name", Function::SCALAR,
-      {{string_type, {{ARG_TYPE_GRAPH_ELEMENT}}, FN_ELEMENT_DEFINITION_NAME}},
+      {{string_type,
+        {{ARG_KIND_EXPR_GRAPH_ELEMENT}},
+        FN_ELEMENT_DEFINITION_NAME}},
       FunctionOptions()
           .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)
           .set_supports_safe_error_mode(false));
 
   InsertFunction(functions, options, "path_length", Function::SCALAR,
-                 {{int64_type, {{ARG_TYPE_GRAPH_PATH}}, FN_PATH_LENGTH}},
+                 {{int64_type, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_PATH_LENGTH}},
                  FunctionOptions()
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
                      .set_supports_safe_error_mode(false)
                      .set_sql_name("PATH_LENGTH"));
 
-  InsertFunction(functions, options, "nodes", Function::SCALAR,
-                 {{ARG_TYPE_ARBITRARY, {{ARG_TYPE_GRAPH_PATH}}, FN_PATH_NODES}},
-                 FunctionOptions()
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
-                     .set_supports_safe_error_mode(false)
-                     .set_sql_name("NODES")
-                     .set_compute_result_type_callback(ComputePathNodesType));
+  InsertFunction(
+      functions, options, "nodes", Function::SCALAR,
+      {{ARG_KIND_EXPR_ARBITRARY, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_PATH_NODES}},
+      FunctionOptions()
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
+          .set_supports_safe_error_mode(false)
+          .set_sql_name("NODES")
+          .set_compute_result_type_callback(ComputePathNodesType));
 
-  InsertFunction(functions, options, "edges", Function::SCALAR,
-                 {{ARG_TYPE_ARBITRARY, {{ARG_TYPE_GRAPH_PATH}}, FN_PATH_EDGES}},
-                 FunctionOptions()
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
-                     .set_supports_safe_error_mode(false)
-                     .set_sql_name("EDGES")
-                     .set_compute_result_type_callback(ComputePathEdgesType));
+  InsertFunction(
+      functions, options, "edges", Function::SCALAR,
+      {{ARG_KIND_EXPR_ARBITRARY, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_PATH_EDGES}},
+      FunctionOptions()
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
+          .set_supports_safe_error_mode(false)
+          .set_sql_name("EDGES")
+          .set_compute_result_type_callback(ComputePathEdgesType));
 
-  InsertFunction(functions, options, "path_first", Function::SCALAR,
-                 {{ARG_TYPE_ARBITRARY, {{ARG_TYPE_GRAPH_PATH}}, FN_PATH_FIRST}},
-                 FunctionOptions()
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
-                     .set_supports_safe_error_mode(false)
-                     .set_sql_name("PATH_FIRST")
-                     .set_compute_result_type_callback(ComputePathNodeType));
+  InsertFunction(
+      functions, options, "path_first", Function::SCALAR,
+      {{ARG_KIND_EXPR_ARBITRARY, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_PATH_FIRST}},
+      FunctionOptions()
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
+          .set_supports_safe_error_mode(false)
+          .set_sql_name("PATH_FIRST")
+          .set_compute_result_type_callback(ComputePathNodeType));
 
-  InsertFunction(functions, options, "path_last", Function::SCALAR,
-                 {{ARG_TYPE_ARBITRARY, {{ARG_TYPE_GRAPH_PATH}}, FN_PATH_LAST}},
-                 FunctionOptions()
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
-                     .set_supports_safe_error_mode(false)
-                     .set_sql_name("PATH_LAST")
-                     .set_compute_result_type_callback(ComputePathNodeType));
+  InsertFunction(
+      functions, options, "path_last", Function::SCALAR,
+      {{ARG_KIND_EXPR_ARBITRARY, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_PATH_LAST}},
+      FunctionOptions()
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
+          .set_supports_safe_error_mode(false)
+          .set_sql_name("PATH_LAST")
+          .set_compute_result_type_callback(ComputePathNodeType));
 
-  InsertFunction(functions, options, "path", Function::SCALAR,
-                 {
-                     {ARG_TYPE_ARBITRARY,
-                      {ARG_TYPE_GRAPH_NODE,
-                       {ARG_TYPE_GRAPH_EDGE, FunctionArgumentType::REPEATED},
-                       {ARG_TYPE_GRAPH_NODE, FunctionArgumentType::REPEATED}},
-                      FN_PATH_CREATE},
-                 },
-                 FunctionOptions()
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
-                     .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
-                     .set_supports_safe_error_mode(false)
-                     .set_sql_name("PATH")
-                     .set_compute_result_type_callback(ComputePathCreateType));
+  InsertFunction(
+      functions, options, "path", Function::SCALAR,
+      {
+          {ARG_KIND_EXPR_ARBITRARY,
+           {ARG_KIND_EXPR_GRAPH_NODE,
+            {ARG_KIND_EXPR_GRAPH_EDGE, FunctionArgumentType::REPEATED},
+            {ARG_KIND_EXPR_GRAPH_NODE, FunctionArgumentType::REPEATED}},
+           FN_PATH_CREATE},
+      },
+      FunctionOptions()
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
+          .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
+          .set_supports_safe_error_mode(false)
+          .set_sql_name("PATH")
+          .set_compute_result_type_callback(ComputePathCreateType));
 
   InsertFunction(functions, options, "is_acyclic", Function::SCALAR,
-                 {{bool_type, {{ARG_TYPE_GRAPH_PATH}}, FN_IS_ACYCLIC}},
+                 {{bool_type, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_IS_ACYCLIC}},
                  FunctionOptions()
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
@@ -379,7 +389,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
                      .set_sql_name("IS_ACYCLIC"));
 
   InsertFunction(functions, options, "is_trail", Function::SCALAR,
-                 {{bool_type, {{ARG_TYPE_GRAPH_PATH}}, FN_IS_TRAIL}},
+                 {{bool_type, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_IS_TRAIL}},
                  FunctionOptions()
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
@@ -387,7 +397,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
                      .set_sql_name("IS_TRAIL"));
 
   InsertFunction(functions, options, "is_simple", Function::SCALAR,
-                 {{bool_type, {{ARG_TYPE_GRAPH_PATH}}, FN_IS_SIMPLE}},
+                 {{bool_type, {{ARG_KIND_EXPR_GRAPH_PATH}}, FN_IS_SIMPLE}},
                  FunctionOptions()
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH)
                      .AddRequiredLanguageFeature(FEATURE_SQL_GRAPH_PATH_TYPE)
@@ -397,10 +407,10 @@ void GetGraphFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$unchecked_path", Function::SCALAR,
       {
-          {ARG_TYPE_ARBITRARY,
-           {ARG_TYPE_GRAPH_NODE,
-            {ARG_TYPE_GRAPH_EDGE, FunctionArgumentType::REPEATED},
-            {ARG_TYPE_GRAPH_NODE, FunctionArgumentType::REPEATED}},
+          {ARG_KIND_EXPR_ARBITRARY,
+           {ARG_KIND_EXPR_GRAPH_NODE,
+            {ARG_KIND_EXPR_GRAPH_EDGE, FunctionArgumentType::REPEATED},
+            {ARG_KIND_EXPR_GRAPH_NODE, FunctionArgumentType::REPEATED}},
            FN_UNCHECKED_PATH_CREATE,
            FunctionSignatureOptions().set_is_internal(true)},
       },
@@ -412,9 +422,9 @@ void GetGraphFunctions(TypeFactory* type_factory,
 
   InsertFunction(
       functions, options, "$path_concat", Function::SCALAR,
-      {{ARG_TYPE_GRAPH_PATH,
-        {ARG_TYPE_GRAPH_PATH,
-         {ARG_TYPE_GRAPH_PATH, FunctionArgumentType::REPEATED}},
+      {{ARG_KIND_EXPR_GRAPH_PATH,
+        {ARG_KIND_EXPR_GRAPH_PATH,
+         {ARG_KIND_EXPR_GRAPH_PATH, FunctionArgumentType::REPEATED}},
         FN_CONCAT_PATH}},
       FunctionOptions()
           .set_get_sql_callback(absl::bind_front(&InfixFunctionSQL, "||"))
@@ -423,9 +433,9 @@ void GetGraphFunctions(TypeFactory* type_factory,
           .set_supports_safe_error_mode(false));
 
   InsertFunction(functions, options, "$unchecked_path_concat", Function::SCALAR,
-                 {{ARG_TYPE_GRAPH_PATH,
-                   {ARG_TYPE_GRAPH_PATH,
-                    {ARG_TYPE_GRAPH_PATH, FunctionArgumentType::REPEATED}},
+                 {{ARG_KIND_EXPR_GRAPH_PATH,
+                   {ARG_KIND_EXPR_GRAPH_PATH,
+                    {ARG_KIND_EXPR_GRAPH_PATH, FunctionArgumentType::REPEATED}},
                    FN_UNCHECKED_CONCAT_PATH,
                    FunctionSignatureOptions().set_is_internal(true)}},
                  FunctionOptions()
@@ -436,7 +446,7 @@ void GetGraphFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$dynamic_property_equals", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_GRAPH_ELEMENT, string_type, ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_GRAPH_ELEMENT, string_type, ARG_KIND_EXPR_ANY_1},
         FN_DYNAMIC_PROPERTY_EQUALS,
         FunctionSignatureOptions().set_is_internal(true)}},
       FunctionOptions()

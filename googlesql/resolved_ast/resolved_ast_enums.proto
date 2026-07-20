@@ -39,6 +39,18 @@ message ResolvedSubqueryExprEnums {
     LIKE_ALL = 5;
     NOT_LIKE_ANY = 6;
     NOT_LIKE_ALL = 7;
+    EQ_ANY = 8;
+    EQ_ALL = 9;
+    NE_ANY = 10;
+    NE_ALL = 11;
+    LT_ANY = 12;
+    LT_ALL = 13;
+    LE_ANY = 14;
+    LE_ALL = 15;
+    GT_ANY = 16;
+    GT_ALL = 17;
+    GE_ANY = 18;
+    GE_ALL = 19;
   }
 }
 
@@ -167,6 +179,31 @@ message ResolvedWindowFrameExprEnums {
     CURRENT_ROW = 2;
     OFFSET_FOLLOWING = 3;
     UNBOUNDED_FOLLOWING = 4;
+  }
+}
+
+message ResolvedWithinBoundExprEnums {
+  enum BoundKind {
+    // Default value. It is an error to set this value.
+    NOT_SET = 0;
+    UNBOUNDED_PRECEDING = 1;
+    UNBOUNDED_FOLLOWING = 2;
+    // (integer OR double) PERIOD (PRECEDING OR FOLLOWING)
+    // Must be used with expr of type INT64 or DOUBLE in
+    // ResolvedWithinBoundExpr.
+    PERIOD_PRECEDING = 3;
+    PERIOD_FOLLOWING = 4;
+    // interval (PRECEDING OR FOLLOWING)
+    // Must be used with expr of type INTERVAL in ResolvedWithinBoundExpr.
+    INTERVAL_PRECEDING = 5;
+    INTERVAL_FOLLOWING = 6;
+    // This represents either a bound at the aligned_timestamp for the window in
+    // the estimator function or CURRENT_TIMESTASMP() bound for the OUTPUT
+    // WITHIN window.
+    ANCHOR_TIMESTAMP = 7;
+    // Absolute timestamp bound
+    // Must be used with expr of type TIMESTAMP in ResolvedWithinBoundExpr.
+    TIMESTAMP = 8;
   }
 }
 
@@ -370,6 +407,7 @@ message ResolvedDropIndexStmtEnums {
     INDEX_DEFAULT = 0;
     INDEX_SEARCH = 1;
     INDEX_VECTOR = 2;
+    INDEX_AI = 3;
   }
 }
 
@@ -378,6 +416,7 @@ message ResolvedOptionEnums {
     DEFAULT_ASSIGN = 0;  // "="
     ADD_ASSIGN = 1;      // "+="
     SUB_ASSIGN = 2;      // "-="
+    FROM = 3;            // "FROM"
   }
 }
 

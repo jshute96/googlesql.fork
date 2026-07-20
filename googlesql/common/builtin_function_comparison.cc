@@ -21,6 +21,7 @@
 #include "googlesql/common/errors.h"
 #include "googlesql/public/builtin_function.pb.h"
 #include "googlesql/public/builtin_function_options.h"
+#include "googlesql/public/cast.h"
 #include "googlesql/public/function.h"
 #include "googlesql/public/function.pb.h"
 #include "googlesql/public/function_signature.h"
@@ -32,13 +33,13 @@
 #include "absl/functional/bind_front.h"
 #include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 namespace {
@@ -63,32 +64,220 @@ std::string NoMatchingSignatureForComparisonOperator(
   return error_message;
 }
 
+static constexpr const char* kNoConstraintViolation = "";
+
+// Returns an error message if the non-JSON type cannot be coerced to JSON for
+// equality operators: =, !=, IS DISTINCT FROM, IS NOT DISTINCT FROM.
+std::string JsonEqualityCoercionConstraintErrorMessage(
+    const FunctionSignature& signature,
+    absl::Span<const InputArgumentType> arguments) {
+  ABSL_DCHECK_EQ(arguments.size(), 2) << "INTERNAL_ERROR: Equality with JSON and "
+                                    "non-JSON should have exactly 2 "
+                                    "arguments.";
+
+  const Type* type1 = arguments[0].type();
+  const Type* type2 = arguments[1].type();
+  ABSL_DCHECK_NE(type1, nullptr);
+  ABSL_DCHECK_NE(type2, nullptr);
+  bool arg1_is_json = type1->IsJson();
+  bool arg2_is_json = type2->IsJson();
+  if (!arg1_is_json && !arg2_is_json) {
+    return "Neither argument is JSON. This signature is for JSON and non-JSON.";
+  }
+
+  if (arg1_is_json && arg2_is_json) {
+    return "Both arguments are JSON. This signature is for JSON and non-JSON.";
+  }
+
+  const Type* non_json_type = arg1_is_json ? type2 : type1;
+  ABSL_DCHECK(IsJsonCastEqualityPreserving(non_json_type))
+      << "Type " << non_json_type->DebugString()
+      << " cannot be coerced to JSON for equality.";
+  return kNoConstraintViolation;
+}
+
+// Returns an error message if the non-JSON type cannot be coerced to JSON for
+// ordering operators: <, <=, >, >=.
+std::string JsonOrderingCoercionConstraintErrorMessage(
+    const FunctionSignature& signature,
+    const std::vector<InputArgumentType>& arguments) {
+  ABSL_DCHECK_EQ(arguments.size(), 2) << "INTERNAL_ERROR: Ordering with JSON and "
+                                    "non-JSON should have exactly 2 "
+                                    "arguments.";
+  const Type* type1 = arguments[0].type();
+  const Type* type2 = arguments[1].type();
+  ABSL_DCHECK_NE(type1, nullptr);
+  ABSL_DCHECK_NE(type2, nullptr);
+  bool arg1_is_json = type1->IsJson();
+  bool arg2_is_json = type2->IsJson();
+  if (!arg1_is_json && !arg2_is_json) {
+    return "Neither argument is JSON. This signature is for JSON and non-JSON.";
+  }
+
+  // Ordering operators with JSON and non-JSON types.
+  if (arg1_is_json && arg2_is_json) {
+    return "Both arguments are JSON. This signature is for JSON and non-JSON.";
+  }
+
+  const Type* non_json_type = arg1_is_json ? type2 : type1;
+  ABSL_DCHECK(IsJsonCastOrderPreserving(non_json_type))
+      << "Type " << non_json_type->DebugString()
+      << " cannot be coerced to JSON for ordering.";
+  return kNoConstraintViolation;
+}
+
+std::string CheckFirstJsonArgumentType(const InputArgumentType& arg) {
+  if (arg.is_untyped_null()) {
+    return "Argument 1: Untyped NULL is not supported for JSON coercion.";
+  }
+  if (arg.is_untyped_query_parameter() || arg.type() == nullptr) {
+    return "Argument 1: Untyped parameter is not supported for JSON coercion.";
+  }
+  if (!arg.type()->IsJson()) {
+    return "Argument 1: First argument must be explicitly typed as JSON.";
+  };
+  return kNoConstraintViolation;
+}
+
+// Returns an error message if the non-JSON type cannot be coerced to JSON for
+// BETWEEN operator with JSON and non-JSON types.
+std::string JsonBetweenCoercionConstraintErrorMessage(
+    const FunctionSignature& signature,
+    const std::vector<InputArgumentType>& arguments) {
+  ABSL_DCHECK_EQ(arguments.size(), 3)
+      << "INTERNAL_ERROR: BETWEEN with JSON and non-JSON should have exactly 3 "
+         "arguments.";
+  if (const std::string common_error = CheckFirstJsonArgumentType(arguments[0]);
+      !common_error.empty()) {
+    return common_error;
+  }
+
+  const Type* type2 = arguments[1].type();
+  const Type* type3 = arguments[2].type();
+  ABSL_DCHECK_NE(type2, nullptr);
+  ABSL_DCHECK_NE(type3, nullptr);
+  if (type2->IsJson() && type3->IsJson()) {
+    return "All arguments are JSON. This signature is for JSON and non-JSON.";
+  }
+  for (const Type* type : {type2, type3}) {
+    ABSL_DCHECK(IsJsonCastOrderPreserving(type))
+        << "Type " << type->DebugString()
+        << " cannot be coerced to JSON for ordering.";
+  }
+  return kNoConstraintViolation;
+}
+
+// Returns an error message if the non-JSON type cannot be coerced to JSON for
+// IN operator with JSON and non-JSON types.
+std::string JsonInCoercionConstraintErrorMessage(
+    const FunctionSignature& signature,
+    const std::vector<InputArgumentType>& arguments) {
+  ABSL_DCHECK_GE(arguments.size(), 2)
+      << "INTERNAL_ERROR: IN with JSON and non-JSON should have at least 2 "
+         "arguments.";
+  if (const std::string common_error = CheckFirstJsonArgumentType(arguments[0]);
+      !common_error.empty()) {
+    return common_error;
+  }
+
+  bool all_json = true;
+  for (int i = 1; i < arguments.size(); ++i) {
+    const Type* type = arguments[i].type();
+    ABSL_DCHECK_NE(type, nullptr);
+    if (!type->IsJson()) {
+      all_json = false;
+    }
+    if (type->IsJson()) {
+      continue;
+    }
+    ABSL_DCHECK(IsJsonCastEqualityPreserving(type))
+        << "Type " << type->DebugString()
+        << " cannot be coerced to JSON for equality.";
+  }
+  if (all_json) {
+    return "All arguments are JSON. This signature is for JSON and non-JSON.";
+  }
+  return kNoConstraintViolation;
+}
+
+// Returns standard FunctionArgumentTypeOptions for JSON comparison arguments.
+// Disables collation mode (set to AFFECTS_NONE) because the JSON type itself
+// does not support collation, and during implicit coercion to JSON, any string
+// collation must be discarded. Otherwise, the query analyzer might resolve
+// case-insensitive collation for comparison operations while the query engine
+// executes case-sensitive JSON binary comparisons, causing silent incorrect
+// behavior.
+FunctionArgumentTypeOptions GetJsonArgOption() {
+  FunctionArgumentTypeOptions option;
+  option.set_argument_collation_mode(FunctionEnums::AFFECTS_NONE);
+  return option;
+}
+
+FunctionArgumentTypeOptions GetJsonEqualityCoercionOption() {
+  FunctionArgumentTypeOptions option = GetJsonArgOption();
+  option.set_allow_coercion_from(&IsJsonCastEqualityPreserving);
+  return option;
+}
+
+FunctionArgumentTypeOptions GetJsonOrderCoercionOption() {
+  FunctionArgumentTypeOptions option = GetJsonArgOption();
+  option.set_allow_coercion_from(&IsJsonCastOrderPreserving);
+  return option;
+}
+
 void GetEqualityFunctions(TypeFactory* type_factory,
                           const GoogleSQLBuiltinFunctionOptions& options,
                           NameToFunctionMap* functions) {
   const Type* const bool_type = type_factory->get_bool();
   const Type* const int64_type = type_factory->get_int64();
   const Type* const uint64_type = type_factory->get_uint64();
+  const Type* const json_type = type_factory->get_json();
+
+  const FunctionArgumentTypeOptions json_equality_coercion_option =
+      GetJsonEqualityCoercionOption();
+  const FunctionArgumentTypeOptions json_arg_option = GetJsonArgOption();
 
   InsertFunction(
       functions, options, "$equal", Function::SCALAR,
       {
           {bool_type,
-           {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+           {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
            FN_EQUAL,
            FunctionSignatureOptions().set_uses_operation_collation()},
           {bool_type, {int64_type, uint64_type}, FN_EQUAL_INT64_UINT64},
           {bool_type, {uint64_type, int64_type}, FN_EQUAL_UINT64_INT64},
+          {bool_type,
+           {{json_type, json_arg_option},
+            {json_type, json_equality_coercion_option}},
+           FN_EQUAL_JSON_NONJSON,
+           FunctionSignatureOptions()
+               .set_uses_operation_collation()
+               .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+          {bool_type,
+           {{json_type, json_equality_coercion_option},
+            {json_type, json_arg_option}},
+           FN_EQUAL_NONJSON_JSON,
+           FunctionSignatureOptions()
+               .set_uses_operation_collation()
+               .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
           // TODO: Remove these signatures.
           {bool_type,
-           {ARG_TYPE_GRAPH_NODE, ARG_TYPE_GRAPH_NODE},
+           {ARG_KIND_EXPR_GRAPH_NODE, ARG_KIND_EXPR_GRAPH_NODE},
            FN_EQUAL_GRAPH_NODE,
            FunctionSignatureOptions()
                .set_is_hidden(true)
                .set_uses_operation_collation()
                .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)},
           {bool_type,
-           {ARG_TYPE_GRAPH_EDGE, ARG_TYPE_GRAPH_EDGE},
+           {ARG_KIND_EXPR_GRAPH_EDGE, ARG_KIND_EXPR_GRAPH_EDGE},
            FN_EQUAL_GRAPH_EDGE,
            FunctionSignatureOptions()
                .set_is_hidden(true)
@@ -108,21 +297,43 @@ void GetEqualityFunctions(TypeFactory* type_factory,
       functions, options, "$not_equal", Function::SCALAR,
       {
           {bool_type,
-           {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+           {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
            FN_NOT_EQUAL,
            FunctionSignatureOptions().set_uses_operation_collation()},
           {bool_type, {int64_type, uint64_type}, FN_NOT_EQUAL_INT64_UINT64},
           {bool_type, {uint64_type, int64_type}, FN_NOT_EQUAL_UINT64_INT64},
+          {bool_type,
+           {{json_type, json_arg_option},
+            {json_type, json_equality_coercion_option}},
+           FN_NOT_EQUAL_JSON_NONJSON,
+           FunctionSignatureOptions()
+               .set_uses_operation_collation()
+               .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+          {bool_type,
+           {{json_type, json_equality_coercion_option},
+            {json_type, json_arg_option}},
+           FN_NOT_EQUAL_NONJSON_JSON,
+           FunctionSignatureOptions()
+               .set_uses_operation_collation()
+               .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+               .AddRequiredLanguageFeature(
+                   LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
           // TODO: Remove these signatures.
           {bool_type,
-           {ARG_TYPE_GRAPH_NODE, ARG_TYPE_GRAPH_NODE},
+           {ARG_KIND_EXPR_GRAPH_NODE, ARG_KIND_EXPR_GRAPH_NODE},
            FN_NOT_EQUAL_GRAPH_NODE,
            FunctionSignatureOptions()
                .set_is_hidden(true)
                .set_uses_operation_collation()
                .AddRequiredLanguageFeature(LanguageFeature::FEATURE_SQL_GRAPH)},
           {bool_type,
-           {ARG_TYPE_GRAPH_EDGE, ARG_TYPE_GRAPH_EDGE},
+           {ARG_KIND_EXPR_GRAPH_EDGE, ARG_KIND_EXPR_GRAPH_EDGE},
            FN_NOT_EQUAL_GRAPH_EDGE,
            FunctionSignatureOptions()
                .set_is_hidden(true)
@@ -145,6 +356,11 @@ void GetDistinctFunctions(TypeFactory* type_factory,
   const Type* const bool_type = type_factory->get_bool();
   const Type* const int64_type = type_factory->get_int64();
   const Type* const uint64_type = type_factory->get_uint64();
+  const Type* const json_type = type_factory->get_json();
+
+  const FunctionArgumentTypeOptions json_equality_coercion_option =
+      GetJsonEqualityCoercionOption();
+  const FunctionArgumentTypeOptions json_arg_option = GetJsonArgOption();
 
   // Add $is_distinct_from/$is_not_distinct_from functions to the catalog
   // unconditionally so that rewriters can generate calls to them, even if the
@@ -153,11 +369,33 @@ void GetDistinctFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$is_distinct_from", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
         FN_DISTINCT,
         FunctionSignatureOptions().set_uses_operation_collation()},
        {bool_type, {int64_type, uint64_type}, FN_DISTINCT_INT64_UINT64},
-       {bool_type, {uint64_type, int64_type}, FN_DISTINCT_UINT64_INT64}},
+       {bool_type, {uint64_type, int64_type}, FN_DISTINCT_UINT64_INT64},
+       {bool_type,
+        {{json_type, json_arg_option},
+         {json_type, json_equality_coercion_option}},
+        FN_DISTINCT_JSON_NONJSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+       {bool_type,
+        {{json_type, json_equality_coercion_option},
+         {json_type, json_arg_option}},
+        FN_DISTINCT_NONJSON_JSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)}},
       FunctionOptions()
           .set_sql_name("IS DISTINCT FROM")
           .set_get_sql_callback(
@@ -169,11 +407,33 @@ void GetDistinctFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$is_not_distinct_from", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
         FN_NOT_DISTINCT,
         FunctionSignatureOptions().set_uses_operation_collation()},
        {bool_type, {int64_type, uint64_type}, FN_NOT_DISTINCT_INT64_UINT64},
-       {bool_type, {uint64_type, int64_type}, FN_NOT_DISTINCT_UINT64_INT64}},
+       {bool_type, {uint64_type, int64_type}, FN_NOT_DISTINCT_UINT64_INT64},
+       {bool_type,
+        {{json_type, json_arg_option},
+         {json_type, json_equality_coercion_option}},
+        FN_NOT_DISTINCT_JSON_NONJSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+       {bool_type,
+        {{json_type, json_equality_coercion_option},
+         {json_type, json_arg_option}},
+        FN_NOT_DISTINCT_NONJSON_JSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonEqualityCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)}},
       FunctionOptions()
           .set_sql_name("IS NOT DISTINCT FROM")
           .set_get_sql_callback(
@@ -189,15 +449,40 @@ void GetInequalityFunctions(TypeFactory* type_factory,
   const Type* const bool_type = type_factory->get_bool();
   const Type* const int64_type = type_factory->get_int64();
   const Type* const uint64_type = type_factory->get_uint64();
+  const Type* const json_type = type_factory->get_json();
+
+  const FunctionArgumentTypeOptions json_order_coercion_option =
+      GetJsonOrderCoercionOption();
+  const FunctionArgumentTypeOptions json_arg_option = GetJsonArgOption();
 
   InsertFunction(
       functions, options, "$less", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
         FN_LESS,
         FunctionSignatureOptions().set_uses_operation_collation()},
        {bool_type, {int64_type, uint64_type}, FN_LESS_INT64_UINT64},
-       {bool_type, {uint64_type, int64_type}, FN_LESS_UINT64_INT64}},
+       {bool_type, {uint64_type, int64_type}, FN_LESS_UINT64_INT64},
+       {bool_type,
+        {{json_type, json_arg_option}, {json_type, json_order_coercion_option}},
+        FN_LESS_JSON_NONJSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+       {bool_type,
+        {{json_type, json_order_coercion_option}, {json_type, json_arg_option}},
+        FN_LESS_NONJSON_JSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)}},
       FunctionOptions()
           .set_supports_safe_error_mode(false)
           .set_post_resolution_argument_constraint(
@@ -210,11 +495,31 @@ void GetInequalityFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$less_or_equal", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
         FN_LESS_OR_EQUAL,
         FunctionSignatureOptions().set_uses_operation_collation()},
        {bool_type, {int64_type, uint64_type}, FN_LESS_OR_EQUAL_INT64_UINT64},
-       {bool_type, {uint64_type, int64_type}, FN_LESS_OR_EQUAL_UINT64_INT64}},
+       {bool_type, {uint64_type, int64_type}, FN_LESS_OR_EQUAL_UINT64_INT64},
+       {bool_type,
+        {{json_type, json_arg_option}, {json_type, json_order_coercion_option}},
+        FN_LESS_OR_EQUAL_JSON_NONJSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+       {bool_type,
+        {{json_type, json_order_coercion_option}, {json_type, json_arg_option}},
+        FN_LESS_OR_EQUAL_NONJSON_JSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)}},
       FunctionOptions()
           .set_supports_safe_error_mode(false)
           .set_post_resolution_argument_constraint(
@@ -227,13 +532,31 @@ void GetInequalityFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$greater_or_equal", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
         FN_GREATER_OR_EQUAL,
         FunctionSignatureOptions().set_uses_operation_collation()},
        {bool_type, {int64_type, uint64_type}, FN_GREATER_OR_EQUAL_INT64_UINT64},
+       {bool_type, {uint64_type, int64_type}, FN_GREATER_OR_EQUAL_UINT64_INT64},
        {bool_type,
-        {uint64_type, int64_type},
-        FN_GREATER_OR_EQUAL_UINT64_INT64}},
+        {{json_type, json_arg_option}, {json_type, json_order_coercion_option}},
+        FN_GREATER_OR_EQUAL_JSON_NONJSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+       {bool_type,
+        {{json_type, json_order_coercion_option}, {json_type, json_arg_option}},
+        FN_GREATER_OR_EQUAL_NONJSON_JSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)}},
       FunctionOptions()
           .set_supports_safe_error_mode(false)
           .set_post_resolution_argument_constraint(absl::bind_front(
@@ -246,11 +569,31 @@ void GetInequalityFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$greater", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+        {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
         FN_GREATER,
         FunctionSignatureOptions().set_uses_operation_collation()},
        {bool_type, {int64_type, uint64_type}, FN_GREATER_INT64_UINT64},
-       {bool_type, {uint64_type, int64_type}, FN_GREATER_UINT64_INT64}},
+       {bool_type, {uint64_type, int64_type}, FN_GREATER_UINT64_INT64},
+       {bool_type,
+        {{json_type, json_arg_option}, {json_type, json_order_coercion_option}},
+        FN_GREATER_JSON_NONJSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)},
+       {bool_type,
+        {{json_type, json_order_coercion_option}, {json_type, json_arg_option}},
+        FN_GREATER_NONJSON_JSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonOrderingCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)}},
       FunctionOptions()
           .set_supports_safe_error_mode(false)
           .set_post_resolution_argument_constraint(absl::bind_front(
@@ -273,6 +616,25 @@ void GetBetweenFunctions(TypeFactory* type_factory,
   const Type* const bool_type = type_factory->get_bool();
   const Type* const int64_type = type_factory->get_int64();
   const Type* const uint64_type = type_factory->get_uint64();
+  const Type* const json_type = type_factory->get_json();
+
+  const FunctionArgumentTypeOptions json_order_coercion_option =
+      GetJsonOrderCoercionOption();
+  const FunctionArgumentTypeOptions json_arg_option = GetJsonArgOption();
+
+  FunctionSignatureOnHeap json_between_coercion_signature(
+      bool_type,
+      {{json_type, json_arg_option},
+       {json_type, json_order_coercion_option},
+       {json_type, json_order_coercion_option}},
+      FN_BETWEEN_JSON_ANY_ANY,
+      FunctionSignatureOptions()
+          .set_uses_operation_collation()
+          .set_constraints(&JsonBetweenCoercionConstraintErrorMessage)
+          .AddRequiredLanguageFeature(
+              LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+          .AddRequiredLanguageFeature(
+              LanguageFeature::FEATURE_CAST_TO_JSON_TYPE));
 
   // Historically, BETWEEN had only one function signature where all
   // arguments must be coercible to the same type.  The implication is that
@@ -290,9 +652,10 @@ void GetBetweenFunctions(TypeFactory* type_factory,
     InsertFunction(
         functions, options, "$between", Function::SCALAR,
         {{bool_type,
-          {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+          {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
           FN_BETWEEN,
-          FunctionSignatureOptions().set_uses_operation_collation()}},
+          FunctionSignatureOptions().set_uses_operation_collation()},
+         json_between_coercion_signature},
         FunctionOptions()
             .set_supports_safe_error_mode(false)
             .set_post_resolution_argument_constraint(
@@ -319,8 +682,9 @@ void GetBetweenFunctions(TypeFactory* type_factory,
          {bool_type,
           {int64_type, int64_type, uint64_type},
           FN_BETWEEN_INT64_INT64_UINT64},
+         json_between_coercion_signature,
          {bool_type,
-          {ARG_TYPE_ANY_1, ARG_TYPE_ANY_1, ARG_TYPE_ANY_1},
+          {ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1, ARG_KIND_EXPR_ANY_1},
           FN_BETWEEN,
           FunctionSignatureOptions().set_uses_operation_collation()}},
         FunctionOptions()
@@ -473,7 +837,7 @@ void GetLikeFunctions(TypeFactory* type_factory,
 }
 
 absl::Status CheckLikeExprArrayArguments(
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   GOOGLESQL_RET_CHECK_EQ(arguments.size(), 2);
   if (!arguments[1].type()->IsArray()) {
@@ -528,10 +892,12 @@ absl::Status GetLikeArrayFunctions(
   const Type* const bool_type = type_factory->get_bool();
   const Type* const byte_type = type_factory->get_bytes();
   const Type* const string_type = type_factory->get_string();
-  const ArrayType* array_string_type;
-  GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeArrayType(string_type, &array_string_type));
-  const ArrayType* array_byte_type;
-  GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeArrayType(byte_type, &array_byte_type));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      const Type* array_string_type,
+      type_factory->MakeArrayType(string_type, options.language_options));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      const Type* array_byte_type,
+      type_factory->MakeArrayType(byte_type, options.language_options));
 
   if (options.language_options.LanguageFeatureEnabled(
           FEATURE_LIKE_ANY_SOME_ALL_ARRAY)) {
@@ -790,7 +1156,7 @@ std::string QuantifiedComparisonListFunctionSQL(
 }
 
 std::string QuantifiedComparisonArrayFunctionSQL(
-    absl::string_view display_name, const std::vector<std::string>& inputs) {
+    absl::string_view display_name, absl::Span<const std::string> inputs) {
   ABSL_DCHECK_EQ(inputs.size(), 2);
   return absl::StrCat("(", inputs[0], ") ", display_name, "(", inputs[1], ")");
 }
@@ -799,15 +1165,31 @@ void GetInFunctions(TypeFactory* type_factory,
                     const GoogleSQLBuiltinFunctionOptions& options,
                     NameToFunctionMap* functions) {
   const Type* const bool_type = type_factory->get_bool();
+  const Type* const json_type = type_factory->get_json();
+  FunctionArgumentTypeOptions in_option = GetJsonEqualityCoercionOption();
+  in_option.set_cardinality(FunctionArgumentType::REPEATED);
+
+  const FunctionArgumentTypeOptions json_lhs_option = GetJsonArgOption();
 
   // TODO: Do we want to support IN for non-compatible integers, i.e.,
   // '<uint64col> IN (<int32col>, <int64col>)'?
   InsertFunction(
       functions, options, "$in", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1, {ARG_TYPE_ANY_1, FunctionArgumentType::REPEATED}},
+        {ARG_KIND_EXPR_ANY_1,
+         {ARG_KIND_EXPR_ANY_1, FunctionArgumentType::REPEATED}},
         FN_IN,
-        FunctionSignatureOptions().set_uses_operation_collation()}},
+        FunctionSignatureOptions().set_uses_operation_collation()},
+       {bool_type,
+        {{json_type, json_lhs_option}, {json_type, in_option}},
+        FN_IN_JSON_NONJSON,
+        FunctionSignatureOptions()
+            .set_uses_operation_collation()
+            .set_constraints(&JsonInCoercionConstraintErrorMessage)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_JSON_TYPE_COMPARISON_COERCION)
+            .AddRequiredLanguageFeature(
+                LanguageFeature::FEATURE_CAST_TO_JSON_TYPE)}},
       FunctionOptions()
           .set_supports_safe_error_mode(false)
           .set_post_resolution_argument_constraint(
@@ -823,9 +1205,10 @@ void GetInFunctions(TypeFactory* type_factory,
   InsertFunction(
       functions, options, "$in_array", Function::SCALAR,
       {{bool_type,
-        {ARG_TYPE_ANY_1,
-         {ARG_ARRAY_TYPE_ANY_1, FunctionArgumentTypeOptions()
-                                    .set_uses_array_element_for_collation()}},
+        {ARG_KIND_EXPR_ANY_1,
+         {ARG_KIND_EXPR_ARRAY_ANY_1,
+          FunctionArgumentTypeOptions()
+              .set_uses_array_element_for_collation()}},
         FN_IN_ARRAY,
         FunctionSignatureOptions().set_uses_operation_collation(true)}},
       FunctionOptions()
@@ -896,7 +1279,8 @@ void GetQuantifiedComparisonFunctions(
     InsertFunction(
         functions, options, fi.name, Function::SCALAR,
         {{bool_type,
-          {ARG_TYPE_ANY_1, {ARG_TYPE_ANY_1, FunctionArgumentType::REPEATED}},
+          {ARG_KIND_EXPR_ANY_1,
+           {ARG_KIND_EXPR_ANY_1, FunctionArgumentType::REPEATED}},
           fi.id,
           quantified_comparison_options}},
         FunctionOptions()
@@ -916,9 +1300,10 @@ void GetQuantifiedComparisonFunctions(
     InsertFunction(
         functions, options, fi.name, Function::SCALAR,
         {{bool_type,
-          {ARG_TYPE_ANY_1,
-           {ARG_ARRAY_TYPE_ANY_1, FunctionArgumentTypeOptions()
-                                      .set_uses_array_element_for_collation()}},
+          {ARG_KIND_EXPR_ANY_1,
+           {ARG_KIND_EXPR_ARRAY_ANY_1,
+            FunctionArgumentTypeOptions()
+                .set_uses_array_element_for_collation()}},
           fi.id,
           quantified_comparison_options}},
         FunctionOptions()

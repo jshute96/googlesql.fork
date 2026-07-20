@@ -28,6 +28,7 @@
 #include "googlesql/base/logging.h"
 #include "googlesql/common/builtin_function_internal.h"
 #include "googlesql/common/errors.h"
+#include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/builtin_function.pb.h"
 #include "googlesql/public/builtin_function_options.h"
 #include "googlesql/public/catalog.h"
@@ -45,20 +46,21 @@
 #include "googlesql/public/type.pb.h"
 #include "googlesql/public/value.h"
 #include "googlesql/base/case.h"
+#include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "googlesql/base/status_builder.h"
 #include "googlesql/base/map_util.h"
-#include "googlesql/base/no_destructor.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -86,7 +88,7 @@ bool ArgumentsAreComparable(absl::Span<const InputArgumentType> arguments,
 
 // Checks whether all arguments are/are not arrays depending on the value of the
 // 'is_array' flag.
-bool ArgumentsArrayType(const std::vector<InputArgumentType>& arguments,
+bool ArgumentsArrayType(absl::Span<const InputArgumentType> arguments,
                         bool is_array, int* bad_argument_idx) {
   *bad_argument_idx = -1;
   for (int idx = 0; idx < arguments.size(); ++idx) {
@@ -231,7 +233,7 @@ std::string AnonAvgWithReportJsonFunctionSQL(
 }
 
 std::string AnonAvgWithReportProtoFunctionSQL(
-    const std::vector<std::string>& inputs) {
+    absl::Span<const std::string> inputs) {
   ABSL_DCHECK(inputs.size() == 1 || inputs.size() == 3);
   return absl::StrCat(
       "ANON_AVG(", inputs[0],
@@ -349,16 +351,16 @@ std::string ArrayAtFunctionSQL(absl::string_view inner_function_name,
   return absl::StrCat(ParenthesizedArrayFunctionSQL(inputs[0]), "[",
                       inner_function_name, "(", inputs[1], ")]");
 }
-std::string ArrayAtOffsetFunctionSQL(const std::vector<std::string>& inputs) {
+std::string ArrayAtOffsetFunctionSQL(absl::Span<const std::string> inputs) {
   return ArrayAtFunctionSQL("OFFSET", inputs);
 }
-std::string ArrayAtOrdinalFunctionSQL(const std::vector<std::string>& inputs) {
+std::string ArrayAtOrdinalFunctionSQL(absl::Span<const std::string> inputs) {
   return ArrayAtFunctionSQL("ORDINAL", inputs);
 }
 std::string SafeArrayAtOffsetFunctionSQL(absl::Span<const std::string> inputs) {
   return ArrayAtFunctionSQL("SAFE_OFFSET", inputs);
 }
-std::string SubscriptFunctionSQL(const std::vector<std::string>& inputs) {
+std::string SubscriptFunctionSQL(absl::Span<const std::string> inputs) {
   ABSL_DCHECK_EQ(inputs.size(), 2);
   return absl::StrCat(inputs[0], "[", inputs[1], "]");
 }
@@ -381,10 +383,10 @@ std::string SubscriptWithOrdinalFunctionSQL(
                       inputs[1], ")]");
 }
 std::string SafeArrayAtOrdinalFunctionSQL(
-    const std::vector<std::string>& inputs) {
+    absl::Span<const std::string> inputs) {
   return ArrayAtFunctionSQL("SAFE_ORDINAL", inputs);
 }
-std::string ProtoMapAtKeySQL(const std::vector<std::string>& inputs) {
+std::string ProtoMapAtKeySQL(absl::Span<const std::string> inputs) {
   return ArrayAtFunctionSQL("KEY", inputs);
 }
 std::string SafeProtoMapAtKeySQL(absl::Span<const std::string> inputs) {
@@ -469,8 +471,8 @@ absl::Status EnsureArgumentsHaveType(
 }
 
 absl::Status CheckDateDatetimeTimeTimestampDiffArguments(
-    const std::string& function_name,
-    const std::vector<InputArgumentType>& arguments,
+    absl::string_view function_name,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   if (arguments.size() != 3) {
     // Let validation happen normally.  It will return an error later.
@@ -553,7 +555,7 @@ absl::Status CheckDateDatetimeTimeTimestampDiffArguments(
 
 absl::Status CheckBitwiseOperatorArgumentsHaveSameType(
     absl::string_view operator_string,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   // We do not want non-literal arguments to implicitly coerce.  We currently
   // have signatures for all the integer/BYTES types, so we only need to check
@@ -583,7 +585,7 @@ absl::Status CheckBitwiseOperatorArgumentsHaveSameType(
 
 absl::Status CheckBitwiseOperatorFirstArgumentIsIntegerOrBytes(
     absl::string_view operator_string,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   // We do not want the first argument to implicitly coerce to integer.
   // We currently have signatures for all the integer types and BYTES for the
@@ -671,8 +673,8 @@ absl::Status CheckDateDatetimeTimeTimestampTruncArguments(
 }
 
 absl::Status CheckLastDayArguments(
-    const std::string& function_name,
-    const std::vector<InputArgumentType>& arguments,
+    absl::string_view function_name,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   if (arguments.size() < 2) {
     // Let validation happen normally.  It will return an error later.
@@ -738,7 +740,7 @@ absl::Status CheckExtractPostResolutionArguments(
 
     using DateTimePartSet = absl::flat_hash_set<functions::DateTimestampPart>;
     if (arguments[0].type()->IsDate()) {
-      static googlesql_base::NoDestructor<DateTimePartSet> valid_parts(DateTimePartSet(
+      static absl::NoDestructor<DateTimePartSet> valid_parts(DateTimePartSet(
           {functions::YEAR, functions::ISOYEAR, functions::QUARTER,
            functions::MONTH, functions::WEEK, functions::WEEK_MONDAY,
            functions::WEEK_TUESDAY, functions::WEEK_WEDNESDAY,
@@ -752,7 +754,7 @@ absl::Status CheckExtractPostResolutionArguments(
       }
     }
     if (arguments[0].type()->IsTime()) {
-      static googlesql_base::NoDestructor<DateTimePartSet> valid_parts(
+      static absl::NoDestructor<DateTimePartSet> valid_parts(
           DateTimePartSet({functions::NANOSECOND, functions::MICROSECOND,
                            functions::MILLISECOND, functions::SECOND,
                            functions::MINUTE, functions::HOUR}));
@@ -768,7 +770,7 @@ absl::Status CheckExtractPostResolutionArguments(
 
 absl::Status CheckDateDatetimeTimestampAddSubArguments(
     absl::string_view function_name,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   if (arguments.size() != 3) {
     // Let validation happen normally. It will return an error later.
@@ -838,7 +840,7 @@ absl::Status CheckDateDatetimeTimestampAddSubArguments(
 
 absl::Status CheckTimeAddSubArguments(
     absl::string_view function_name,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   if (arguments.size() != 3) {
     // Let validation happen normally.  It will return an error later.
@@ -1001,15 +1003,31 @@ absl::Status CheckIsSupportedKeyType(
   }
 
   // Check the key type for string literals.
+  std::set<std::string> active_key_types = supported_key_types;
+  // TODO: b/513333509 - Add support for FPE_FF1 to all of the keys functions.
+  if (language_options.LanguageFeatureEnabled(FEATURE_FPE_NEW_KEYSET) &&
+      (function_name == "KEYS.NEW_KEYSET" ||
+       function_name == "KEYS.NEW_WRAPPED_KEYSET")) {
+    active_key_types.insert("FPE_FF1");
+  }
   const std::string& key_type = argument.literal_value()->string_value();
-  if (!googlesql_base::ContainsKey(supported_key_types, key_type)) {
+  if ((function_name == "KEYS.NEW_KEYSET" && arguments.size() == 2) ||
+      (function_name == "KEYS.NEW_WRAPPED_KEYSET" && arguments.size() == 3)) {
+    if (key_type == "AEAD_AES_GCM_256" ||
+        key_type == "DETERMINISTIC_AEAD_AES_SIV_CMAC_256") {
+      return MakeSqlError()
+             << "Metadata argument is not supported for key type '" << key_type
+             << "'";
+    }
+  }
+  if (!googlesql_base::ContainsKey(active_key_types, key_type)) {
     const std::string key_type_list =
-        supported_key_types.size() == 1
-            ? absl::StrCat("'", *supported_key_types.begin(), "'")
+        active_key_types.size() == 1
+            ? absl::StrCat("'", *active_key_types.begin(), "'")
             : absl::StrCat(
                   "one of ",
                   absl::StrJoin(
-                      supported_key_types, ", ",
+                      active_key_types, ", ",
                       [](std::string* out, const absl::string_view key_type) {
                         absl::StrAppend(out, "'", key_type, "'");
                       }));
@@ -1108,7 +1126,7 @@ std::string NoMatchingSignatureForCaseNoValueFunction(
 }
 
 std::string NoMatchingSignatureForFunctionUsingInterval(
-    const std::string& qualified_function_name,
+    absl::string_view qualified_function_name,
     absl::Span<const InputArgumentType> arguments, ProductMode product_mode,
     int index_of_interval_argument) {
   // index_of_interval_argument is the index of the INTERVAL expression in the
@@ -1142,7 +1160,7 @@ std::string NoMatchingSignatureForFunctionUsingInterval(
 
 std::string NoMatchingSignatureForDateOrTimeAddOrSubFunction(
     const std::string& qualified_function_name,
-    const std::vector<InputArgumentType>& arguments, ProductMode product_mode) {
+    absl::Span<const InputArgumentType> arguments, ProductMode product_mode) {
   return NoMatchingSignatureForFunctionUsingInterval(
       qualified_function_name, arguments, product_mode,
       /*index_of_interval_argument=*/1);
@@ -1158,7 +1176,7 @@ std::string NoMatchingSignatureForGenerateDateOrTimestampArrayFunction(
 
 std::string NoMatchingSignatureForSubscript(
     absl::string_view offset_or_ordinal, absl::string_view operator_name,
-    const std::vector<InputArgumentType>& arguments, ProductMode product_mode) {
+    absl::Span<const InputArgumentType> arguments, ProductMode product_mode) {
   const std::string element_type =
       (arguments.size() > 1 ? arguments[1].UserFacingName(product_mode) : "");
   const std::string element_string =
@@ -1175,7 +1193,7 @@ std::string NoMatchingSignatureForSubscript(
 
 absl::Status CheckArgumentsSupportEquality(
     absl::string_view comparison_name, const FunctionSignature& signature,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   GOOGLESQL_RET_CHECK_EQ(signature.NumConcreteArguments(), arguments.size());
   GOOGLESQL_RETURN_IF_ERROR(
@@ -1193,7 +1211,7 @@ absl::Status CheckArgumentsSupportEquality(
 
 absl::Status CheckArgumentsSupportGrouping(
     absl::string_view comparison_name, const FunctionSignature& signature,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   GOOGLESQL_RET_CHECK_EQ(signature.NumConcreteArguments(), arguments.size());
   GOOGLESQL_RETURN_IF_ERROR(
@@ -1211,7 +1229,7 @@ absl::Status CheckArgumentsSupportGrouping(
 absl::StatusOr<const Type*> GetOrMakeEnumValueDescriptorType(
     Catalog* catalog, TypeFactory* type_factory, CycleDetector* cycle,
     const FunctionSignature& /*signature*/,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const AnalyzerOptions& analyzer_options) {
   const Type* catalog_type = nullptr;
   absl::Status status =
@@ -1235,7 +1253,7 @@ absl::StatusOr<const Type*> GetOrMakeEnumValueDescriptorType(
 
 absl::Status PreResolutionCheckArgumentsSupportComparison(
     absl::string_view comparison_name,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   int bad_argument_idx;
   if (ArgumentsAreComparable(arguments, language_options, &bad_argument_idx)) {
@@ -1248,16 +1266,15 @@ absl::Status PreResolutionCheckArgumentsSupportComparison(
 
 absl::Status CheckArgumentsSupportComparison(
     absl::string_view comparison_name, const FunctionSignature& /*signature*/,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   return PreResolutionCheckArgumentsSupportComparison(
       comparison_name, arguments, language_options);
 }
 
-absl::Status CheckMinMaxArguments(
-    const std::string& function_name,
-    const std::vector<InputArgumentType>& arguments,
-    const LanguageOptions& language_options) {
+absl::Status CheckMinMaxArguments(absl::string_view function_name,
+                                  absl::Span<const InputArgumentType> arguments,
+                                  const LanguageOptions& language_options) {
   return PreResolutionCheckArgumentsSupportComparison(function_name, arguments,
                                                       language_options);
 }
@@ -1266,7 +1283,7 @@ absl::Status CheckMinMaxArguments(
 // so we need to check the flag.
 absl::Status CheckGreatestLeastArguments(
     absl::string_view function_name,
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   GOOGLESQL_RETURN_IF_ERROR(PreResolutionCheckArgumentsSupportComparison(
       function_name, arguments, language_options));
@@ -1283,10 +1300,13 @@ absl::Status CheckGreatestLeastArguments(
 }
 
 absl::Status CheckArrayAggArguments(
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
+  if (language_options.LanguageFeatureEnabled(FEATURE_ARRAY_OF_ARRAY)) {
+    return absl::OkStatus();
+  }
   int bad_argument_idx;
-  if (!ArgumentsArrayType(arguments, false /* is_array */, &bad_argument_idx)) {
+  if (!ArgumentsArrayType(arguments, /*is_array=*/false, &bad_argument_idx)) {
     return MakeSqlError() << "The argument to ARRAY_AGG must not be an array "
                           << "type but was "
                           << arguments[bad_argument_idx].DebugString();
@@ -1295,10 +1315,10 @@ absl::Status CheckArrayAggArguments(
 }
 
 absl::Status CheckArrayConcatArguments(
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   int bad_argument_idx;
-  if (!ArgumentsArrayType(arguments, true /* is_array */, &bad_argument_idx)) {
+  if (!ArgumentsArrayType(arguments, /*is_array=*/true, &bad_argument_idx)) {
     return MakeSqlError()
            << "The argument to ARRAY_CONCAT (or ARRAY_CONCAT_AGG) "
            << "must be an array type but was "
@@ -1376,7 +1396,7 @@ absl::Status CheckArrayDistinctArguments(
 }
 
 absl::Status CheckRangeBucketArguments(
-    const std::vector<InputArgumentType>& arguments,
+    absl::Span<const InputArgumentType> arguments,
     const LanguageOptions& language_options) {
   if (arguments.size() != 2) {
     // Let validation happen normally. It will return an error later.
@@ -1515,7 +1535,7 @@ std::string CheckHasBigNumericTypeArgument(
 // Checks if at least one input argument has INTERVAL type.
 std::string CheckHasIntervalTypeArgument(
     const FunctionSignature& matched_signature,
-    const std::vector<InputArgumentType>& arguments) {
+    absl::Span<const InputArgumentType> arguments) {
   for (const InputArgumentType& argument : arguments) {
     if (argument.type()->kind() == TYPE_INTERVAL) {
       return "";
@@ -1539,9 +1559,7 @@ absl::StatusOr<const Type*> ComputeResultTypeForTopStruct(
   GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeStructType(
       {{"value", arguments[0].type()}, {field2_name, arguments[1].type()}},
       &element_type));
-  const Type* result_type = nullptr;
-  GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeArrayType(element_type, &result_type));
-  return result_type;
+  return type_factory->MakeArrayType(element_type, analyzer_options.language());
 }
 
 // Compute the result type for ST_NEAREST_NEIGHBORS.
@@ -1558,9 +1576,7 @@ absl::StatusOr<const Type*> ComputeResultTypeForNearestNeighborsStruct(
   GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeStructType(
       {{"neighbor", arguments[0].type()}, {"distance", types::DoubleType()}},
       &element_type));
-  const Type* result_type = nullptr;
-  GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeArrayType(element_type, &result_type));
-  return result_type;
+  return type_factory->MakeArrayType(element_type, analyzer_options.language());
 }
 
 static bool FunctionIsDisabled(const GoogleSQLBuiltinFunctionOptions& options,
@@ -1931,7 +1947,7 @@ static absl::StatusOr<bool> InsertTableValuedFunctionImpl(
     NameToTableValuedFunctionMap* table_valued_functions,
     const GoogleSQLBuiltinFunctionOptions& options,
     std::vector<std::string> name,
-    const std::vector<FunctionSignatureOnHeap>& signatures,
+    absl::Span<const FunctionSignatureOnHeap> signatures,
     TableValuedFunctionOptions table_valued_function_options) {
   if (TableValuedFunctionIsDisabled(options, table_valued_function_options)) {
     return false;
@@ -1963,7 +1979,7 @@ static absl::StatusOr<bool> InsertTableValuedFunctionImpl(
 absl::Status InsertSimpleTableValuedFunction(
     NameToTableValuedFunctionMap* table_valued_functions,
     const GoogleSQLBuiltinFunctionOptions& options, absl::string_view name,
-    const std::vector<FunctionSignatureOnHeap>& signatures,
+    absl::Span<const FunctionSignatureOnHeap> signatures,
     TableValuedFunctionOptions table_valued_function_options) {
   std::vector<std::string> names;
   names.reserve(1);

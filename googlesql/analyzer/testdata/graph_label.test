@@ -70,8 +70,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (! Person & ! Account & %)
+      (a_2 IS (! Person & ! Account & %)
       WHERE
         (1 + 2) = 3)
     COLUMNS(
@@ -86,8 +85,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (! Person & ! Account & %)
+      (n IS (! Person & ! Account & %)
       WHERE
         (1 + 2) = 3)
     COLUMNS(
@@ -183,8 +181,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (! Person |(Account & ! Person) | %))
+      (a_2 IS (! Person |(Account & ! Person) | %))
     COLUMNS(
       1 AS a_3,
       CONCAT("str", "_suffix") AS a_4
@@ -197,8 +194,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (! Person |(Account & ! Person) | %))
+      (n IS (! Person |(Account & ! Person) | %))
     COLUMNS(
       1 AS number,
       CONCAT("str", "_suffix") AS concat_str
@@ -281,8 +277,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS ((Account | Person) &(! Person | %)))
+      (a_2 IS ((Account | Person) &(! Person | %)))
     COLUMNS(
       1 AS a_3,
       CONCAT("str", "_suffix") AS a_4
@@ -295,8 +290,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS ((Account | Person) &(! Person | %)))
+      (n IS ((Account | Person) &(! Person | %)))
     COLUMNS(
       1 AS number,
       CONCAT("str", "_suffix") AS concat_str
@@ -368,8 +362,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS !(Account | Person))
+      (a_2 IS !(Account | Person))
     COLUMNS(
       1 AS a_3,
       CONCAT("str", "_suffix") AS a_4
@@ -382,8 +375,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS !(Account | Person))
+      (n IS !(Account | Person))
     COLUMNS(
       1 AS number,
       CONCAT("str", "_suffix") AS concat_str
@@ -454,8 +446,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS Account)
+      (a_2 IS Account)
     COLUMNS(
       a_2.balance AS a_3,
       a_2.id AS a_4
@@ -468,8 +459,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS Account)
+      (n IS Account)
     COLUMNS(
       n.balance AS balance,
       n.id AS id
@@ -602,8 +592,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %))
+      (a_2 IS (% | ! %))
     COLUMNS(
       a_2.age AS a_3,
       a_2.balance AS a_4,
@@ -623,8 +612,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %))
+      (n IS (% | ! %))
     COLUMNS(
       n.age AS age,
       n.balance AS balance,
