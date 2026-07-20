@@ -66,8 +66,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (% | ! %)
+      (a_2 IS (% | ! %)
       WHERE
         ((a_2.id) + 3) = 2)
     COLUMNS(
@@ -81,8 +80,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (% | ! %)
+      (n IS (% | ! %)
       WHERE
         ((n.id) + 3) = 2)
     COLUMNS(
@@ -187,8 +185,7 @@ WHERE
           GRAPH_TABLE(
             aml
             MATCH
-              (a_3
-              IS (% | ! %)
+              (a_3 IS (% | ! %)
               WHERE
                 (a_3.name) = (KeyValue.Value))
             COLUMNS(
@@ -208,8 +205,7 @@ FROM
          GRAPH_TABLE(
            aml
            MATCH
-             (n
-             IS (% | ! %)
+             (n IS (% | ! %)
              WHERE
                (n.name) = (KeyValue.Value))
            COLUMNS(
@@ -280,8 +276,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS (Person | Account)
+      (a_2 IS (Person | Account)
       WHERE
         (1 + 1) = 2)
     COLUMNS(
@@ -295,8 +290,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS (Person | Account)
+      (n IS (Person | Account)
       WHERE
         (1 + 1) = 2)
     COLUMNS(
@@ -351,8 +345,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2
-      IS Person)
+      (a_2 IS Person)
     COLUMNS(
       1 AS a_3
     )
@@ -364,8 +357,7 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (n
-      IS Person)
+      (n IS Person)
     COLUMNS(
       1 AS One
     )

@@ -211,6 +211,7 @@ class QueryExpression {
   bool TrySetPivotClause(absl::string_view pivot);
   bool TrySetUnpivotClause(absl::string_view unpivot);
   bool TrySetMatchRecognizeClause(absl::string_view match_recognize);
+  bool TrySetAlignClause(absl::string_view align);
   bool TrySetLockModeClause(absl::string_view lock_mode);
 
   // Returns true if the clauses necessary to form a SQL query, i.e. select_list
@@ -237,6 +238,7 @@ class QueryExpression {
   bool CanSetPivotClause() const;
   bool CanSetUnpivotClause() const;
   bool CanSetMatchRecognizeClause() const;
+  bool CanSetAlignClause() const;
   bool CanSetLockModeClause() const;
 
   // The below Has... methods return true if the concerned clause is present
@@ -258,6 +260,7 @@ class QueryExpression {
   bool HasPivotClause() const { return !pivot_.empty(); }
   bool HasUnpivotClause() const { return !unpivot_.empty(); }
   bool HasMatchRecognizeClause() const { return !match_recognize_.empty(); }
+  bool HasAlignClause() const { return !align_.empty(); }
   bool HasWithAnonymizationClause() const {
     return !anonymization_options_.empty();
   }
@@ -404,6 +407,7 @@ class QueryExpression {
   bool TryAppendPivotClause(std::string& sql) const;
   bool TryAppendUnpivotClause(std::string& sql) const;
   bool TryAppendMatchRecognizeClause(std::string& sql) const;
+  bool TryAppendAlignClause(std::string& sql) const;
   bool TryAppendWhereClause(std::string& sql) const;
   bool TryAppendGroupByClause(std::string& sql,
                               TargetSyntaxMode target_syntax_mode) const;
@@ -547,6 +551,7 @@ class QueryExpression {
   std::string pivot_;
   std::string unpivot_;
   std::string match_recognize_;
+  std::string align_;
 
   std::string lock_mode_;
 

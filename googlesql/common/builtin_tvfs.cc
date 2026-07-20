@@ -14,20 +14,23 @@
 // limitations under the License.
 //
 
-#include <array>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "googlesql/common/builtin_function_internal.h"
 #include "googlesql/common/builtins_output_properties.h"
+#include "googlesql/proto/kmeans_options.pb.h"
+#include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/builtin_function.pb.h"
 #include "googlesql/public/builtin_function_options.h"
 #include "googlesql/public/catalog.h"
+#include "googlesql/public/constant_evaluator.h"
 #include "googlesql/public/function_signature.h"
+#include "googlesql/public/kmeans_options.h"
 #include "googlesql/public/language_options.h"
 #include "googlesql/public/options.pb.h"
 #include "googlesql/public/strings.h"
@@ -35,14 +38,12 @@
 #include "googlesql/public/types/struct_type.h"
 #include "googlesql/public/types/type.h"
 #include "googlesql/public/types/type_factory.h"
-#include "googlesql/resolved_ast/resolved_ast.h"
-#include "absl/algorithm/container.h"
+#include "googlesql/public/value.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "absl/types/span.h"
@@ -52,203 +53,75 @@
 namespace googlesql {
 namespace {
 
-static constexpr std::array<absl::string_view, 3> kAllowedDistanceTypes = {
-    "COSINE", "DOT_PRODUCT", "EUCLIDEAN"};
-
 // This constant represents the index of the `options` argument of
 // batch VECTOR_SEARCH TVF. Only the `options` argument allows a
 // Type to be defined through BuiltinFunctionOptions.
 static constexpr int kBatchVectorSearchTVFOptionsArgIdx = 4;
 
-// Checks if a column with the given `column_name` exists in the `relation_arg`
-// and returns an error if it does not.
-absl::StatusOr<TVFSchemaColumn> FindColumnInRelation(
-    const TVFInputArgumentType& relation_arg, absl::string_view column_name) {
-  for (const auto& column : relation_arg.relation().columns()) {
-    if (googlesql_base::CaseEqual(column.name, column_name)) {
-      return column;
-    }
-  }
-  return absl::InvalidArgumentError(
-      absl::Substitute("Unrecognized name: $0 in table $1", column_name,
-                       relation_arg.DebugString()));
-}
+// This constant represents the index of the `options` argument of
+// single VECTOR_SEARCH TVF. Only the `options` argument allows a
+// Type to be defined through BuiltinFunctionOptions.
+static constexpr int kSingleVectorSearchTVFOptionsArgIdx = 3;
 
-bool IsScalarNullLiteral(const TVFInputArgumentType& arg) {
-  if (!arg.is_scalar()) return false;
-  const ResolvedExpr* expr = arg.scalar_expr();
-  if (expr == nullptr || !expr->Is<ResolvedLiteral>()) return false;
-  return expr->GetAs<ResolvedLiteral>()->value().is_null();
-}
-
-// Validates that the given `column_name_arg` is a constant string that refers
-// to a column in `relation_arg` of type ARRAY<DOUBLE>, ARRAY<FLOAT>, or STRING.
-// Returns the appropriate error if not.
-// It is expected that the argument passed is not a NULL literal. If it is, then
-// this function will return an internal error.
-absl::StatusOr<TVFSchemaColumn> ValidateColumnToSearchArgument(
-    const TVFInputArgumentType& column_name_arg,
-    const TVFInputArgumentType& relation_arg, std::string_view argument_name) {
-  if (!column_name_arg.is_scalar() ||
-      !column_name_arg.GetScalarArgType()->type()->IsString()) {
-    return absl::InvalidArgumentError(absl::Substitute(
-        "$0 argument of vector_search TVF must be a scalar of type STRING",
-        ToAlwaysQuotedIdentifierLiteral(argument_name)));
-  }
-  const ResolvedExpr* scalar_expr = column_name_arg.scalar_expr();
-  if (scalar_expr == nullptr || !scalar_expr->Is<ResolvedLiteral>()) {
-    return absl::InvalidArgumentError(absl::Substitute(
-        "$0 argument of vector_search TVF must be a constant STRING literal",
-        ToAlwaysQuotedIdentifierLiteral(argument_name)));
-  }
-
-  const ResolvedLiteral* literal = scalar_expr->GetAs<ResolvedLiteral>();
-  if (literal->value().is_null()) {
-    return absl::InvalidArgumentError(
-        absl::Substitute("$0 argument of vector_search TVF cannot be NULL",
-                         ToAlwaysQuotedIdentifierLiteral(argument_name)));
-  }
-  std::string column_to_search_name = literal->value().string_value();
-
-  GOOGLESQL_ASSIGN_OR_RETURN(TVFSchemaColumn column_to_search,
-                   FindColumnInRelation(relation_arg, column_to_search_name));
-  bool is_valid_column_type = false;
-  if (column_to_search.type->IsArray() &&
-      (column_to_search.type->AsArray()->element_type()->IsDouble() ||
-       column_to_search.type->AsArray()->element_type()->IsFloat())) {
-    is_valid_column_type = true;
-  } else if (column_to_search.type->IsString()) {
-    is_valid_column_type = true;
-  }
-  if (!is_valid_column_type) {
-    return absl::InvalidArgumentError(
-        absl::Substitute("The column specified by the $0 "
-                         "argument of vector_search TVF must be of type "
-                         "ARRAY<DOUBLE> or ARRAY<FLOAT> or STRING",
-                         ToAlwaysQuotedIdentifierLiteral(argument_name)));
-  }
-  return column_to_search;
-}
-
-bool IsValidDistanceType(absl::string_view distance_type) {
-  return absl::c_linear_search(kAllowedDistanceTypes, distance_type);
-}
-
-absl::Status CheckBatchVectorSearchPostResolutionArguments(
+absl::Status CheckVectorSearchPostResolutionArguments(
     const FunctionSignature& signature,
     absl::Span<const TVFInputArgumentType> arguments,
     const LanguageOptions& language_options) {
-  GOOGLESQL_RET_CHECK_EQ(arguments.size(), 8);
-  // The first argument is the base table, which must be a relation.
-  const TVFInputArgumentType& base_table_arg = arguments[0];
-  // The second argument is the column to search, which must be a constant
-  // string literal that refers to a column in the base table of type
-  // ARRAY<DOUBLE>/ARRAY<FLOAT>/STRING.
-  const TVFInputArgumentType& column_to_search_arg = arguments[1];
-  // The third argument is the query_table, which must be a relation.
-  const TVFInputArgumentType& query_table_arg = arguments[2];
-  // The fourth argument is the query column to search, which must be a constant
-  // string literal that refers to a column in the query table of type
-  // ARRAY<DOUBLE>/ARRAY<FLOAT>/STRING.
-  const TVFInputArgumentType& query_column_to_search_arg = arguments[3];
-  // The distance_type argument type STRING.
-  const googlesql::TVFInputArgumentType& distance_type_argument = arguments[6];
-
-  const googlesql::FunctionArgumentTypeOptions& column_to_search_options =
-      signature.arguments()[1].options();
-  const googlesql::FunctionArgumentTypeOptions& query_column_to_search_options =
-      signature.arguments()[3].options();
-  const googlesql::FunctionArgumentTypeOptions& distance_type_options =
-      signature.arguments()[6].options();
-
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      TVFSchemaColumn column_to_search,
-      ValidateColumnToSearchArgument(column_to_search_arg, base_table_arg,
-                                     column_to_search_options.argument_name()));
-  // If query_column_to_search is not provided, the value to be used
-  // would be found as follows:
-  // 1. If column_to_search is present in the query data then that's used.
-  // 2. Otherwise the most appropriate column is selected. Refer to
-  // (broken link) for more details on this.
-  std::optional<TVFSchemaColumn> query_column_to_search;
-  if (!IsScalarNullLiteral(query_column_to_search_arg)) {
-    GOOGLESQL_ASSIGN_OR_RETURN(query_column_to_search,
-                     ValidateColumnToSearchArgument(
-                         query_column_to_search_arg, query_table_arg,
-                         query_column_to_search_options.argument_name()));
-  }
-
-  // Check if the types of the column to search in the base and query tables
-  // are the same.
-  if (query_column_to_search.has_value()) {
-    if (!column_to_search.type->Equals(query_column_to_search.value().type)) {
-      return absl::InvalidArgumentError(absl::Substitute(
-          "The column types of argument $0 in the base table and argument $1 "
-          "in the query table must be the same",
-          ToAlwaysQuotedIdentifierLiteral(
-              column_to_search_options.argument_name()),
-          ToAlwaysQuotedIdentifierLiteral(
-              query_column_to_search_options.argument_name())));
-    }
+  if (signature.context_id() == FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS ||
+      signature.context_id() == FN_BATCH_VECTOR_SEARCH_TVF_WITH_JSON_OPTIONS) {
+    GOOGLESQL_RET_CHECK_EQ(arguments.size(), 8);
   } else {
-    // Check if column_to_search is present in the query table.
-    absl::StatusOr<TVFSchemaColumn> query_table_column_to_search =
-        FindColumnInRelation(query_table_arg, column_to_search.name);
-    if (query_table_column_to_search.ok()) {
-      if (!column_to_search.type->Equals(
-              query_table_column_to_search.value().type)) {
-        return absl::InvalidArgumentError(absl::Substitute(
-            "The column types of argument $0 in the base table and "
-            "the query table must be the same",
-            ToAlwaysQuotedIdentifierLiteral(
-                column_to_search_options.argument_name())));
+    GOOGLESQL_RET_CHECK_EQ(arguments.size(), 7);
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<TVFSchemaColumn> GetVectorColumnTypeKMeans(
+    const TVFInputArgumentType& input_table_arg,
+    const TVFInputArgumentType& vectors_column_name_arg,
+    absl::string_view argument_name, const AnalyzerOptions& analyzer_options) {
+  GOOGLESQL_RET_CHECK_NE(analyzer_options.constant_evaluator(), nullptr);
+  GOOGLESQL_ASSIGN_OR_RETURN(const Value vectors_column_name_value,
+                   analyzer_options.constant_evaluator()->Evaluate(
+                       *vectors_column_name_arg.scalar_expr()));
+  int vector_column_index = -1;
+  int found_count = 0;
+  for (int i = 0; i < input_table_arg.relation().num_columns(); ++i) {
+    const TVFRelation::Column& column = input_table_arg.relation().columns()[i];
+    if (googlesql_base::CaseEqual(column.name,
+                               vectors_column_name_value.string_value())) {
+      if ((column.type->IsArray() &&
+           (column.type->AsArray()->element_type()->IsFloat() ||
+            column.type->AsArray()->element_type()->IsDouble()))) {
+        vector_column_index = i;
       }
-    } else {
-      // Check that query_table contains only 1 column and its type matches
-      // the column_to_search type in the base table.
-      if (query_table_arg.relation().columns().size() != 1) {
-        return absl::InvalidArgumentError(
-            "The `query_table` argument to the vector_search TVF must contain "
-            "only 1 column if the `query_column_to_search` argument is not "
-            "explicitly provided");
-      }
-      if (!column_to_search.type->Equals(
-              query_table_arg.relation().columns()[0].type)) {
-        return absl::InvalidArgumentError(absl::Substitute(
-            "The column type of argument $0 in the base table and the only "
-            "column in the query table must be the same when $1 is "
-            "neither explicitly provided nor does it contain the $0 column",
-            ToAlwaysQuotedIdentifierLiteral(
-                column_to_search_options.argument_name()),
-            ToAlwaysQuotedIdentifierLiteral(
-                query_column_to_search_options.argument_name())));
-      }
+      found_count++;
     }
   }
 
-  if (!distance_type_argument.is_scalar() ||
-      !distance_type_argument.GetScalarArgType()->type()->IsString()) {
-    return absl::InvalidArgumentError(absl::Substitute(
-        "$0 argument of vector_search TVF must be a scalar of type STRING",
-        ToAlwaysQuotedIdentifierLiteral(
-            distance_type_options.argument_name())));
+  if (vector_column_index == -1) {
+    // If no column was found, return an error.
+    if (found_count == 0) {
+      return absl::InvalidArgumentError(
+          absl::Substitute("Unrecognized name: $0 in input table arg",
+                           ToAlwaysQuotedIdentifierLiteral(
+                               vectors_column_name_value.string_value())));
+    } else {
+      // If one or more columns were found, but none of them were ARRAY<DOUBLE>
+      // or ARRAY<FLOAT>, return an error.
+      return absl::InvalidArgumentError(absl::Substitute(
+          "The column specified by the $0 argument of KMeans TVF must be "
+          " of type ARRAY<DOUBLE> or ARRAY<FLOAT>",
+          ToAlwaysQuotedIdentifierLiteral(argument_name)));
+    }
+  }
+  if (found_count > 1) {
+    return absl::InvalidArgumentError(
+        absl::Substitute("Column $0 is ambiguous in the base table",
+                         vectors_column_name_value.string_value()));
   }
 
-  std::string distance_type =
-      absl::AsciiStrToUpper(distance_type_argument.scalar_expr()
-                                ->GetAs<ResolvedLiteral>()
-                                ->value()
-                                .string_value());
-
-  // Check if the distance_type argument is one of the allowed distance types.
-  if (!IsValidDistanceType(distance_type)) {
-    return absl::InvalidArgumentError(absl::Substitute(
-        "`$0` argument of vector_search TVF must be set to one of $1",
-        signature.arguments()[6].options().argument_name(),
-        absl::StrJoin(kAllowedDistanceTypes, " or ")));
-  }
-
-  return absl::OkStatus();
+  return input_table_arg.relation().columns()[vector_column_index];
 }
 
 absl::StatusOr<googlesql::TVFRelation::Column> BuildStructColumn(
@@ -264,7 +137,7 @@ absl::StatusOr<googlesql::TVFRelation::Column> BuildStructColumn(
 }
 
 absl::StatusOr<std::shared_ptr<TVFSignature>>
-ComputeResultTypeForVectorSearchTVF(
+ComputeResultTypeForBatchVectorSearchTVF(
     Catalog* catalog, TypeFactory* type_factory,
     const FunctionSignature& signature,
     const std::vector<TVFInputArgumentType>& input_arguments,
@@ -277,9 +150,66 @@ ComputeResultTypeForVectorSearchTVF(
       auto query_struct_column,
       BuildStructColumn(type_factory, input_arguments[2].relation(), "query"));
 
-  std::vector<TVFRelation::Column> output_columns = {
+  TVFRelation::ColumnList output_columns = {
       query_struct_column, base_struct_column,
       googlesql::TVFRelation::Column("distance", type_factory->get_double())};
+
+  googlesql::TVFRelation output_schema(output_columns);
+  return TVFSignature::Create(input_arguments, output_schema);
+}
+
+absl::StatusOr<std::shared_ptr<TVFSignature>>
+ComputeResultTypeForSingleVectorSearchTVF(
+    Catalog* catalog, TypeFactory* type_factory,
+    const FunctionSignature& signature,
+    const std::vector<TVFInputArgumentType>& input_arguments,
+    const AnalyzerOptions& analyzer_options) {
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      auto base_struct_column,
+      BuildStructColumn(type_factory, input_arguments[0].relation(), "base"));
+
+  TVFRelation::ColumnList output_columns = {
+      base_struct_column,
+      googlesql::TVFRelation::Column("distance", type_factory->get_double())};
+
+  googlesql::TVFRelation output_schema(output_columns);
+  return TVFSignature::Create(input_arguments, output_schema);
+}
+
+absl::StatusOr<std::shared_ptr<TVFSignature>>
+ComputeResultTypeForVectorSearchTVF(
+    Catalog* catalog, TypeFactory* type_factory,
+    const FunctionSignature& signature,
+    const std::vector<TVFInputArgumentType>& input_arguments,
+    const AnalyzerOptions& analyzer_options) {
+  if (signature.context_id() == FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS ||
+      signature.context_id() == FN_BATCH_VECTOR_SEARCH_TVF_WITH_JSON_OPTIONS) {
+    return ComputeResultTypeForBatchVectorSearchTVF(
+        catalog, type_factory, signature, input_arguments, analyzer_options);
+  }
+  return ComputeResultTypeForSingleVectorSearchTVF(
+      catalog, type_factory, signature, input_arguments, analyzer_options);
+}
+
+absl::StatusOr<std::shared_ptr<TVFSignature>> ComputeResultTypeForKmeansTVF(
+    Catalog* catalog, TypeFactory* type_factory,
+    const FunctionSignature& signature,
+    const std::vector<TVFInputArgumentType>& input_arguments,
+    const AnalyzerOptions& analyzer_options) {
+  const TVFInputArgumentType& input_table_arg = input_arguments[0];
+  const TVFInputArgumentType& vectors_column_name_arg = input_arguments[1];
+
+  std::string_view argument_name =
+      signature.arguments()[1].options().argument_name();
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      auto vector_column_type,
+      GetVectorColumnTypeKMeans(input_table_arg, vectors_column_name_arg,
+                                argument_name, analyzer_options));
+
+  TVFRelation::ColumnList output_columns = {
+      googlesql::TVFRelation::Column("cluster_id", type_factory->get_int64()),
+      googlesql::TVFRelation::Column("cluster_vector",
+                                     vector_column_type.type)};
 
   googlesql::TVFRelation output_schema(output_columns);
   return TVFSignature::Create(input_arguments, output_schema);
@@ -293,7 +223,6 @@ std::vector<googlesql::FunctionArgumentType> CommonVectorSearchArguments() {
       {googlesql::FunctionArgumentType(
           googlesql::types::StringType(),
           googlesql::FunctionArgumentTypeOptions()
-              .set_must_be_constant()
               .set_must_be_non_null()
               .set_argument_name("column_to_search", kPositionalOnly))},
       // top_k
@@ -302,7 +231,6 @@ std::vector<googlesql::FunctionArgumentType> CommonVectorSearchArguments() {
           googlesql::FunctionArgumentTypeOptions()
               .set_cardinality(googlesql::FunctionArgumentType::OPTIONAL)
               .set_argument_name("top_k", googlesql::kNamedOnly)
-              .set_must_be_constant()
               .set_min_value(1)
               .set_default(Value::Int64(10)))},
       // distance_type
@@ -311,7 +239,6 @@ std::vector<googlesql::FunctionArgumentType> CommonVectorSearchArguments() {
           googlesql::FunctionArgumentTypeOptions()
               .set_argument_name("distance_type", googlesql::kNamedOnly)
               .set_default(Value::String("EUCLIDEAN"))
-              .set_must_be_constant()
               .set_cardinality(googlesql::FunctionArgumentType::OPTIONAL))},
       // max_distance
       {googlesql::FunctionArgumentType(
@@ -319,7 +246,6 @@ std::vector<googlesql::FunctionArgumentType> CommonVectorSearchArguments() {
           googlesql::FunctionArgumentTypeOptions()
               .set_argument_name("max_distance", googlesql::kNamedOnly)
               .set_default(Value::Null(googlesql::types::DoubleType()))
-              .set_must_be_constant()
               .set_cardinality(googlesql::FunctionArgumentType::OPTIONAL))}};
   return arguments;
 }
@@ -349,51 +275,208 @@ absl::Status MaybeAddVectorSearchTVFProtoOptionsArgument(
   return absl::OkStatus();
 }
 
-absl::Status InsertBatchVectorSearchTVFSignatures(
+absl::Status GetBatchVectorSearchTVFSignatures(
     TypeFactory* type_factory, const GoogleSQLBuiltinFunctionOptions& options,
     NameToTableValuedFunctionMap* table_valued_functions,
-    BuiltinsOutputProperties& output_properties) {
+    BuiltinsOutputProperties& output_properties,
+    std::vector<FunctionSignatureOnHeap>& signatures) {
   std::vector<googlesql::FunctionArgumentType> common_vector_search_arguments =
       CommonVectorSearchArguments();
   GOOGLESQL_RET_CHECK_EQ(common_vector_search_arguments.size(), 5);
-  FunctionArgumentTypeList batch_vector_search_arguments = {
-      // Base table.
-      common_vector_search_arguments[0],
-      // Column to search.
-      common_vector_search_arguments[1],
-      // Query data.
-      {googlesql::FunctionArgumentType::AnyRelation()},
-      // Query column to search.
-      {googlesql::FunctionArgumentType(
-          googlesql::types::StringType(),
+  for (const auto& [proto_options, signature_id] :
+       std::vector<std::pair<bool, FunctionSignatureId>>{
+           {true, FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS},
+           {false, FN_BATCH_VECTOR_SEARCH_TVF_WITH_JSON_OPTIONS}}) {
+    FunctionSignatureOptions function_signature_options;
+    FunctionArgumentTypeList batch_vector_search_arguments = {
+        // Base table.
+        common_vector_search_arguments[0],
+        // Column to search.
+        common_vector_search_arguments[1],
+        // Query data.
+        {googlesql::FunctionArgumentType::AnyRelation()},
+        // Query column to search.
+        {googlesql::FunctionArgumentType(
+            googlesql::types::StringType(),
+            googlesql::FunctionArgumentTypeOptions()
+                .set_cardinality(googlesql::FunctionArgumentType::OPTIONAL)
+                .set_argument_name("query_column_to_search",
+                                   googlesql::kPositionalOrNamed))}};
+    if (proto_options) {
+      GOOGLESQL_RETURN_IF_ERROR(MaybeAddVectorSearchTVFProtoOptionsArgument(
+          options, "vector_search",
+          FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS, output_properties,
+          batch_vector_search_arguments, kBatchVectorSearchTVFOptionsArgIdx));
+    } else {
+      batch_vector_search_arguments.push_back({googlesql::FunctionArgumentType(
+          googlesql::types::JsonType(),
           googlesql::FunctionArgumentTypeOptions()
-              .set_must_be_constant()
               .set_cardinality(googlesql::FunctionArgumentType::OPTIONAL)
-              .set_argument_name("query_column_to_search",
-                                 googlesql::kPositionalOrNamed))}};
-  GOOGLESQL_RETURN_IF_ERROR(MaybeAddVectorSearchTVFProtoOptionsArgument(
-      options, "vector_search", FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS,
-      output_properties, batch_vector_search_arguments,
-      kBatchVectorSearchTVFOptionsArgIdx));
-  // top_k
-  batch_vector_search_arguments.push_back(common_vector_search_arguments[2]);
-  // distance_type
-  batch_vector_search_arguments.push_back(common_vector_search_arguments[3]);
-  // max_distance
-  batch_vector_search_arguments.push_back(common_vector_search_arguments[4]);
+              .set_argument_name("options", googlesql::kNamedOnly)
+              .set_must_be_immutable_constant())});
+      function_signature_options.AddRequiredLanguageFeature(
+          FEATURE_SINGLE_HYBRID_VECTOR_SEARCH_TVF);
+    }
+    // top_k
+    batch_vector_search_arguments.push_back(common_vector_search_arguments[2]);
+    // distance_type
+    batch_vector_search_arguments.push_back(common_vector_search_arguments[3]);
+    // max_distance
+    batch_vector_search_arguments.push_back(common_vector_search_arguments[4]);
+
+    signatures.push_back(FunctionSignatureOnHeap(
+        /*result_type=*/googlesql::FunctionArgumentType::AnyRelation(),
+        /*arguments=*/batch_vector_search_arguments,
+        /*context_id=*/
+        signature_id, function_signature_options));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status GetSingleVectorSearchTVFSignatures(
+    TypeFactory* type_factory, const GoogleSQLBuiltinFunctionOptions& options,
+    NameToTableValuedFunctionMap* table_valued_functions,
+    BuiltinsOutputProperties& output_properties,
+    std::vector<FunctionSignatureOnHeap>& signatures) {
+  for (const auto& [query_type, proto_signature_id, json_signature_id] :
+       std::vector<std::tuple<const googlesql::Type*, FunctionSignatureId,
+                              FunctionSignatureId>>{
+           {googlesql::types::FloatArrayType(),
+            FN_SINGLE_VECTOR_SEARCH_TVF_FLOAT_ARRAY_WITH_PROTO_OPTIONS,
+            FN_SINGLE_VECTOR_SEARCH_TVF_FLOAT_ARRAY_WITH_JSON_OPTIONS},
+           {googlesql::types::DoubleArrayType(),
+            FN_SINGLE_VECTOR_SEARCH_TVF_DOUBLE_ARRAY_WITH_PROTO_OPTIONS,
+            FN_SINGLE_VECTOR_SEARCH_TVF_DOUBLE_ARRAY_WITH_JSON_OPTIONS},
+           {googlesql::types::StringType(),
+            FN_SINGLE_VECTOR_SEARCH_TVF_STRING_WITH_PROTO_OPTIONS,
+            FN_SINGLE_VECTOR_SEARCH_TVF_STRING_WITH_JSON_OPTIONS},
+       }) {
+    for (const auto& [proto_options, signature_id] :
+         std::vector<std::pair<bool, FunctionSignatureId>>{
+             {true, proto_signature_id}, {false, json_signature_id}}) {
+      std::vector<googlesql::FunctionArgumentType>
+          common_vector_search_arguments = CommonVectorSearchArguments();
+      GOOGLESQL_RET_CHECK_EQ(common_vector_search_arguments.size(), 5);
+      FunctionArgumentTypeList single_vector_search_arguments = {
+          // Base table.
+          common_vector_search_arguments[0],
+          // Column to search.
+          common_vector_search_arguments[1],
+          // Query value.
+          googlesql::FunctionArgumentType(
+              query_type,
+              googlesql::FunctionArgumentTypeOptions()
+                  .set_argument_name("query_value", googlesql::kNamedOnly)
+                  .set_must_be_non_null()),
+      };
+
+      if (proto_options) {
+        GOOGLESQL_RETURN_IF_ERROR(MaybeAddVectorSearchTVFProtoOptionsArgument(
+            options, "vector_search", signature_id, output_properties,
+            single_vector_search_arguments,
+            kSingleVectorSearchTVFOptionsArgIdx));
+      } else {
+        single_vector_search_arguments.push_back(
+            {googlesql::FunctionArgumentType(
+                googlesql::types::JsonType(),
+                googlesql::FunctionArgumentTypeOptions()
+                    .set_cardinality(googlesql::FunctionArgumentType::OPTIONAL)
+                    .set_argument_name("options", googlesql::kNamedOnly)
+                    .set_must_be_immutable_constant())});
+      }
+
+      // top_k
+      single_vector_search_arguments.push_back(
+          common_vector_search_arguments[2]);
+      // distance_type
+      single_vector_search_arguments.push_back(
+          common_vector_search_arguments[3]);
+      // max_distance
+      single_vector_search_arguments.push_back(
+          common_vector_search_arguments[4]);
+
+      FunctionSignatureOptions function_signature_options;
+      function_signature_options.AddRequiredLanguageFeature(
+          FEATURE_SINGLE_HYBRID_VECTOR_SEARCH_TVF);
+      signatures.push_back(FunctionSignatureOnHeap(
+          /*result_type=*/googlesql::FunctionArgumentType::AnyRelation(),
+          /*arguments=*/single_vector_search_arguments,
+          /*context_id=*/
+          signature_id, function_signature_options));
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status InsertVectorSearchTVFSignatures(
+    TypeFactory* type_factory, const GoogleSQLBuiltinFunctionOptions& options,
+    NameToTableValuedFunctionMap* table_valued_functions,
+    BuiltinsOutputProperties& output_properties) {
+  std::vector<FunctionSignatureOnHeap> signatures;
+  signatures.reserve(8);
+  GOOGLESQL_RETURN_IF_ERROR(GetBatchVectorSearchTVFSignatures(
+      type_factory, options, table_valued_functions, output_properties,
+      signatures));
+  GOOGLESQL_RETURN_IF_ERROR(GetSingleVectorSearchTVFSignatures(
+      type_factory, options, table_valued_functions, output_properties,
+      signatures));
 
   GOOGLESQL_RETURN_IF_ERROR(InsertSimpleTableValuedFunction(
-      table_valued_functions, options, "vector_search",
-      {{FunctionSignatureOnHeap(
-          /*result_type=*/googlesql::FunctionArgumentType::AnyRelation(),
-          /*arguments=*/batch_vector_search_arguments,
-          /*context_id=*/FN_BATCH_VECTOR_SEARCH_TVF_WITH_PROTO_OPTIONS)}},
+      table_valued_functions, options, "vector_search", signatures,
       TableValuedFunctionOptions()
           .AddRequiredLanguageFeature(FEATURE_VECTOR_SEARCH_TVF)
           .set_post_resolution_argument_constraint(
-              &CheckBatchVectorSearchPostResolutionArguments)
+              &CheckVectorSearchPostResolutionArguments)
           .set_compute_result_type_callback(
               &ComputeResultTypeForVectorSearchTVF)));
+  return absl::OkStatus();
+}
+
+absl::Status InsertKMeansTVFSignature(
+    TypeFactory* type_factory, const GoogleSQLBuiltinFunctionOptions& options,
+    NameToTableValuedFunctionMap* table_valued_functions) {
+  const Type* kmeans_options_type;
+  // Default number of clusters is 10.
+  const Value kDefaultK = Value::Int64(10);
+  GOOGLESQL_RETURN_IF_ERROR(type_factory->MakeProtoType(KMeansOptions::descriptor(),
+                                              &kmeans_options_type));
+  FunctionArgumentType kmeans_options_arg = FunctionArgumentType(
+      kmeans_options_type,
+      FunctionArgumentTypeOptions(FunctionArgumentType::OPTIONAL)
+          .set_argument_name("options", kNamedOnly)
+          .set_default(Value::Proto(kmeans_options_type->AsProto(),
+                                    DefaultKMeansOptions().SerializeAsCord())));
+  GOOGLESQL_RETURN_IF_ERROR(InsertSimpleTableValuedFunction(
+      table_valued_functions, options, "kmeans",
+      {{FunctionSignatureOnHeap(
+          /*result_type=*/googlesql::FunctionArgumentType::AnyRelation(),
+          /*arguments=*/
+          FunctionArgumentTypeList{
+              // Input table.
+              {googlesql::FunctionArgumentType::AnyRelation()},
+              // Column containing the vectors to cluster.
+              {googlesql::FunctionArgumentType(
+                  googlesql::types::StringType(),
+                  googlesql::FunctionArgumentTypeOptions()
+                      .set_argument_name("vectors_column",
+                                         googlesql::kPositionalOnly)
+                      .set_must_be_non_null()
+                      .set_must_be_analysis_constant())},
+              // Number of clusters (k).
+              {googlesql::FunctionArgumentType(
+                  googlesql::types::Int64Type(),
+                  googlesql::FunctionArgumentTypeOptions()
+                      .set_cardinality(
+                          googlesql::FunctionArgumentType::OPTIONAL)
+                      .set_argument_name("k", googlesql::kPositionalOrNamed)
+                      .set_must_be_non_null()
+                      .set_min_value(1)
+                      .set_default(kDefaultK))},
+              // KMeans options
+              {kmeans_options_arg}},
+          /*context_id=*/FN_KMEANS_TVF)}},
+      TableValuedFunctionOptions().set_compute_result_type_callback(
+          &ComputeResultTypeForKmeansTVF)));
   return absl::OkStatus();
 }
 
@@ -403,8 +486,16 @@ absl::Status GetVectorSearchTableValuedFunctions(
     TypeFactory* type_factory, const GoogleSQLBuiltinFunctionOptions& options,
     NameToTableValuedFunctionMap* table_valued_functions,
     BuiltinsOutputProperties& output_properties) {
-  GOOGLESQL_RETURN_IF_ERROR(InsertBatchVectorSearchTVFSignatures(
+  GOOGLESQL_RETURN_IF_ERROR(InsertVectorSearchTVFSignatures(
       type_factory, options, table_valued_functions, output_properties));
+  return absl::OkStatus();
+}
+
+absl::Status GetKMeansTableValuedFunction(
+    TypeFactory* type_factory, const GoogleSQLBuiltinFunctionOptions& options,
+    NameToTableValuedFunctionMap* table_valued_functions) {
+  GOOGLESQL_RETURN_IF_ERROR(
+      InsertKMeansTVFSignature(type_factory, options, table_valued_functions));
   return absl::OkStatus();
 }
 

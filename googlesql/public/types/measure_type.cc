@@ -33,9 +33,9 @@
 #include "absl/hash/hash.h"
 #include "googlesql/base/check.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -79,12 +79,6 @@ absl::StatusOr<std::string> MeasureType::TypeNameWithModifiers(
   return absl::StrCat("MEASURE<", result_type_name, ">");
 }
 
-std::string MeasureType::CapitalizedName() const {
-  ABSL_CHECK_EQ(kind(), TYPE_MEASURE);  // Crash OK
-  return absl::StrCat("Measure<", AsMeasure()->result_type()->CapitalizedName(),
-                      ">");
-}
-
 bool MeasureType::SupportsOrdering(const LanguageOptions& language_options,
                                    std::string* type_description) const {
   if (type_description != nullptr) {
@@ -98,7 +92,17 @@ bool MeasureType::SupportsEquality() const { return false; }
 bool MeasureType::SupportsPartitioningImpl(
     const LanguageOptions& language_options,
     const Type** no_partitioning_type) const {
-  *no_partitioning_type = this;
+  if (no_partitioning_type != nullptr) {
+    *no_partitioning_type = this;
+  }
+  return false;
+}
+
+bool MeasureType::SupportsReturningImpl(const LanguageOptions& language_options,
+                                        const Type** no_returning_type) const {
+  if (no_returning_type != nullptr) {
+    *no_returning_type = this;
+  }
   return false;
 }
 
@@ -216,6 +220,11 @@ std::string MeasureType::FormatValueContent(
 
 void MeasureType::ClearValueContent(const ValueContent& value) const {
   value.GetAs<internal::ValueContentMeasureRef*>()->Unref();
+}
+
+uint64_t MeasureType::GetValueContentExternallyAllocatedByteSize(
+    const ValueContent& value) const {
+  return value.GetAs<internal::ValueContentMeasureRef*>()->physical_byte_size();
 }
 
 void MeasureType::CopyValueContent(const ValueContent& from,

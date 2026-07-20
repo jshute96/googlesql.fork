@@ -20,6 +20,7 @@ package com.google.googlesql.resolvedast;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
+import com.google.googlesql.AnnotationMap;
 import com.google.googlesql.DescriptorPool.GoogleSQLFieldDescriptor;
 import com.google.googlesql.DescriptorPool.GoogleSQLOneofDescriptor;
 import com.google.googlesql.FieldDescriptorRefProto;
@@ -43,10 +44,12 @@ import com.google.googlesql.ResolvedColumnProto;
 import com.google.googlesql.ResolvedNodeProto;
 import com.google.googlesql.SimpleCatalog;
 import com.google.googlesql.SimpleTable;
+import com.google.googlesql.SimpleValue;
 import com.google.googlesql.Table;
 import com.google.googlesql.TableRefProto;
 import com.google.googlesql.TestAccess;
 import com.google.googlesql.TestUtil;
+import com.google.googlesql.Type;
 import com.google.googlesql.TypeFactory;
 
 
@@ -186,34 +189,37 @@ public class DeserializationHelperTest {
     List<FunctionArgumentType> arguments = new ArrayList<>();
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_1, ArgumentCardinality.REPEATED, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_1, ArgumentCardinality.REPEATED, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_2, ArgumentCardinality.REQUIRED, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_2, ArgumentCardinality.REQUIRED, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_2, ArgumentCardinality.OPTIONAL, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_2, ArgumentCardinality.OPTIONAL, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_3, ArgumentCardinality.OPTIONAL, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_3, ArgumentCardinality.OPTIONAL, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_3, ArgumentCardinality.OPTIONAL, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_3, ArgumentCardinality.OPTIONAL, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_4, ArgumentCardinality.OPTIONAL, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_4, ArgumentCardinality.OPTIONAL, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_4, ArgumentCardinality.OPTIONAL, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_4, ArgumentCardinality.OPTIONAL, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_5, ArgumentCardinality.OPTIONAL, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_5, ArgumentCardinality.OPTIONAL, -1));
     arguments.add(
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_5, ArgumentCardinality.OPTIONAL, -1));
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_5, ArgumentCardinality.OPTIONAL, -1));
     FunctionSignature signature =
         new FunctionSignature(
-            new FunctionArgumentType(SignatureArgumentKind.ARG_TYPE_ANY_2), arguments, -1, options);
+            new FunctionArgumentType(SignatureArgumentKind.ARG_KIND_EXPR_ANY_2),
+            arguments,
+            -1,
+            options);
     FileDescriptorSetsBuilder fileDescriptorSetsBuilder = new FileDescriptorSetsBuilder();
     signature.serialize(fileDescriptorSetsBuilder);
     DeserializationHelper helper =
@@ -223,6 +229,39 @@ public class DeserializationHelperTest {
     FunctionSignature signature2 = helper.deserialize(functionSignature);
     assertThat(signature.serialize(fileDescriptorSetsBuilder))
         .isEqualTo(signature2.serialize(fileDescriptorSetsBuilder));
+  }
+
+  @Test
+  public void testSerializeDeserializeResolvedColumnWithAnnotationMap() {
+    TypeFactory factory = TypeFactory.nonUniqueNames();
+    SimpleCatalog catalog = new SimpleCatalog("foo", factory);
+    Type type = TypeFactory.createSimpleType(TypeKind.TYPE_STRING);
+
+    AnnotationMap annotationMap = AnnotationMap.create(type);
+    annotationMap.setAnnotation(
+        AnnotationMap.AnnotationKind.COLLATION.getValue(), SimpleValue.createString("und:ci"));
+
+    ResolvedColumn col = new ResolvedColumn(1L, "table", "col", type, annotationMap);
+
+    FileDescriptorSetsBuilder fileDescriptorSetsBuilder = new FileDescriptorSetsBuilder();
+    ResolvedColumnProto proto = ResolvedNodes.serialize(col, fileDescriptorSetsBuilder);
+
+    DeserializationHelper helper =
+        new DeserializationHelper(
+            factory, TestAccess.getDescriptorPools(fileDescriptorSetsBuilder), catalog);
+
+    ResolvedColumn deserializedCol = helper.deserialize(proto);
+
+    assertThat(deserializedCol.getId()).isEqualTo(col.getId());
+    assertThat(deserializedCol.getTableName()).isEqualTo(col.getTableName());
+    assertThat(deserializedCol.getName()).isEqualTo(col.getName());
+    assertThat(deserializedCol.getType().getKind()).isEqualTo(col.getType().getKind());
+    assertThat(deserializedCol.getAnnotationMap()).isNotNull();
+    assertThat(
+            deserializedCol
+                .getAnnotationMap()
+                .getAnnotation(AnnotationMap.AnnotationKind.COLLATION.getValue()))
+        .isEqualTo(SimpleValue.createString("und:ci"));
   }
 
   @Test
@@ -241,6 +280,6 @@ public class DeserializationHelperTest {
             "The number of fields in ResolvedColumn class has changed, "
                 + "please also update the proto and serialization code accordingly.")
         .that(TestUtil.getNonStaticFieldCount(ResolvedColumn.class))
-        .isEqualTo(4);
+        .isEqualTo(5);
   }
 }

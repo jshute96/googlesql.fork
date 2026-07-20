@@ -15,6 +15,7 @@
 #
 
 load("@com_github_grpc_grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
+load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@com_google_protobuf//bazel:java_proto_library.bzl", "java_proto_library")
 load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
 load("@io_grpc_grpc_java//:java_grpc_library.bzl", "java_grpc_library")
@@ -34,6 +35,7 @@ cc_library(
     ],
     deps = [
         ":local_service_cc_proto",
+        "//googlesql/base:check",
         "//googlesql/base:map_util",
         "//googlesql/base:ret_check",
         "//googlesql/base:status",
@@ -43,9 +45,13 @@ cc_library(
         "//googlesql/proto:options_cc_proto",
         "//googlesql/proto:simple_catalog_cc_proto",
         "//googlesql/public:analyzer",
+        "//googlesql/public:analyzer_output",
         "//googlesql/public:builtin_function",
         "//googlesql/public:builtin_function_options",
+        "//googlesql/public:catalog",
+        "//googlesql/public:constant_evaluator",
         "//googlesql/public:evaluator",
+        "//googlesql/public:evaluator_table_iterator",
         "//googlesql/public:formatter_options",
         "//googlesql/public:function",
         "//googlesql/public:id_string",
@@ -53,7 +59,9 @@ cc_library(
         "//googlesql/public:lenient_formatter",
         "//googlesql/public:parse_resume_location",
         "//googlesql/public:parse_resume_location_cc_proto",
+        "//googlesql/public:prepared_expression_constant_evaluator",
         "//googlesql/public:simple_catalog",
+        "//googlesql/public:simple_catalog_util",
         "//googlesql/public:simple_table_cc_proto",
         "//googlesql/public:sql_formatter",
         "//googlesql/public:templated_sql_tvf",  # buildcleaner: keep
@@ -68,6 +76,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/functional:bind_front",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -86,9 +95,7 @@ cc_test(
     tags = ["requires-net:loopback"],
     deps = [
         ":local_service",
-        "//googlesql/base",
-        "//googlesql/base:path",
-        "//googlesql/base:status",
+        "//googlesql/base:check",
         "//googlesql/base/testing:googlesql_gtest_main",
         "//googlesql/base/testing:status_matchers",
         "//googlesql/common:status_payload_utils",
@@ -96,6 +103,7 @@ cc_test(
         "//googlesql/common/testing:testing_proto_util",
         "//googlesql/proto:function_cc_proto",
         "//googlesql/proto:simple_catalog_cc_proto",
+        "//googlesql/public:analyzer_options",
         "//googlesql/public:formatter_options_cc_proto",
         "//googlesql/public:parse_resume_location_cc_proto",
         "//googlesql/public:simple_catalog",
@@ -108,6 +116,7 @@ cc_test(
         "//googlesql/resolved_ast:resolved_ast_cc_proto",
         "//googlesql/testdata:test_proto3_cc_proto",
         "//googlesql/testdata:test_schema_cc_proto",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_protobuf//:protobuf",
     ],
