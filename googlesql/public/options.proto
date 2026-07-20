@@ -781,6 +781,18 @@ enum LanguageFeature {
   // ResolvedGeneralizedQueryStmt.
   FEATURE_PIPE_FORK = 128;
 
+  // Enables a no-argument set operation (e.g. `|> UNION ALL`, `|> INTERSECT
+  // DISTINCT`, including BY NAME / CORRESPONDING variants, but not EXCEPT)
+  // immediately after a `|> FORK`.  This merges the FORK's table-producing
+  // branches back into a single output table using the same column-matching
+  // rules as a normal pipe set operation, after which the pipeline resumes
+  // normally.  Requires FEATURE_PIPE_FORK.  Unlike bare FORK, this does not
+  // require ResolvedGeneralizedQueryStmt support, because the merge lowers to
+  // a normal single-table query (a ResolvedWithScan over a
+  // ResolvedSetOperationScan).
+  FEATURE_PIPE_FORK_SET_OPERATION = 177
+      [(language_feature_options).in_development = true];
+
   // Enables TEE pipe operator.
   // TEE is allowed only if SupportedStatementKinds includes
   // ResolvedGeneralizedQueryStmt.
