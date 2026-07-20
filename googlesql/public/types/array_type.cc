@@ -46,11 +46,11 @@
 #include "absl/base/attributes.h"
 #include "absl/hash/hash.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/substitute.h"
 #include "googlesql/base/ret_check.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -157,14 +157,16 @@ struct MultisetValueContentContainerElementHasher {
   const Type* type;
 };
 
-ArrayType::ArrayType(const TypeFactoryBase* factory, const Type* element_type)
-    : ListBackedType(factory, TYPE_ARRAY), element_type_(element_type) {
-  ABSL_CHECK(!element_type->IsArray());  // Blocked in MakeArrayType.
-}
+ArrayType::ArrayType(const TypeFactoryBase& factory, const Type* element_type)
+    : ListBackedType(factory, TYPE_ARRAY), element_type_(element_type) {}
 
 ArrayType::~ArrayType() = default;
 
 bool ArrayType::IsSupportedType(const LanguageOptions& language_options) const {
+  if (element_type()->IsArray() &&
+      !language_options.LanguageFeatureEnabled(FEATURE_ARRAY_OF_ARRAY)) {
+    return false;
+  }
   return element_type()->IsSupportedType(language_options);
 }
 
@@ -247,6 +249,18 @@ bool ArrayType::SupportsPartitioningImpl(
   }
   if (no_partitioning_type != nullptr) {
     *no_partitioning_type = nullptr;
+  }
+  return true;
+}
+
+bool ArrayType::SupportsReturningImpl(const LanguageOptions& language_options,
+                                      const Type** no_returning_type) const {
+  if (!element_type()->SupportsReturningImpl(language_options,
+                                             no_returning_type)) {
+    return false;
+  }
+  if (no_returning_type != nullptr) {
+    *no_returning_type = nullptr;
   }
   return true;
 }

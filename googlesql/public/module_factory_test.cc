@@ -31,6 +31,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
@@ -41,7 +42,6 @@
 #include "google/protobuf/descriptor.h"
 #include "googlesql/base/map_util.h"
 #include "googlesql/base/status.h"
-#include "googlesql/base/status_macros.h"
 
 namespace googlesql {
 
@@ -590,14 +590,14 @@ TEST_F(FetchAllModuleContentsTest, FetchNestedModuleContentsWithSyntaxError) {
       TestDataModuleNamePath({"module_test_errors_main_2"}));
   FetchContentsAndAssertErrorCount(module_name_path, 2);
   // We hit two syntax errors.
-  EXPECT_THAT(
-      module_fetch_errors_[0],
-      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr("Syntax error")));
+  EXPECT_THAT(module_fetch_errors_[0],
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("FUNCTINO is not a supported object type")));
   EXPECT_THAT(FormatError(module_fetch_errors_[0]),
               HasSubstr("module_test_errors_main_2.sqlm"));
-  EXPECT_THAT(
-      module_fetch_errors_[1],
-      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr("Syntax error")));
+  EXPECT_THAT(module_fetch_errors_[1],
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("FUNCTINO is not a supported object type")));
   EXPECT_THAT(FormatError(module_fetch_errors_[1]),
               HasSubstr("module_test_errors_imported_b.sqlm"));
   // We still found contents for 6 modules.
@@ -615,18 +615,19 @@ TEST_F(FetchAllModuleContentsTest, FetchModuleContentsWithNestedLookupError) {
   // errors are populated.  The order isn't guaranteed by the function
   // contract, so if this test becomes a maintenance problem then we need
   // to update the test to more accurately reflect the contract.
-  EXPECT_THAT(
-      module_fetch_errors_[0],
-      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr("Syntax error")));
-  EXPECT_THAT(
-      module_fetch_errors_[1],
-      StatusIs(absl::StatusCode::kNotFound, HasSubstr("Module foo not found")));
-  EXPECT_THAT(
-      module_fetch_errors_[2],
-      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr("Syntax error")));
+  EXPECT_THAT(module_fetch_errors_[0],
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("FUNCTINO is not a supported object type")));
+  EXPECT_THAT(module_fetch_errors_[1],
+              StatusIs(absl::StatusCode::kNotFound,
+                       HasSubstr("Module googlesql.foo not found")));
+  EXPECT_THAT(module_fetch_errors_[2],
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("FUNCTINO is not a supported object type")));
   EXPECT_THAT(
       module_fetch_errors_[3],
-      StatusIs(absl::StatusCode::kNotFound, HasSubstr("Module foo not found")));
+      StatusIs(absl::StatusCode::kNotFound,
+               HasSubstr("Module googlesql.foo not found")));
 
   // Despite syntax errors and file not found errors, we still found contents
   // for 7 modules (module itself + 6 nested imports).

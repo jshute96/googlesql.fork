@@ -67,7 +67,6 @@ class MeasureType : public ContainerType {
                                  /*use_external_float32=*/false);
   }
 
-  std::string CapitalizedName() const override;
 
   bool SupportsOrdering(const LanguageOptions& language_options,
                         std::string* type_description) const override;
@@ -97,7 +96,7 @@ class MeasureType : public ContainerType {
 
  private:
   // Types can only be created and destroyed by TypeFactory.
-  MeasureType(const TypeFactoryBase* factory, const Type* result_type)
+  MeasureType(const TypeFactoryBase& factory, const Type* result_type)
       : ContainerType(factory, TYPE_MEASURE), result_type_(result_type) {};
 
   absl::Status SerializeValueContent(const ValueContent& value,
@@ -108,6 +107,9 @@ class MeasureType : public ContainerType {
   bool SupportsPartitioningImpl(
       const LanguageOptions& language_options,
       const Type** no_partitioning_type) const override;
+
+  bool SupportsReturningImpl(const LanguageOptions& language_options,
+                             const Type** no_returning_type) const override;
 
   absl::HashState HashTypeParameter(absl::HashState state) const override;
   absl::HashState HashValueContent(const ValueContent& value,
@@ -124,6 +126,9 @@ class MeasureType : public ContainerType {
   absl::Status SerializeToProtoAndDistinctFileDescriptorsImpl(
       const BuildFileDescriptorSetMapOptions& options, TypeProto* type_proto,
       FileDescriptorSetMap* file_descriptor_set_map) const override;
+
+  uint64_t GetValueContentExternallyAllocatedByteSize(
+      const ValueContent& value) const override;
 
   void ClearValueContent(const ValueContent& value) const override;
 

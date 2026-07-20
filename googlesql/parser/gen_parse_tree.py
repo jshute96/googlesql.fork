@@ -42,7 +42,7 @@ from googlesql.parser.generator_utils import UpperCamelCase
 
 # You can use `tag_id=GetTempTagId()` until doing the final submit.
 # That will avoid merge conflicts when syncing in other changes.
-NEXT_NODE_TAG_ID = 550
+NEXT_NODE_TAG_ID = 590
 
 
 def GetTempTagId():
@@ -220,6 +220,10 @@ SCALAR_UNARY_OP = EnumScalarType('Op', 'ASTUnaryExpression', 'NOT_SET')
 
 SCALAR_FRAME_UNIT = EnumScalarType('FrameUnit', 'ASTWindowFrame', 'RANGE')
 
+SCALAR_ALIGN_WITHIN_BOUND_TYPE = EnumScalarType('AlignWithinBoundType',
+                                                'ASTAlignWithinBoundExpr',
+                                                'NOT_SET')
+
 SCALAR_BOUNDARY_TYPE = EnumScalarType('BoundaryType', 'ASTWindowFrameExpr',
                                       'UNBOUNDED_PRECEDING')
 
@@ -230,6 +234,10 @@ SCALAR_READ_WRITE_MODE = EnumScalarType('Mode', 'ASTTransactionReadWriteMode',
 
 SCALAR_IMPORT_KIND = EnumScalarType('ImportKind', 'ASTImportStatement',
                                     'MODULE')
+
+SCALAR_MACRO_VISIBILITY = EnumScalarType(
+    'MacroVisibility', 'ASTDefineMacroStatement', 'MACRO_VISIBILITY_UNSPECIFIED'
+)
 
 SCALAR_NULL_FILTER = EnumScalarType('NullFilter', 'ASTUnpivotClause',
                                     'kUnspecified')
@@ -318,6 +326,12 @@ SCALAR_QUANTIFIER_SYMBOL = EnumScalarType(
 SCALAR_GRAPH_NODE_TABLE_REFERENCE_TYPE = EnumScalarType(
     'NodeReferenceType', 'ASTGraphNodeTableReference',
     'NODE_REFERENCE_TYPE_UNSPECIFIED')
+
+SCALAR_GRAPH_NODE_TYPE_REFERENCE_TYPE = EnumScalarType(
+    'NodeReferenceType',
+    'ASTGraphNodeTypeReference',
+    'NODE_REFERENCE_TYPE_UNSPECIFIED',
+)
 
 SCALAR_GRAPH_LABEL_OPERATION_TYPE = EnumScalarType('OperationType',
                                                    'ASTGraphLabelOperation',
@@ -1088,7 +1102,7 @@ class TreeGenerator:
         'blank_line': '\n'
     }
 
-    template = jinja_env.get_template(template_path)
+    template = jinja_env.get_template(template_path)  # pyrefly: ignore[bad-argument-type]
     out = open(output_path, 'wt')
     out.write(Trim(template.render(context)))
     out.close()
@@ -1394,10 +1408,6 @@ def main(argv):
               field_loader=FieldLoaderMethod.REQUIRED,
           ),
       ],
-      extra_public_defs="""
-      ABSL_DEPRECATED("Use with_modifier() instead")
-      const ASTWithModifier* select_with() const { return with_modifier(); }
-         """,
   )
 
   gen.AddNode(
@@ -1551,6 +1561,15 @@ def main(argv):
   )
 
   gen.AddNode(
+      name='ASTPipeFinish',
+      tag_id=570,
+      parent='ASTPipeOperator',
+      fields=[
+          Field('hint', 'ASTHint', tag_id=2),
+      ],
+  )
+
+  gen.AddNode(
       name='ASTPipeTablesample',
       tag_id=435,
       parent='ASTPipeOperator',
@@ -1645,7 +1664,7 @@ def main(argv):
       fields=[
           Field(
               'column_list',
-              'ASTIdentifierList',
+              'ASTExpressionList',
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED,
           ),
@@ -2265,6 +2284,18 @@ def main(argv):
   const ASTAlias* alias() const override { return alias_; }
       """
     )
+
+  gen.AddNode(
+      name='ASTGroupRows',
+      tag_id=572,
+      parent='ASTTableExpression',
+      comment="""
+      Represents a GROUP ROWS scan (sugar syntax) in the FROM clause.
+      """,
+      fields=[
+          Field('alias', 'ASTAlias', tag_id=2),
+      ],
+  )
 
   gen.AddNode(
       name='ASTPipeJoinLhsPlaceholder',
@@ -4102,6 +4133,42 @@ def main(argv):
   )
 
   gen.AddNode(
+      name='ASTFunctionRefArg',
+      tag_id=579,
+      parent='ASTExpression',
+      comment="""
+    This represents a clause of form "FUNCTION <target>", where <target> is a
+    function name path.
+      """,
+      fields=[
+          Field(
+              'function_path',
+              'ASTPathExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTModelArg',
+      tag_id=578,
+      parent='ASTExpression',
+      comment="""
+    This represents a clause of form "MODEL <target>", where <target> is a
+    model name.
+      """,
+      fields=[
+          Field(
+              'model_path',
+              'ASTPathExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
       name='ASTNamedArgument',
       tag_id=72,
       parent='ASTExpression',
@@ -4118,7 +4185,8 @@ def main(argv):
               field_loader=FieldLoaderMethod.REQUIRED,
               private_comment="""
               Required, never NULL.
-              """),
+              """,
+          ),
           Field(
               'expr',
               'ASTExpression',
@@ -4126,8 +4194,10 @@ def main(argv):
               field_loader=FieldLoaderMethod.REQUIRED,
               private_comment="""
               Required, never NULL.
-              """),
-      ])
+              """,
+          ),
+      ],
+  )
 
   gen.AddNode(
       name='ASTInputTableArgument',
@@ -4325,7 +4395,7 @@ def main(argv):
           ),
           Field(
               'corresponding_by_column_list',
-              'ASTColumnList',
+              'ASTExpressionList',
               tag_id=7,
               comment="""
               Stores the column list for the CORRESPONDING BY clause, only
@@ -4345,10 +4415,10 @@ def main(argv):
       parent='ASTNode',
       fields=[
           Field(
-              'identifiers',
-              'ASTIdentifier',
+              'expressions',
+              'ASTExpressionList',
               tag_id=2,
-              field_loader=FieldLoaderMethod.REST_AS_REPEATED),
+              field_loader=FieldLoaderMethod.REQUIRED),
       ])
 
   gen.AddNode(
@@ -5318,6 +5388,19 @@ def main(argv):
   )
 
   gen.AddNode(
+      name='ASTDropAiIndexStatement',
+      tag_id=568,
+      parent='ASTDropIndexStatement',
+      use_custom_debug_string=True,
+      custom_debug_string_comment="""
+      This adds the "if exists" modifier to the node name.
+      """,
+      comment="""
+      Represents a DROP AI INDEX statement.
+      """,
+  )
+
+  gen.AddNode(
       name='ASTRenameStatement',
       tag_id=119,
       parent='ASTStatement',
@@ -5550,7 +5633,7 @@ def main(argv):
       fields=[
           Field(
               'unpivot_columns',
-              'ASTPathExpressionList',
+              'ASTExpressionList',
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED),
           Field(
@@ -5579,7 +5662,7 @@ def main(argv):
       fields=[
           Field(
               'unpivot_output_value_columns',
-              'ASTPathExpressionList',
+              'ASTExpressionList',
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED),
           Field(
@@ -5956,6 +6039,35 @@ def main(argv):
       ])
 
   gen.AddNode(
+      name='ASTExpressionList',
+      tag_id=569,
+      parent='ASTNode',
+      fields=[
+          Field(
+              'expression_list',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+              comment="""
+              List must contain one or more items (never empty)
+              """),
+          Field('parenthesized', SCALAR_BOOL, tag_id=3),
+      ],
+      gen_init_fields=False,
+      extra_private_defs="""
+  absl::Status InitFields() final {
+    FieldLoader fl(this);
+    fl.AddRestAsRepeated(&expression_list_);
+    auto status = fl.Finalize();
+    if (!status.ok()) {
+      return status;
+    }
+    return expression_list_.empty() ? absl::InternalError("Expression list is empty.")
+                                    : absl::OkStatus();
+  }
+""")
+
+  gen.AddNode(
       name='ASTParameterExpr',
       tag_id=139,
       parent='ASTParameterExprBase',
@@ -6097,13 +6209,20 @@ def main(argv):
       parent='ASTExpression',
       fields=[
           Field(
-              'extended_path_expr',
-              'ASTGeneralizedPathExpression',
+              'key_expr',
+              'ASTExpression',
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED,
           ),
           Field('operation', SCALAR_BRACED_CONSTRUCTOR_LHS_OP, tag_id=3),
       ],
+      # legacy non-standard getter
+      extra_public_defs="""
+  ABSL_DEPRECATE_AND_INLINE()
+  const ASTGeneralizedPathExpression* extended_path_expr() const {
+      return key_expr()->GetAsOrNull<ASTGeneralizedPathExpression>();
+  }
+      """
   )
 
   gen.AddNode(
@@ -6162,6 +6281,26 @@ def main(argv):
   )
 
   gen.AddNode(
+      name='ASTBracedConstructorExtendedExpr',
+      tag_id=551,
+      parent='ASTExpression',
+      fields=[
+          Field(
+              'expr',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+          Field(
+              'braced_constructor',
+              'ASTBracedConstructor',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
       name='ASTBracedConstructor',
       tag_id=332,
       parent='ASTExpression',
@@ -6189,28 +6328,6 @@ def main(argv):
               tag_id=3,
               field_loader=FieldLoaderMethod.REQUIRED),
       ])
-
-  # A path expression that supports paths that start with standalone extension
-  # fields.
-  gen.AddNode(
-      name='ASTExtendedPathExpression',
-      tag_id=514,
-      parent='ASTGeneralizedPathExpression',
-      fields=[
-          Field(
-              'parenthesized_path',
-              'ASTGeneralizedPathExpression',
-              tag_id=2,
-              field_loader=FieldLoaderMethod.REQUIRED,
-          ),
-          Field(
-              'generalized_path_expression',
-              'ASTGeneralizedPathExpression',
-              tag_id=3,
-              field_loader=FieldLoaderMethod.REQUIRED,
-          ),
-      ],
-  )
 
   gen.AddNode(
       name='ASTUpdateConstructor',
@@ -6253,6 +6370,26 @@ def main(argv):
       ])
 
   gen.AddNode(
+      name='ASTTypedBracedConstructor',
+      tag_id=573,
+      parent='ASTExpression',
+      fields=[
+          Field(
+              'type_name',
+              'ASTType',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+          Field(
+              'braced_constructor',
+              'ASTBracedConstructor',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
       name='ASTOptionsList',
       tag_id=148,
       parent='ASTNode',
@@ -6273,7 +6410,7 @@ def main(argv):
               'name',
               'ASTIdentifier',
               tag_id=2,
-              field_loader=FieldLoaderMethod.REQUIRED,
+              field_loader=FieldLoaderMethod.OPTIONAL,
           ),
           Field(
               'value',
@@ -6497,6 +6634,10 @@ def main(argv):
 
   (5) GoogleSQL parses the argument as "DESCRIPTOR"; this syntax represents a
      descriptor on a list of columns with optional types.
+
+  (6) GoogleSQL parses the argument as "GRAPH path"; this syntax represents a
+      graph argument. In this case the graph_clause_ of this class is
+      non-empty.
       """,
       fields=[
           Field(
@@ -6505,8 +6646,8 @@ def main(argv):
               tag_id=2,
               field_loader=FieldLoaderMethod.OPTIONAL_EXPRESSION,
               private_comment="""
-              Only one of expr, table_clause, model_clause, connection_clause or
-              descriptor may be non-null.
+              Only one of expr, table_clause, model_clause, connection_clause,
+              graph_clause or descriptor may be non-null.
               """,
           ),
           Field('table_clause', 'ASTTableClause', tag_id=3),
@@ -6520,6 +6661,7 @@ def main(argv):
               tag_id=6,
               gen_setters_and_getters=False,
           ),
+          Field('graph_clause', 'ASTGraphClause', tag_id=7),
       ],
       extra_public_defs="""
   const ASTDescriptor* descriptor() const {return desc_;}
@@ -6615,6 +6757,22 @@ def main(argv):
           Field(
               'connection_path',
               'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED),
+      ])
+
+  gen.AddNode(
+      name='ASTGraphClause',
+      tag_id=586,
+      parent='ASTNode',
+      comment="""
+     This represents a clause of form "GRAPH <target>", where <target> is a
+     graph name.
+      """,
+      fields=[
+          Field(
+              'graph_path',
+              'ASTPathExpression',
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED),
       ])
@@ -6938,6 +7096,14 @@ def main(argv):
   )
 
   gen.AddNode(
+      name='ASTIndexAutoColumns',
+      tag_id=567,
+      parent='ASTPrintableLeaf',
+      comment="Represents 'AUTO COLUMNS' index key expression.",
+      fields=[]
+  )
+
+  gen.AddNode(
       name='ASTIndexItemList',
       tag_id=172,
       parent='ASTNode',
@@ -7024,6 +7190,7 @@ def main(argv):
               'ASTPartitionBy',
               tag_id=8,
           ),
+          Field('with_connection_clause', 'ASTWithConnectionClause', tag_id=15),
           Field('options_list', 'ASTOptionsList', tag_id=9),
           Field('is_unique', SCALAR_BOOL, tag_id=10),
           Field('is_search', SCALAR_BOOL, tag_id=11),
@@ -7034,6 +7201,7 @@ def main(argv):
           ),
           Field('spanner_is_null_filtered', SCALAR_BOOL, tag_id=13),
           Field('is_vector', SCALAR_BOOL, tag_id=14),
+          Field('is_ai', SCALAR_BOOL, tag_id=16),
       ],
       extra_public_defs="""
   const ASTPathExpression* GetDdlTarget() const override { return name_; }
@@ -7464,6 +7632,8 @@ def main(argv):
           ),
           Field('hint', 'ASTHint', tag_id=8),
           Field('alias', 'ASTAlias', tag_id=3),
+          Field('temporal_at', 'ASTTemporalAt', tag_id=9),
+          Field('timestamp', 'ASTWithTimestamp', tag_id=10),
           Field('offset', 'ASTWithOffset', tag_id=4),
           Field(
               'where',
@@ -7726,6 +7896,8 @@ def main(argv):
               field_loader=FieldLoaderMethod.REQUIRED,
           ),
           Field('hint', 'ASTHint', tag_id=10),
+          Field('temporal_at', 'ASTTemporalAt', tag_id=12),
+          Field('timestamp', 'ASTWithTimestamp', tag_id=13),
           Field('column_list', 'ASTColumnList', tag_id=3),
           Field(
               'rows',
@@ -7839,38 +8011,28 @@ def main(argv):
               'target_path',
               'ASTGeneralizedPathExpression',
               tag_id=2,
-              field_loader=FieldLoaderMethod.REQUIRED),
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
           Field('hint', 'ASTHint', tag_id=10),
-          Field(
-              'alias',
-              'ASTAlias',
-              tag_id=3),
-          Field(
-              'offset',
-              'ASTWithOffset',
-              tag_id=4),
+          Field('alias', 'ASTAlias', tag_id=3),
+          Field('temporal_at', 'ASTTemporalAt', tag_id=11),
+          Field('timestamp', 'ASTWithTimestamp', tag_id=12),
+          Field('offset', 'ASTWithOffset', tag_id=4),
           Field(
               'update_item_list',
               'ASTUpdateItemList',
               tag_id=5,
-              field_loader=FieldLoaderMethod.REQUIRED),
-          Field(
-              'from_clause',
-              'ASTFromClause',
-              tag_id=6),
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+          Field('from_clause', 'ASTFromClause', tag_id=6),
           Field(
               'where',
               'ASTExpression',
               tag_id=7,
-              field_loader=FieldLoaderMethod.OPTIONAL_EXPRESSION),
-          Field(
-              'assert_rows_modified',
-              'ASTAssertRowsModified',
-              tag_id=8),
-          Field(
-              'returning',
-              'ASTReturningClause',
-              tag_id=9),
+              field_loader=FieldLoaderMethod.OPTIONAL_EXPRESSION,
+          ),
+          Field('assert_rows_modified', 'ASTAssertRowsModified', tag_id=8),
+          Field('returning', 'ASTReturningClause', tag_id=9),
       ],
       extra_public_defs="""
   const ASTGeneralizedPathExpression* GetTargetPathForNested() const {
@@ -7881,8 +8043,8 @@ def main(argv):
   // it. The behavior is undefined when called on a node that represents a
   // nested UPDATE.
   absl::StatusOr<const ASTPathExpression*> GetTargetPathForNonNested() const;
-      """
-      )
+      """,
+  )
   gen.AddNode(
       name='ASTTruncateStatement',
       tag_id=214,
@@ -8475,37 +8637,6 @@ def main(argv):
       extra_public_defs="""
   std::string GetSQLForAlterAction() const override;
       """)
-
-  gen.AddNode(
-      name='ASTAddColumnIdentifierAction',
-      tag_id=516,
-      parent='ASTAlterAction',
-      use_custom_debug_string=True,
-      comment="""
-      ALTER SEARCH|VECTOR INDEX action for "ADD COLUMN" clause.
-      Note: Different from ASTAddColumnAction, this action is used for adding an
-      existing column in table to an index, so it doesn't need column definition
-      or other fields in ASTAddColumnAction.
-      """,
-      fields=[
-          Field(
-              'column_name',
-              'ASTIdentifier',
-              tag_id=2,
-              field_loader=FieldLoaderMethod.REQUIRED,
-          ),
-          Field(
-              'options_list',
-              'ASTOptionsList',
-              tag_id=3,
-              field_loader=FieldLoaderMethod.OPTIONAL,
-          ),
-          Field('is_if_not_exists', SCALAR_BOOL, tag_id=4),
-      ],
-      extra_public_defs="""
-  std::string GetSQLForAlterAction() const override;
-      """,
-  )
 
   gen.AddNode(
       name='ASTAddColumnAction',
@@ -10381,6 +10512,35 @@ def main(argv):
       """)
 
   gen.AddNode(
+      name='ASTCreateLiveTableStatement',
+      tag_id=559,
+      parent='ASTCreateTableStmtBase',
+      fields=[
+          Field('partition_by', 'ASTPartitionBy', tag_id=2),
+          Field('cluster_by', 'ASTClusterBy', tag_id=3),
+          Field(
+              'query',
+              'ASTQuery',
+              tag_id=4,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+      init_fields_order=[
+          'name',
+          'table_element_list',
+          'collate',
+          'partition_by',
+          'cluster_by',
+          'with_connection_clause',
+          'options_list',
+          'query',
+      ],
+      extra_public_defs="""
+  const ASTPathExpression* GetDdlTarget() const override { return name_; }
+      """,
+  )
+
+  gen.AddNode(
       name='ASTCreateViewStatement',
       tag_id=299,
       parent='ASTCreateViewStatementBase',
@@ -11019,6 +11179,37 @@ def main(argv):
       ])
 
   gen.AddNode(
+      name='ASTColumnListSpec',
+      tag_id=571,
+      parent='ASTExpression',
+      fields=[
+          Field(
+              'column_names',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+      comment='Represents the COLUMNS(...) construct.',
+  )
+
+  gen.AddNode(
+      name='ASTUnpackExpression',
+      tag_id=576,
+      parent='ASTExpression',
+      fields=[
+          Field(
+              'expression',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              comment='The expression to be unpacked',
+          ),
+      ],
+      comment='Represents the **<expr> unpack operator.',
+  )
+
+  gen.AddNode(
       name='ASTTtlClause',
       tag_id=348,
       parent='ASTNode',
@@ -11218,6 +11409,240 @@ def main(argv):
       """)
 
   gen.AddNode(
+      name='ASTCreatePropertyGraphTypeStatement',
+      tag_id=580,
+      parent='ASTCreateStatement',
+      comment="""
+      This statement:
+        `CREATE [OR REPLACE] PROPERTY GRAPH [IF NOT EXISTS] TYPE name`
+        `NODE TYPES (node_type_list)`
+        `[EDGE TYPES (edge_type_list)]`
+        `[OPTIONS (options_list)]`
+
+      A property graph type describes only the logical shape of a graph (its
+      element types, default labels and property declarations) without any
+      physical table bindings.
+
+      Both `node_type_list` and `edge_type_list` may be empty, e.g.
+      `NODE TYPES ()`, to declare a graph type with no node or edge types.
+      """,
+      fields=[
+          Field(
+              'name',
+              'ASTPathExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              comment="""
+              Path expression for the target property graph type.
+              """,
+          ),
+          Field(
+              'node_type_list',
+              'ASTGraphElementTypeList',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              comment="""
+              Node type definitions.
+              """,
+          ),
+          Field(
+              'edge_type_list',
+              'ASTGraphElementTypeList',
+              tag_id=4,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+              comment="""
+              Edge type definitions.
+              """,
+          ),
+          Field(
+              'options_list',
+              'ASTOptionsList',
+              tag_id=5,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+              comment="""
+              Options attached to the property graph type.
+              """,
+          ),
+      ],
+      extra_public_defs="""
+  const ASTPathExpression* GetDdlTarget() const override { return name_; }
+      """,
+  )
+
+  gen.AddNode(
+      name='ASTGraphElementTypeList',
+      tag_id=581,
+      parent='ASTNode',
+      fields=[
+          Field(
+              'element_types',
+              'ASTGraphElementType',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+              comment="""
+              GraphElementType definitions.
+              """,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGraphElementType',
+      tag_id=582,
+      parent='ASTNode',
+      comment="""
+      A node or edge type definition in a CREATE PROPERTY GRAPH TYPE statement:
+        `name [FROM node_type] [TO node_type] [OPTIONS (...)] [properties clause]`
+
+      `name` is the element type name, which is also the name of its default
+      label. `node_type_references` holds the FROM/TO node type constraints and
+      is only present for edge types; each entry is tagged SOURCE or DESTINATION.
+      The `properties clause` is currently a `PROPERTIES (...)` list of simple
+      declarations; it may grow other forms (e.g. derived properties) later.
+      """,
+      fields=[
+          Field(
+              'name',
+              'ASTIdentifier',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              comment="""
+              Element type name; also the name of the default label.
+              """,
+          ),
+          Field(
+              'node_type_references',
+              'ASTGraphNodeTypeReference',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.REPEATING_WHILE_IS_NODE_KIND,
+              comment="""
+              FROM/TO node type constraints, with at most one SOURCE (FROM) and
+              one DESTINATION (TO) entry. Size contract: 0 entries for a node
+              type; 1 (FROM only or TO only) or 2 (both) for an edge type. The
+              grammar (`node_type_source_clause? node_type_dest_clause?`) makes
+              >2 entries or duplicate FROM/TO impossible.
+
+              NOTE: Unlike ASTGraphElementTable, which uses two separate
+              OPTIONAL fields (source_node_reference, dest_node_reference) of the
+              same node kind, this is a single self-describing
+              (SOURCE/DESTINATION-tagged) vector. Edge *tables* always declare
+              both endpoints, so two same-kind OPTIONAL fields are unambiguous
+              there. Edge *types* may declare FROM only or TO only, and two
+              same-kind OPTIONAL fields would misassign a TO-only reference to
+              the source slot (the field loader matches positionally by node
+              kind). The tagged vector avoids that without needing two distinct
+              node classes. Do not "simplify" this to two OPTIONAL fields.
+              """,
+          ),
+          Field(
+              'property_list',
+              'ASTGraphPropertyDeclarationList',
+              tag_id=4,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+              comment="""
+              Property declarations exposed by this element type.
+              """,
+          ),
+          Field(
+              'default_label_options_list',
+              'ASTOptionsList',
+              tag_id=5,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+              comment="""
+              Options attached to the default label of this element type.
+              """,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGraphNodeTypeReference',
+      tag_id=583,
+      parent='ASTNode',
+      use_custom_debug_string=True,
+      comment="""
+      A FROM or TO node type constraint on an edge type:
+        `FROM node_type_name`   (SOURCE)
+        `TO   node_type_name`   (DESTINATION)
+      """,
+      fields=[
+          Field(
+              'node_type_name',
+              'ASTIdentifier',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              comment="""
+              Referenced node type name.
+              """,
+          ),
+          Field(
+              'node_reference_type',
+              SCALAR_GRAPH_NODE_TYPE_REFERENCE_TYPE,
+              tag_id=3,
+              comment="""
+              Whether this is a SOURCE (FROM) or DESTINATION (TO) reference.
+              """,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGraphPropertyDeclarationList',
+      tag_id=584,
+      parent='ASTNode',
+      fields=[
+          Field(
+              'property_declarations',
+              'ASTGraphPropertyDeclaration',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+              comment="""
+              Property declarations.
+              """,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGraphPropertyDeclaration',
+      tag_id=585,
+      parent='ASTNode',
+      comment="""
+      A simple property declaration in a graph element type:
+        `name type [OPTIONS (...)]`
+      """,
+      fields=[
+          Field(
+              'name',
+              'ASTIdentifier',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              comment="""
+              Property name.
+              """,
+          ),
+          Field(
+              'type',
+              'ASTType',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              comment="""
+              Declared type of the property.
+              """,
+          ),
+          Field(
+              'options_list',
+              'ASTOptionsList',
+              tag_id=4,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+              comment="""
+              Options attached to the property.
+              """,
+          ),
+      ],
+  )
+
+  gen.AddNode(
       name='ASTGraphElementTableList',
       tag_id=374,
       parent='ASTNode',
@@ -11245,7 +11670,8 @@ def main(argv):
               comment="""
               GraphElementTable identifier. There should exist an underlying
               table with the same name.
-              """),
+              """,
+          ),
           Field(
               'alias',
               'ASTAlias',
@@ -11253,7 +11679,8 @@ def main(argv):
               field_loader=FieldLoaderMethod.OPTIONAL,
               comment="""
               GraphElementTable alias.
-              """),
+              """,
+          ),
           Field(
               'key_list',
               'ASTColumnList',
@@ -11261,7 +11688,8 @@ def main(argv):
               field_loader=FieldLoaderMethod.OPTIONAL,
               comment="""
               List of columns that uniquely identifies a row in GraphElementTable.
-              """),
+              """,
+          ),
           Field(
               'source_node_reference',
               'ASTGraphNodeTableReference',
@@ -11269,7 +11697,8 @@ def main(argv):
               field_loader=FieldLoaderMethod.OPTIONAL,
               comment="""
               GraphEdgeTable should have this field referencing source node of the edge.
-              """),
+              """,
+          ),
           Field(
               'dest_node_reference',
               'ASTGraphNodeTableReference',
@@ -11277,7 +11706,8 @@ def main(argv):
               field_loader=FieldLoaderMethod.OPTIONAL,
               comment="""
               GraphEdgeTable should have this field referencing destination node of the edge.
-              """),
+              """,
+          ),
           Field(
               'label_properties_list',
               'ASTGraphElementLabelAndPropertiesList',
@@ -11286,7 +11716,8 @@ def main(argv):
               comment="""
               List of Labels exposed by this ElementTable, along with the
               Properties exposed by the Label. This list can never be empty.
-              """),
+              """,
+          ),
           Field(
               'dynamic_label',
               'ASTGraphDynamicLabel',
@@ -11315,7 +11746,14 @@ def main(argv):
               comment="""
                 If present, this is options associated with the default label
                 of this element table.
-              """),
+              """,
+          ),
+          Field(
+              'inlined_edge_definitions',
+              'ASTGraphInlinedEdgeDefinition',
+              tag_id=12,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+          ),
       ],
   )
 
@@ -11577,6 +12015,7 @@ def main(argv):
               tag_id=2,
               field_loader=FieldLoaderMethod.REQUIRED,
           ),
+          Field('is_subquery', SCALAR_BOOL, tag_id=3),
       ],
   )
 
@@ -11668,7 +12107,7 @@ def main(argv):
           ),
           Field(
               'graph_table_shape',
-              'ASTSelectList',
+              'ASTSelect',
               tag_id=5,
               comment="""
               The expression list with aliases to be projected to the outer
@@ -12557,6 +12996,99 @@ def main(argv):
   )
 
   gen.AddNode(
+      name='ASTGraphInsertPathPattern',
+      tag_id=561,
+      parent='ASTNode',
+      comment="""
+      A linear sequence of node and edge patterns to be inserted.
+      """,
+      fields=[
+          Field(
+              'elements',
+              'ASTGraphInsertElementPattern',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGraphInsertElementPatternFiller',
+      tag_id=562,
+      parent='ASTNode',
+      comment="""
+      Filler for graph insert node/edge patterns.
+      """,
+      fields=[
+          Field('variable_name', 'ASTIdentifier', tag_id=2),
+          Field('label_filter', 'ASTGraphLabelFilter', tag_id=3),
+          Field(
+              'property_specification',
+              'ASTGraphPropertySpecification',
+              tag_id=4,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGraphInsertElementPattern',
+      tag_id=563,
+      parent='ASTNode',
+      is_abstract=True,
+      comment="""
+      Base class for node and edge patterns in an INSERT.
+      """,
+      fields=[
+          Field(
+              'filler',
+              'ASTGraphInsertElementPatternFiller',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              visibility=Visibility.PROTECTED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGraphInsertNodePattern',
+      tag_id=564,
+      parent='ASTGraphInsertElementPattern',
+      comment="""
+      Represents a node insertion pattern.
+      """,
+      fields=[],
+  )
+
+  gen.AddNode(
+      name='ASTGraphInsertEdgePattern',
+      tag_id=565,
+      parent='ASTGraphInsertElementPattern',
+      comment="""
+      Represents an edge insertion pattern.
+      """,
+      fields=[
+          Field('orientation', SCALAR_EDGE_ORIENTATION, tag_id=2),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTGqlInsert',
+      tag_id=566,
+      parent='ASTGqlOperator',
+      comment="""
+      Graph INSERT path patterns.
+      """,
+      fields=[
+          Field(
+              'path_patterns',
+              'ASTGraphInsertPathPattern',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
       name='ASTWithModifier',
       tag_id=364,
       parent='ASTNode',
@@ -12625,13 +13157,17 @@ def main(argv):
               'name',
               'ASTIdentifier',
               tag_id=2,
-              field_loader=FieldLoaderMethod.REQUIRED),
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
           Field(
               'body',
               'ASTMacroBody',
               tag_id=3,
-              field_loader=FieldLoaderMethod.REQUIRED),
-      ])
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+          Field('visibility', SCALAR_MACRO_VISIBILITY, tag_id=4),
+      ],
+  )
 
   gen.AddNode(
       name='ASTUndropStatement',
@@ -12655,6 +13191,56 @@ def main(argv):
       extra_public_defs="""
   const ASTPathExpression* GetDdlTarget() const override { return name_; }
       """,
+  )
+
+  gen.AddNode(
+      name='ASTGraphInlinedEdgeDefinition',
+      tag_id=550,
+      parent='ASTNode',
+      comment=(
+          'Represents an inlined edge definition within a '
+          'CREATE PROPERTY GRAPH statement.'
+      ),
+      fields=[
+          Field(
+              'edge_alias',
+              'ASTAlias',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+          Field('join_keys', 'ASTColumnList', tag_id=3),
+          Field('referenced_table', 'ASTIdentifier', tag_id=4),
+          Field(
+              'dest_element_table_columns',
+              'ASTColumnList',
+              tag_id=5,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+          ),
+          Field('direction', SCALAR_EDGE_ORIENTATION, tag_id=6),
+          Field(
+              'label_and_properties_list',
+              'ASTGraphElementLabelAndPropertiesList',
+              tag_id=7,
+          ),
+          Field(
+              'dynamic_label',
+              'ASTGraphDynamicLabel',
+              tag_id=8,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+          ),
+          Field(
+              'dynamic_properties',
+              'ASTGraphDynamicProperties',
+              tag_id=9,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+          ),
+          Field(
+              'default_label_options',
+              'ASTOptionsList',
+              tag_id=10,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+          ),
+      ],
   )
 
   gen.AddNode(
@@ -13067,6 +13653,360 @@ def main(argv):
       ALTER SEQUENCE <name_path> SET OPTIONS (name=value, ...);
       """,
       fields=[],
+  )
+
+  gen.AddNode(
+      name='ASTTemporalAt',
+      tag_id=574,
+      parent='ASTNode',
+      comment="""
+      An AT(...) clause in a DML statement.
+      """,
+      fields=[
+          Field(
+              'expression',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTWithTimestamp',
+      tag_id=575,
+      parent='ASTNode',
+      comment="""
+      This represents a WITH TIMESTAMP [AS alias] clause in a DML statement.
+      """,
+      fields=[
+          Field(
+              'alias',
+              'ASTAlias',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTAlignWithinBoundExpr',
+      tag_id=552,
+      parent='ASTNode',
+      use_custom_debug_string=True,
+      comment="""
+      Represents a bound expression in a WITHIN clause, e.g.,
+      'INTERVAL 5 MINUTE PRECEDING'.
+      """,
+      fields=[
+          Field(
+              'expr',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.OPTIONAL_EXPRESSION,
+              private_comment="""
+              Expression for the bound, e.g., 'INTERVAL 5 MINUTE'. Can be NULL
+              if bound_type is ANCHOR_TIMESTAMP, UNBOUNDED_PRECEDING or
+              UNBOUNDED_FOLLOWING; otherwise, should not be NULL.
+              """,
+          ),
+          Field(
+              'bound_type',
+              SCALAR_ALIGN_WITHIN_BOUND_TYPE,
+              tag_id=3,
+          ),
+      ],
+      extra_public_defs="""
+  std::string GetAlignWithinBoundTypeString() const;
+  static std::string AlignWithinBoundTypeToString(AlignWithinBoundType type);
+      """)
+
+  gen.AddNode(
+      name='ASTAlignWithinClause',
+      tag_id=553,
+      parent='ASTNode',
+      fields=[
+          Field(
+              'lower_bound',
+              'ASTAlignWithinBoundExpr',
+              tag_id=2,
+              private_comment="""
+              Lower bound expression. Can be NULL (both lower_bound and
+              upper_bound can't be NULL).
+              When this is NULL, the implicit lower bound is context dependent
+              (It is aligned timestamp for estimator function call and
+              UNBOUNDED PRECEDING for OUTPUT WITHIN).
+              """,
+          ),
+          Field(
+              'upper_bound',
+              'ASTAlignWithinBoundExpr',
+              tag_id=3,
+              private_comment="""
+              Upper bound expression. Can be NULL (both lower_bound and
+              upper_bound can't be NULL)
+              When this is NULL, the implicit upper bound is context dependent
+              (It is aligned timestamp for estimator function call and
+              CURRENT_TIMESTAMP() for OUTPUT WITHIN).
+              """,
+          ),
+      ],
+      extra_public_defs="""
+
+  void set_bounds(ASTAlignWithinBoundExpr* lower_bound, ASTAlignWithinBoundExpr* upper_bound) {
+    lower_bound_ = lower_bound;
+    if (lower_bound_ != nullptr) {
+        AddChild(const_cast<ASTAlignWithinBoundExpr*>(lower_bound_));
+    }
+    upper_bound_ = upper_bound;
+    if (upper_bound_ != nullptr) {
+        AddChild(const_cast<ASTAlignWithinBoundExpr*>(upper_bound_));
+    }
+  }
+
+""",
+      gen_init_fields=False,
+      extra_private_defs="""
+  absl::Status InitFields() final {
+    // We need a special case here because we have two fields that both have
+    // type ASTWithinBoundExpr and the first one is optional.
+    // Instead of using InitFields to set fields, we use set_bounds.
+    return absl::OkStatus();
+  }
+""",
+  )
+
+  gen.AddNode(
+      name='ASTPartitionByWithOptAlias',
+      tag_id=554,
+      parent='ASTNode',
+      comment="""
+      Represents a PARTITION BY clause where expressions can have optional
+      aliases.
+      """,
+      fields=[
+          Field(
+              'partitioning_exprs',
+              'ASTExpressionWithOptAlias',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+              private_comment="""
+              List of partitioning expressions.
+              """,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTEstimatorFunctionCall',
+      tag_id=555,
+      parent='ASTExpression',
+      comment="""
+      Represents function call using WITHIN clause. It computes value by
+      applying the function to input rows falling within range specified by the
+      within_clause.
+      """,
+      fields=[
+          Field(
+              'function',
+              'ASTFunctionCall',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              private_comment="""
+              Required, never NULL.
+              """,
+          ),
+          Field(
+              'within_clause',
+              'ASTAlignWithinClause',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              private_comment="""
+              Required, never NULL.
+              """,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTMetricsClause',
+      tag_id=556,
+      parent='ASTNode',
+      comment="""
+      Represents a METRICS clause containing a list of (estimator) expressions.
+      """,
+      fields=[
+          Field(
+              'metrics',
+              'ASTExpressionWithAlias',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REST_AS_REPEATED,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTAlignOriginExpression',
+      tag_id=577,
+      parent='ASTNode',
+      comment="""
+      Represents ORIGIN clause of ALIGN Operator
+      """,
+      fields=[
+          Field(
+              'expr',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.OPTIONAL_EXPRESSION,
+          ),
+          Field(
+              'is_epoch',
+              SCALAR_BOOL,
+              tag_id=3,
+          ),
+      ],
+  )
+
+  gen.AddNode(
+      name='ASTAlignOperator',
+      tag_id=557,
+      parent='ASTPostfixTableOperator',
+      comment="""
+      Represents postfix table operator for timeseries alignment.
+      ALIGN partitions its input into logical time series and transforms each
+      logical time series by estimating its value at regular intervals.
+
+      See (broken link).
+      """,
+      fields=[
+          Field(
+              'timestamp_expr',
+              'ASTExpressionWithOptAlias',
+              tag_id=2,
+          ),
+          Field(
+              'period',
+              'ASTExpression',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.REQUIRED,
+              private_comment="""
+              Required, never NULL.
+              """,
+          ),
+          Field(
+              'origin',
+              'ASTAlignOriginExpression',
+              tag_id=4,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+          ),
+          Field(
+              'output_within_clause',
+              'ASTAlignWithinClause',
+              tag_id=5,
+          ),
+          Field(
+              'partition_by',
+              'ASTPartitionByWithOptAlias',
+              tag_id=6,
+          ),
+          Field(
+              'metrics_clause',
+              'ASTMetricsClause',
+              tag_id=7,
+          ),
+          Field(
+              'output_alias',
+              'ASTAlias',
+              tag_id=8,
+          ),
+      ],
+      extra_public_defs="""
+  absl::string_view Name() const override { return "ALIGN"; }
+    """,
+  )
+
+  gen.AddNode(
+      name='ASTPipeAlignOperator',
+      tag_id=558,
+      parent='ASTPipeOperator',
+      fields=[
+          Field(
+              'align_operator',
+              'ASTAlignOperator',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+  )
+
+  # Data Policy AST Nodes
+  gen.AddNode(
+      name='ASTCreateDataPolicyStatement',
+      tag_id=587,
+      parent='ASTCreateStatement',
+      comment="""
+      This represents a CREATE DATA_POLICY statement:
+      CREATE [OR REPLACE] DATA_POLICY [IF NOT EXISTS] <name_path>
+      [OPTIONS ( options_list )]
+      [WITH CONDITION ( <expression> )];
+      """,
+      fields=[
+          Field(
+              'name',
+              'ASTPathExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+          Field(
+              'options_list',
+              'ASTOptionsList',
+              tag_id=3,
+              field_loader=FieldLoaderMethod.OPTIONAL,
+          ),
+          Field(
+              'condition',
+              'ASTExpression',
+              tag_id=4,
+              field_loader=FieldLoaderMethod.OPTIONAL_EXPRESSION,
+          ),
+      ],
+      extra_public_defs="""
+  // Returns the target DDL path identifier.
+  const ASTPathExpression* GetDdlTarget() const override { return name_; }
+      """,
+  )
+
+  gen.AddNode(
+      name='ASTAlterDataPolicyStatement',
+      tag_id=588,
+      parent='ASTAlterStatementBase',
+      comment="""
+      Represents the statement:
+      ALTER DATA_POLICY [IF EXISTS] <name_path> <alter_action_list>;
+      """,
+      fields=[
+      ],  # Target 'path' and 'action_list' are
+      # inherited from ASTAlterStatementBase
+  )
+
+  gen.AddNode(
+      name='ASTSetConditionAction',
+      tag_id=589,
+      parent='ASTAlterAction',
+      comment="""
+      ALTER data policy action for "SET CONDITION (expression)" clause.
+      """,
+      fields=[
+          Field(
+              'condition',
+              'ASTExpression',
+              tag_id=2,
+              field_loader=FieldLoaderMethod.REQUIRED,
+          ),
+      ],
+      extra_public_defs="""
+  std::string GetSQLForAlterAction() const override;
+      """,
   )
 
   gen.Generate(output_path, template_path=template_path)

@@ -47,7 +47,7 @@ TEST(BuiltinFunctionInternalTest, InsertSimpleTableValuedFunction) {
   absl::flat_hash_map<std::string, std::unique_ptr<TableValuedFunction>> tvfs;
   GoogleSQLBuiltinFunctionOptions options;
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -1});
   GOOGLESQL_ASSERT_OK(InsertSimpleTableValuedFunction(&tvfs, options, "test_tvf",
                                             signatures, {}));
   EXPECT_THAT(tvfs, UnorderedElementsAre(Key("test_tvf")));
@@ -70,7 +70,7 @@ TEST(BuiltinFunctionInternalTest,
   absl::flat_hash_map<std::string, std::unique_ptr<TableValuedFunction>> tvfs;
   GoogleSQLBuiltinFunctionOptions options;
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -1});
   options.exclude_function_ids.emplace(static_cast<FunctionSignatureId>(-1));
   GOOGLESQL_ASSERT_OK(InsertSimpleTableValuedFunction(&tvfs, options, "test_tvf",
                                             signatures, {}));
@@ -83,7 +83,7 @@ TEST(BuiltinFunctionInternalTest,
   absl::flat_hash_map<std::string, std::unique_ptr<TableValuedFunction>> tvfs;
   GoogleSQLBuiltinFunctionOptions options;
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION,
+  signatures.push_back({ARG_KIND_RELATION,
                         {type_factory.get_string()},
                         -1,
                         FunctionSignatureOptions().set_rewrite_options(
@@ -99,8 +99,8 @@ TEST(BuiltinFunctionInternalTest,
   absl::flat_hash_map<std::string, std::unique_ptr<TableValuedFunction>> tvfs;
   GoogleSQLBuiltinFunctionOptions options;
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -2});
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_bool()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -2});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_bool()}, -1});
   options.exclude_function_ids.insert(static_cast<FunctionSignatureId>(-1));
   GOOGLESQL_ASSERT_OK(InsertSimpleTableValuedFunction(&tvfs, options, "test_tvf",
                                             signatures, {}));
@@ -117,8 +117,8 @@ TEST(BuiltinFunctionInternalTest,
   absl::flat_hash_map<std::string, std::unique_ptr<TableValuedFunction>> tvfs;
   GoogleSQLBuiltinFunctionOptions options;
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -2});
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_bool()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -2});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_bool()}, -1});
   options.include_function_ids.insert(static_cast<FunctionSignatureId>(-1));
   GOOGLESQL_ASSERT_OK(InsertSimpleTableValuedFunction(&tvfs, options, "test_tvf",
                                             signatures, {}));
@@ -135,7 +135,7 @@ TEST(BuiltinFunctionInternalTest,
   absl::flat_hash_map<std::string, std::unique_ptr<TableValuedFunction>> tvfs;
   GoogleSQLBuiltinFunctionOptions options;
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -1});
   options.rewrite_enabled.emplace(static_cast<FunctionSignatureId>(-1), true);
   EXPECT_THAT(InsertSimpleTableValuedFunction(&tvfs, options, "test_tvf",
                                               signatures, {}),
@@ -151,7 +151,7 @@ TEST(BuiltinFunctionInternalTest,
   GoogleSQLBuiltinFunctionOptions no_options_enabled(language_options);
 
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -1});
 
   GOOGLESQL_EXPECT_OK(InsertSimpleTableValuedFunction(&tvfs, no_options_enabled,
                                             "test_tvf", signatures, {}));
@@ -172,7 +172,7 @@ TEST(BuiltinFunctionInternalTest,
   tvf_options.AddRequiredLanguageFeature(FEATURE_ANALYTIC_FUNCTIONS);
 
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -1});
 
   GOOGLESQL_EXPECT_OK(InsertSimpleTableValuedFunction(
       &tvfs, no_options_enabled, "test_tvf", signatures, tvf_options));
@@ -194,7 +194,6 @@ TEST(BuiltinFunctionInternalTest,
   language_options.EnableLanguageFeature(FEATURE_TABLESAMPLE);
   GoogleSQLBuiltinFunctionOptions partial_options_enabled(language_options);
 
-  language_options.EnableLanguageFeature(FEATURE_DISALLOW_GROUP_BY_FLOAT);
   language_options.EnableLanguageFeature(FEATURE_TIMESTAMP_NANOS);
   language_options.EnableLanguageFeature(FEATURE_DML_UPDATE_WITH_JOIN);
   GoogleSQLBuiltinFunctionOptions full_options_enabled(language_options);
@@ -202,12 +201,11 @@ TEST(BuiltinFunctionInternalTest,
   TableValuedFunctionOptions tvf_options;
   tvf_options.AddRequiredLanguageFeature(FEATURE_ANALYTIC_FUNCTIONS);
   tvf_options.AddRequiredLanguageFeature(FEATURE_TABLESAMPLE);
-  tvf_options.AddRequiredLanguageFeature(FEATURE_DISALLOW_GROUP_BY_FLOAT);
   tvf_options.AddRequiredLanguageFeature(FEATURE_TIMESTAMP_NANOS);
   tvf_options.AddRequiredLanguageFeature(FEATURE_DML_UPDATE_WITH_JOIN);
 
   std::vector<FunctionSignatureOnHeap> signatures;
-  signatures.push_back({ARG_TYPE_RELATION, {type_factory.get_string()}, -1});
+  signatures.push_back({ARG_KIND_RELATION, {type_factory.get_string()}, -1});
 
   GOOGLESQL_EXPECT_OK(InsertSimpleTableValuedFunction(
       &tvfs, no_options_enabled, "test_tvf", signatures, tvf_options));

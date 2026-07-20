@@ -18,6 +18,7 @@
 #define GOOGLESQL_PUBLIC_TYPES_TYPE_PARAMETERS_H_
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -55,14 +56,19 @@ class ExtendedTypeParameters {
   std::vector<SimpleValue> parameters_;
 };
 
-// Type parameters for erasable types (parameterized types), for example
-// STRING(L) is an erasable string type with length limit. L is the type
-// parameter of STRING(L) type.
+// Type parameters for erasable types (parameterized types), for example:
+//   1. STRING(L) is an erasable string type with length limit. L is the type
+//      parameter of STRING(L) type.
+//   2. NUMERIC(P, S) is a NUMERIC with 2 erasable parameters, precision P and
+//      scale S.
 class TypeParameters {
  public:
   // Constructs empty type parameters for types without parameters. Default
   // constructor must be public to be used in the ResolvedAST.
   TypeParameters();
+
+  // Returns a reference to the empty TypeParameters object.
+  static const TypeParameters& EmptyTypeParameters();
 
   // Constructs type parameters for STRING(L) or BYTES(L) type.
   static absl::StatusOr<TypeParameters> MakeStringTypeParameters(
@@ -82,9 +88,17 @@ class TypeParameters {
       const ExtendedTypeParameters& extended_type_parameters,
       std::vector<TypeParameters> child_list = std::vector<TypeParameters>());
 
-  // Constructs type parameters for STRUCT or ARRAY type.
+  // Constructs type parameters for VECTOR(L) type.
+  static absl::StatusOr<TypeParameters> MakeVectorTypeParameters(
+      const VectorTypeParametersProto& vector_type_parameters);
+
+  // Constructs type parameters for a composite type such as STRUCT<>,
+  // ARRAY<> or MAP<>.
   static TypeParameters MakeTypeParametersWithChildList(
       std::vector<TypeParameters> child_list);
+
+  static absl::Status ValidateVectorTypeParameters(
+      const VectorTypeParametersProto& vector_type_parameters);
 
   static absl::Status ValidateStringTypeParameters(
       const StringTypeParametersProto& string_type_parameters);
@@ -104,13 +118,23 @@ class TypeParameters {
   // true.
   bool MatchType(const Type* type) const;
 
+  // Returns SQL-compatible representation of type parameters.
+  // E.g., for VectorTypeParameters with length 3, returns "(3)".
+  // E.g., for ExtendedTypeParameters (a, b), returns "(a, b)".
+  std::string ToParenthesizedString() const;
+
   // Returns true if type parameter is empty and has no children. Empty type
   // parameter is used as placeholder for type without parameters. E.g. in
   // STRUCT<INT64, STRING(10)>, the type parameter for INT64 is empty.
-  bool IsEmpty() const {
-    return std::holds_alternative<std::monostate>(type_parameters_holder_) &&
-           child_list().empty();
+  bool IsEmpty() const { return IsTopLevelEmpty() && child_list().empty(); }
+  // Returns true if type parameter is empty, regardless of whether it has any
+  // children. This is not applicable today, but one day we may have a
+  // TypeParameter on an ARRAY as well as on its element type, e.g.
+  // ARRAY<STRING(10), 3>, say to cap the ARRAY length.
+  bool IsTopLevelEmpty() const {
+    return std::holds_alternative<std::monostate>(type_parameters_holder_);
   }
+
   bool IsStringTypeParameters() const {
     return std::holds_alternative<StringTypeParametersProto>(
         type_parameters_holder_);
@@ -125,6 +149,10 @@ class TypeParameters {
   }
   bool IsExtendedTypeParameters() const {
     return std::holds_alternative<ExtendedTypeParameters>(
+        type_parameters_holder_);
+  }
+  bool IsVectorTypeParameters() const {
+    return std::holds_alternative<VectorTypeParametersProto>(
         type_parameters_holder_);
   }
   const StringTypeParametersProto& string_type_parameters() const {
@@ -142,6 +170,9 @@ class TypeParameters {
   const ExtendedTypeParameters& extended_type_parameters() const {
     ABSL_CHECK(IsExtendedTypeParameters()) << "Not EXTENDED type parameters";
     return std::get<ExtendedTypeParameters>(type_parameters_holder_);
+  }
+  const VectorTypeParametersProto* vector_type_parameters() const {
+    return std::get_if<VectorTypeParametersProto>(&type_parameters_holder_);
   }
 
   // Returns type parameters for subfields for composite types, e.g. ARRAY,
@@ -174,13 +205,33 @@ class TypeParameters {
   static absl::StatusOr<TypeParameters> Deserialize(
       const TypeParametersProto& proto);
   std::string DebugString() const;
-  bool Equals(const TypeParameters& that) const;
+
+  // If default_timestamp_precision is provided, empty type parameters will
+  // match with a TimestampTypeParameters that has the default precision.
+  bool Equals(
+      const TypeParameters& that,
+      std::optional<int64_t> default_timestamp_precision = std::nullopt) const;
+
+  // Returns true if the TypeParameters is equivalent to the annotation map.
+  // Accounts only for annotations which correspond to some type modifiers.
+  // Other annotations are ignored.
+  absl::StatusOr<bool> EqualsAnnotations(
+      const AnnotationMap* annotation_map,
+      int64_t default_timestamp_precision) const;
+
+  // Creates a TypeParameters object to modify the corresponding type based on
+  // the annotation map, by looking up annotations which relate to
+  // some TypeParameters. This is similar to
+  // Collation::MakeCollation(annotation_map).
+  static absl::StatusOr<TypeParameters> MakeTypeParameters(
+      const AnnotationMap* annotation_map);
 
  private:
   explicit TypeParameters(const StringTypeParametersProto& string_parameters);
   explicit TypeParameters(const NumericTypeParametersProto& numeric_parameters);
   explicit TypeParameters(
       const TimestampTypeParametersProto& timestamp_parameters);
+  explicit TypeParameters(const VectorTypeParametersProto& vector_parameters);
   TypeParameters(const ExtendedTypeParameters& extended_parameters,
                  std::vector<TypeParameters> child_list);
   explicit TypeParameters(std::vector<TypeParameters> child_list);
@@ -189,7 +240,7 @@ class TypeParameters {
   // is empty.
   std::variant<std::monostate, StringTypeParametersProto,
                NumericTypeParametersProto, TimestampTypeParametersProto,
-               ExtendedTypeParameters>
+               ExtendedTypeParameters, VectorTypeParametersProto>
       type_parameters_holder_;
   // Stores type parameters for subfields for ARRAY, STRUCT, or RANGE types
   std::vector<TypeParameters> child_list_;

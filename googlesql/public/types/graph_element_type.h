@@ -169,8 +169,8 @@ class GraphElementType : public ListBackedType {
     return TypeNameWithModifiers(type_modifiers, mode,
                                  /*use_external_float32=*/false);
   }
-
-  std::string CapitalizedName() const override;
+  absl::Status ValidateResolvedTypeParameters(
+      const TypeParameters& type_parameters, ProductMode mode) const override;
 
   int nesting_depth() const override { return nesting_depth_; }
 
@@ -189,7 +189,7 @@ class GraphElementType : public ListBackedType {
 
  private:
   GraphElementType(const internal::GraphReference* graph_reference,
-                   ElementKind element_kind, const TypeFactory* factory,
+                   ElementKind element_kind, const TypeFactory& factory,
                    absl::flat_hash_set<PropertyType> property_types,
                    int nesting_depth, bool is_dynamic = false);
 
@@ -210,6 +210,9 @@ class GraphElementType : public ListBackedType {
       const LanguageOptions& language_options,
       const Type** no_partitioning_type) const override;
 
+  bool SupportsReturningImpl(const LanguageOptions& language_options,
+                             const Type** no_returning_type) const override;
+
   absl::Status SerializeToProtoAndDistinctFileDescriptorsImpl(
       const BuildFileDescriptorMapOptions& options, TypeProto* type_proto,
       FileDescriptorSetMap* file_descriptor_set_map) const override;
@@ -225,7 +228,7 @@ class GraphElementType : public ListBackedType {
   void DebugStringImpl(bool details, TypeOrStringVector* stack,
                        std::string* debug_string) const override;
 
-  HasFieldResult HasFieldImpl(const std::string& name, int* field_id,
+  HasFieldResult HasFieldImpl(absl::string_view name, int* field_id,
                               bool include_pseudo_fields) const override;
 
   void CopyValueContent(const ValueContent& from,

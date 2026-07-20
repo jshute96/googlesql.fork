@@ -103,7 +103,7 @@ public class FunctionArgumentTypeTest {
   public void testNotFixedType() {
     FunctionArgumentType arrayTypeAny1 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_1, ArgumentCardinality.REPEATED, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_1, ArgumentCardinality.REPEATED, 0);
     assertThat(arrayTypeAny1.isConcrete()).isFalse();
     assertThat(arrayTypeAny1.getType()).isNull();
     assertThat(arrayTypeAny1.isRepeated()).isTrue();
@@ -111,7 +111,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType arrayTypeAny2 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_2, ArgumentCardinality.REQUIRED, 1);
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_2, ArgumentCardinality.REQUIRED, 1);
     assertThat(arrayTypeAny2.isConcrete()).isFalse();
     assertThat(arrayTypeAny2.getType()).isNull();
     assertThat(arrayTypeAny2.isRepeated()).isFalse();
@@ -119,7 +119,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType enumAny =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ENUM_ANY, ArgumentCardinality.OPTIONAL, -1);
+            SignatureArgumentKind.ARG_KIND_EXPR_ENUM_ANY, ArgumentCardinality.OPTIONAL, -1);
     assertThat(enumAny.isConcrete()).isFalse();
     assertThat(enumAny.getType()).isNull();
     assertThat(enumAny.isRepeated()).isFalse();
@@ -127,7 +127,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType protoAny =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_PROTO_ANY, ArgumentCardinality.OPTIONAL, 3);
+            SignatureArgumentKind.ARG_KIND_EXPR_PROTO_ANY, ArgumentCardinality.OPTIONAL, 3);
     assertThat(protoAny.isConcrete()).isFalse();
     assertThat(protoAny.getType()).isNull();
     assertThat(protoAny.isRepeated()).isFalse();
@@ -135,7 +135,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType structAny =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_STRUCT_ANY, ArgumentCardinality.OPTIONAL, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_STRUCT_ANY, ArgumentCardinality.OPTIONAL, 0);
     assertThat(structAny.isConcrete()).isFalse();
     assertThat(structAny.getType()).isNull();
     assertThat(structAny.isRepeated()).isFalse();
@@ -143,7 +143,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType typeAny1 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_1, ArgumentCardinality.REQUIRED, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_1, ArgumentCardinality.REQUIRED, 0);
     assertThat(typeAny1.isConcrete()).isFalse();
     assertThat(typeAny1.getType()).isNull();
     assertThat(typeAny1.isRepeated()).isFalse();
@@ -151,7 +151,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType typeAny2 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_2, ArgumentCardinality.REQUIRED, 2);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_2, ArgumentCardinality.REQUIRED, 2);
     assertThat(typeAny2.isConcrete()).isFalse();
     assertThat(typeAny2.getType()).isNull();
     assertThat(typeAny2.isRepeated()).isFalse();
@@ -159,7 +159,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType typeAny3 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_3, ArgumentCardinality.REQUIRED, 2);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_3, ArgumentCardinality.REQUIRED, 2);
     assertThat(typeAny3.isConcrete()).isFalse();
     assertThat(typeAny3.getType()).isNull();
     assertThat(typeAny3.isRepeated()).isFalse();
@@ -167,7 +167,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType arrayTypeAny3 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_3, ArgumentCardinality.REQUIRED, 2);
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_3, ArgumentCardinality.REQUIRED, 2);
     assertThat(arrayTypeAny3.isConcrete()).isFalse();
     assertThat(arrayTypeAny3.getType()).isNull();
     assertThat(arrayTypeAny3.isRepeated()).isFalse();
@@ -175,7 +175,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType typeAny4 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_4, ArgumentCardinality.REQUIRED, 2);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_4, ArgumentCardinality.REQUIRED, 2);
     assertThat(typeAny4.isConcrete()).isFalse();
     assertThat(typeAny4.getType()).isNull();
     assertThat(typeAny4.isRepeated()).isFalse();
@@ -183,7 +183,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType arrayTypeAny4 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_4, ArgumentCardinality.REQUIRED, 2);
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_4, ArgumentCardinality.REQUIRED, 2);
     assertThat(arrayTypeAny4.isConcrete()).isFalse();
     assertThat(arrayTypeAny4.getType()).isNull();
     assertThat(arrayTypeAny4.isRepeated()).isFalse();
@@ -191,7 +191,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType typeAny5 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_5, ArgumentCardinality.REQUIRED, 2);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_5, ArgumentCardinality.REQUIRED, 2);
     assertThat(typeAny5.isConcrete()).isFalse();
     assertThat(typeAny5.getType()).isNull();
     assertThat(typeAny5.isRepeated()).isFalse();
@@ -199,7 +199,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType arrayTypeAny5 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_5, ArgumentCardinality.REQUIRED, 2);
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_5, ArgumentCardinality.REQUIRED, 2);
     assertThat(arrayTypeAny5.isConcrete()).isFalse();
     assertThat(arrayTypeAny5.getType()).isNull();
     assertThat(arrayTypeAny5.isRepeated()).isFalse();
@@ -207,7 +207,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType typeArbitrary =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ARBITRARY, ArgumentCardinality.REQUIRED, -1);
+            SignatureArgumentKind.ARG_KIND_EXPR_ARBITRARY, ArgumentCardinality.REQUIRED, -1);
     assertThat(typeArbitrary.isConcrete()).isFalse();
     assertThat(typeArbitrary.getType()).isNull();
     assertThat(typeArbitrary.isRepeated()).isFalse();
@@ -228,7 +228,7 @@ public class FunctionArgumentTypeTest {
   public void testNotFixedGraphTypes() {
     FunctionArgumentType graphNode =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_GRAPH_NODE, ArgumentCardinality.REPEATED, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_GRAPH_NODE, ArgumentCardinality.REPEATED, 0);
     assertThat(graphNode.isConcrete()).isFalse();
     assertThat(graphNode.getType()).isNull();
     assertThat(graphNode.isRepeated()).isTrue();
@@ -236,7 +236,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType graphEdge =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_GRAPH_EDGE, ArgumentCardinality.REPEATED, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_GRAPH_EDGE, ArgumentCardinality.REPEATED, 0);
     assertThat(graphEdge.isConcrete()).isFalse();
     assertThat(graphEdge.getType()).isNull();
     assertThat(graphEdge.isRepeated()).isTrue();
@@ -244,7 +244,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType graphElement =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_GRAPH_ELEMENT, ArgumentCardinality.REPEATED, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_GRAPH_ELEMENT, ArgumentCardinality.REPEATED, 0);
     assertThat(graphElement.isConcrete()).isFalse();
     assertThat(graphElement.getType()).isNull();
     assertThat(graphElement.isRepeated()).isTrue();
@@ -252,7 +252,7 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType graphPath =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_GRAPH_PATH, ArgumentCardinality.REPEATED, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_GRAPH_PATH, ArgumentCardinality.REPEATED, 0);
     assertThat(graphPath.isConcrete()).isFalse();
     assertThat(graphPath.getType()).isNull();
     assertThat(graphPath.isRepeated()).isTrue();
@@ -265,25 +265,26 @@ public class FunctionArgumentTypeTest {
     FunctionArgumentType boolArgType = new FunctionArgumentType(boolType);
     SimpleType int64Type = TypeFactory.createSimpleType(TypeKind.TYPE_INT64);
     FunctionArgumentType int64ArgType = new FunctionArgumentType(int64Type);
-    FunctionArgumentType t1ArgType = new FunctionArgumentType(SignatureArgumentKind.ARG_TYPE_ANY_1);
+    FunctionArgumentType t1ArgType =
+        new FunctionArgumentType(SignatureArgumentKind.ARG_KIND_EXPR_ANY_1);
     List<FunctionArgumentType> lambdaArgs = new ArrayList<>();
     FunctionArgumentType lambdaArg = new FunctionArgumentType(lambdaArgs, boolArgType);
     assertThat(lambdaArg.debugString()).isEqualTo(" FUNCTION<()->BOOL>");
-    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_TYPE_LAMBDA);
+    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_KIND_LAMBDA);
     assertThat(lambdaArg.getType()).isNull();
     checkSerializeAndDeserialize(lambdaArg);
 
     lambdaArgs.add(t1ArgType);
     lambdaArg = new FunctionArgumentType(lambdaArgs, boolArgType);
     assertThat(lambdaArg.debugString()).isEqualTo(" FUNCTION<<T1>->BOOL>");
-    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_TYPE_LAMBDA);
+    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_KIND_LAMBDA);
     assertThat(lambdaArg.getType()).isNull();
     checkSerializeAndDeserialize(lambdaArg);
 
     lambdaArgs.add(int64ArgType);
     lambdaArg = new FunctionArgumentType(lambdaArgs, boolArgType);
     assertThat(lambdaArg.debugString()).isEqualTo(" FUNCTION<(<T1>, INT64)->BOOL>");
-    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_TYPE_LAMBDA);
+    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_KIND_LAMBDA);
     assertThat(lambdaArg.getType()).isNull();
     checkSerializeAndDeserialize(lambdaArg);
 
@@ -296,7 +297,7 @@ public class FunctionArgumentTypeTest {
                 .setNamedArgumentKind(NamedArgumentKind.NAMED_ONLY)
                 .build());
     assertThat(lambdaArg.debugString()).isEqualTo(" FUNCTION<(<T1>, INT64)->BOOL> mylambda");
-    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_TYPE_LAMBDA);
+    assertThat(lambdaArg.getKind()).isEqualTo(SignatureArgumentKind.ARG_KIND_LAMBDA);
     assertThat(lambdaArg.getType()).isNull();
     assertThat(lambdaArg.getOptions()).isNotNull();
     assertThat(lambdaArg.getOptions().getArgumentName()).isEqualTo("mylambda");
@@ -307,7 +308,7 @@ public class FunctionArgumentTypeTest {
   public void testSerializationAndDeserializationOfFunctionArgumentType() {
     FunctionArgumentType arrayTypeAny1 =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_1, ArgumentCardinality.REPEATED, 0);
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_1, ArgumentCardinality.REPEATED, 0);
     FunctionArgumentType typeFixed1 =
         new FunctionArgumentType(
             TypeFactory.createSimpleType(TypeKind.TYPE_INT32), ArgumentCardinality.REPEATED, 0);
@@ -336,6 +337,7 @@ public class FunctionArgumentTypeTest {
                 .serialize(fileDescriptorSetsBuilder));
   }
 
+  // TODO: Parameterize tests for different constness levels.
   @Test
   public void testSerializationAndDeserializationOfFunctionArgumentTypeOptions() {
     FunctionArgumentTypeOptions options =
@@ -401,7 +403,7 @@ public class FunctionArgumentTypeTest {
                 .serialize(/* argType= */ null, fileDescriptorSetsBuilder));
 
     FunctionArgumentTypeOptions optionsAnalysisConstant =
-        FunctionArgumentTypeOptions.builder().setMustBeAnalysisConstant(true).build();
+        FunctionArgumentTypeOptions.builder().setMustBeAnalysisConstant().build();
     assertThat(optionsAnalysisConstant)
         .isEqualTo(
             FunctionArgumentTypeOptions.deserialize(
@@ -420,7 +422,7 @@ public class FunctionArgumentTypeTest {
                 .serialize(/* argType= */ null, fileDescriptorSetsBuilder));
 
     FunctionArgumentTypeOptions optionsImmutableConstant =
-        FunctionArgumentTypeOptions.builder().setMustBeImmutableConstant(true).build();
+        FunctionArgumentTypeOptions.builder().setMustBeImmutableConstant().build();
     assertThat(optionsImmutableConstant)
         .isEqualTo(
             FunctionArgumentTypeOptions.deserialize(
@@ -437,16 +439,52 @@ public class FunctionArgumentTypeTest {
                     /* argType= */ null,
                     TypeFactory.nonUniqueNames())
                 .serialize(/* argType= */ null, fileDescriptorSetsBuilder));
+
+    FunctionArgumentTypeOptions optionsStableConstant =
+        FunctionArgumentTypeOptions.builder().setMustBeStableConstant().build();
+    assertThat(optionsStableConstant)
+        .isEqualTo(
+            FunctionArgumentTypeOptions.deserialize(
+                optionsStableConstant.serialize(/* argType= */ null, fileDescriptorSetsBuilder),
+                fileDescriptorSetsBuilder.getDescriptorPools(),
+                /* argType= */ null,
+                TypeFactory.nonUniqueNames()));
+    assertThat(optionsStableConstant.serialize(/* argType= */ null, fileDescriptorSetsBuilder))
+        .isEqualTo(
+            FunctionArgumentTypeOptions.deserialize(
+                    optionsStableConstant.serialize(/* argType= */ null, fileDescriptorSetsBuilder),
+                    fileDescriptorSetsBuilder.getDescriptorPools(),
+                    /* argType= */ null,
+                    TypeFactory.nonUniqueNames())
+                .serialize(/* argType= */ null, fileDescriptorSetsBuilder));
+
+    FunctionArgumentTypeOptions optionsQueryConstant =
+        FunctionArgumentTypeOptions.builder().setMustBeQueryConstant().build();
+    assertThat(optionsQueryConstant)
+        .isEqualTo(
+            FunctionArgumentTypeOptions.deserialize(
+                optionsQueryConstant.serialize(/* argType= */ null, fileDescriptorSetsBuilder),
+                fileDescriptorSetsBuilder.getDescriptorPools(),
+                /* argType= */ null,
+                TypeFactory.nonUniqueNames()));
+    assertThat(optionsQueryConstant.serialize(/* argType= */ null, fileDescriptorSetsBuilder))
+        .isEqualTo(
+            FunctionArgumentTypeOptions.deserialize(
+                    optionsQueryConstant.serialize(/* argType= */ null, fileDescriptorSetsBuilder),
+                    fileDescriptorSetsBuilder.getDescriptorPools(),
+                    /* argType= */ null,
+                    TypeFactory.nonUniqueNames())
+                .serialize(/* argType= */ null, fileDescriptorSetsBuilder));
   }
 
   @Test
   public void testSettingSameConstnessLevelTwiceIsAllowed() {
     FunctionArgumentTypeOptions options1 =
-        FunctionArgumentTypeOptions.builder().setMustBeAnalysisConstant(true).build();
+        FunctionArgumentTypeOptions.builder().setMustBeAnalysisConstant().build();
     FunctionArgumentTypeOptions options2 =
         FunctionArgumentTypeOptions.builder()
-            .setMustBeAnalysisConstant(true)
-            .setMustBeAnalysisConstant(true)
+            .setMustBeAnalysisConstant()
+            .setMustBeAnalysisConstant()
             .build();
     assertThat(options2).isEqualTo(options1);
 
@@ -469,66 +507,88 @@ public class FunctionArgumentTypeTest {
     assertThat(options6).isEqualTo(options5);
 
     FunctionArgumentTypeOptions options7 =
-        FunctionArgumentTypeOptions.builder().setMustBeImmutableConstant(true).build();
+        FunctionArgumentTypeOptions.builder().setMustBeImmutableConstant().build();
     FunctionArgumentTypeOptions options8 =
         FunctionArgumentTypeOptions.builder()
-            .setMustBeImmutableConstant(true)
-            .setMustBeImmutableConstant(true)
+            .setMustBeImmutableConstant()
+            .setMustBeImmutableConstant()
             .build();
     assertThat(options8).isEqualTo(options7);
+
+    FunctionArgumentTypeOptions options9 =
+        FunctionArgumentTypeOptions.builder().setMustBeStableConstant().build();
+    FunctionArgumentTypeOptions options10 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeStableConstant()
+            .setMustBeStableConstant()
+            .build();
+    assertThat(options10).isEqualTo(options9);
+
+    FunctionArgumentTypeOptions options11 =
+        FunctionArgumentTypeOptions.builder().setMustBeQueryConstant().build();
+    FunctionArgumentTypeOptions options12 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeQueryConstant()
+            .setMustBeQueryConstant()
+            .build();
+    assertThat(options12).isEqualTo(options11);
   }
 
   @Test
-  public void testSettingMultipleConstnessLevelsThrowsException() {
+  public void testSettingMultipleConstnessLevelsOverrides() {
     // Test setting mustBeConstant then mustBeConstantExpression
-    IllegalStateException e1 =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                FunctionArgumentTypeOptions.builder()
-                    .setMustBeConstant(true)
-                    .setMustBeConstantExpression(true));
-    assertThat(e1)
-        .hasMessageThat()
-        .contains(
-            "Cannot set mustBeConstantExpression when another constness level is already set.");
+    FunctionArgumentTypeOptions options1 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeConstant(true)
+            .setMustBeConstantExpression(true)
+            .build();
+    assertThat(options1.getMustBeConstant()).isFalse();
+    assertThat(options1.getMustBeConstantExpression()).isTrue();
 
     // Test setting mustBeConstantExpression then mustBeConstant
-    IllegalStateException e2 =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                FunctionArgumentTypeOptions.builder()
-                    .setMustBeConstantExpression(true)
-                    .setMustBeConstant(true));
-    assertThat(e2)
-        .hasMessageThat()
-        .contains("Cannot set mustBeConstant when another constness level is already set.");
+    FunctionArgumentTypeOptions options2 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeConstantExpression(true)
+            .setMustBeConstant(true)
+            .build();
+    assertThat(options2.getMustBeConstantExpression()).isFalse();
+    assertThat(options2.getMustBeConstant()).isTrue();
 
     // Test setting mustBeConstant then mustBeAnalysisConstant
-    IllegalStateException e3 =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                FunctionArgumentTypeOptions.builder()
-                    .setMustBeConstant(true)
-                    .setMustBeAnalysisConstant(true));
-    assertThat(e3)
-        .hasMessageThat()
-        .contains("Cannot set mustBeAnalysisConstant when another constness level is already set.");
+    FunctionArgumentTypeOptions options3 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeConstant(true)
+            .setMustBeAnalysisConstant()
+            .build();
+    assertThat(options3.getMustBeConstant()).isFalse();
+    assertThat(options3.getMustBeAnalysisConstant()).isTrue();
 
     // Test setting mustBeAnalysisConstant then mustBeImmutableConstant
-    IllegalStateException e4 =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                FunctionArgumentTypeOptions.builder()
-                    .setMustBeAnalysisConstant(true)
-                    .setMustBeImmutableConstant(true));
-    assertThat(e4)
-        .hasMessageThat()
-        .contains(
-            "Cannot set mustBeImmutableConstant when another constness level is already set.");
+    FunctionArgumentTypeOptions options4 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeAnalysisConstant()
+            .setMustBeImmutableConstant()
+            .build();
+    assertThat(options4.getMustBeAnalysisConstant()).isFalse();
+    assertThat(options4.getMustBeImmutableConstant()).isTrue();
+
+    // Test setting mustBeImmutableConstant then mustBeStableConstant
+    FunctionArgumentTypeOptions options5 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeImmutableConstant()
+            .setMustBeStableConstant()
+            .build();
+    assertThat(options5.getMustBeImmutableConstant()).isFalse();
+    assertThat(options5.getMustBeStableConstant()).isTrue();
+
+    // Test setting mustBeStableConstant then mustBeQueryConstant
+    FunctionArgumentTypeOptions options6 =
+        FunctionArgumentTypeOptions.builder()
+            .setMustBeStableConstant()
+            .setMustBeQueryConstant()
+            .build();
+    assertThat(options6.getMustBeStableConstant()).isFalse();
+    assertThat(options6.getMustBeQueryConstant()).isTrue();
   }
 
   @Test
@@ -610,7 +670,7 @@ public class FunctionArgumentTypeTest {
             "The number of fields of FunctionArgumentTypeProto has changed, "
                 + "please also update the serialization code accordingly.")
         .that(FunctionArgumentTypeProto.getDescriptor().getFields())
-        .hasSize(5);
+        .hasSize(6);
     assertWithMessage(
             "The number of fields in FunctionArgumentType class has changed, "
                 + "please also update the proto and serialization code accordingly.")
@@ -702,14 +762,14 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType templatedTypeNonNull =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_1,
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_1,
             validOptionalArgTypeOption,
             /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(templatedTypeNonNull);
 
     FunctionArgumentType templatedTypeNull =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_1,
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_1,
             validOptionalArgTypeOptionNull,
             /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(templatedTypeNull);
@@ -719,7 +779,7 @@ public class FunctionArgumentTypeTest {
                 IllegalArgumentException.class,
                 () ->
                     new FunctionArgumentType(
-                        SignatureArgumentKind.ARG_TYPE_RELATION,
+                        SignatureArgumentKind.ARG_KIND_RELATION,
                         validOptionalArgTypeOptionNull,
                         /* numOccurrences= */ 1)))
         .hasMessageThat()
@@ -730,7 +790,7 @@ public class FunctionArgumentTypeTest {
                 IllegalArgumentException.class,
                 () ->
                     new FunctionArgumentType(
-                        SignatureArgumentKind.ARG_TYPE_VOID,
+                        SignatureArgumentKind.ARG_KIND_VOID,
                         validOptionalArgTypeOptionNull,
                         /* numOccurrences= */ 1)))
         .hasMessageThat()
@@ -741,7 +801,7 @@ public class FunctionArgumentTypeTest {
                 IllegalArgumentException.class,
                 () ->
                     new FunctionArgumentType(
-                        SignatureArgumentKind.ARG_TYPE_MODEL,
+                        SignatureArgumentKind.ARG_KIND_MODEL,
                         validOptionalArgTypeOptionNull,
                         /* numOccurrences= */ 1)))
         .hasMessageThat()
@@ -752,7 +812,7 @@ public class FunctionArgumentTypeTest {
                 IllegalArgumentException.class,
                 () ->
                     new FunctionArgumentType(
-                        SignatureArgumentKind.ARG_TYPE_CONNECTION,
+                        SignatureArgumentKind.ARG_KIND_CONNECTION,
                         validOptionalArgTypeOptionNull,
                         /* numOccurrences= */ 1)))
         .hasMessageThat()
@@ -763,7 +823,7 @@ public class FunctionArgumentTypeTest {
                 IllegalArgumentException.class,
                 () ->
                     new FunctionArgumentType(
-                        SignatureArgumentKind.ARG_TYPE_DESCRIPTOR,
+                        SignatureArgumentKind.ARG_KIND_DESCRIPTOR,
                         validOptionalArgTypeOptionNull,
                         /* numOccurrences= */ 1)))
         .hasMessageThat()
@@ -774,7 +834,7 @@ public class FunctionArgumentTypeTest {
                 IllegalArgumentException.class,
                 () ->
                     new FunctionArgumentType(
-                        SignatureArgumentKind.ARG_TYPE_LAMBDA,
+                        SignatureArgumentKind.ARG_KIND_LAMBDA,
                         validOptionalArgTypeOptionNull,
                         /* numOccurrences= */ 1)))
         .hasMessageThat()
@@ -798,56 +858,40 @@ public class FunctionArgumentTypeTest {
 
     FunctionArgumentType supportOrderingType =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_1, supportsOrderingOption, /* numOccurrences= */ 1);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_1,
+            supportsOrderingOption,
+            /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(supportOrderingType);
     FunctionArgumentType supportEqualityType =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_1, supportsEqualityOption, /* numOccurrences= */ 1);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_1,
+            supportsEqualityOption,
+            /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(supportEqualityType);
     FunctionArgumentType supportGroupingType =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_TYPE_ANY_1, supportsGroupingOption, /* numOccurrences= */ 1);
+            SignatureArgumentKind.ARG_KIND_EXPR_ANY_1,
+            supportsGroupingOption,
+            /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(supportGroupingType);
 
     FunctionArgumentType supportElementOrderingType =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_1,
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_1,
             supportsElementOrderingOption,
             /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(supportElementOrderingType);
     FunctionArgumentType supportElementEqualityType =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_1,
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_1,
             supportsElementEqualityOption,
             /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(supportElementEqualityType);
     FunctionArgumentType supportElementGroupingType =
         new FunctionArgumentType(
-            SignatureArgumentKind.ARG_ARRAY_TYPE_ANY_1,
+            SignatureArgumentKind.ARG_KIND_EXPR_ARRAY_ANY_1,
             supportsElementGroupingOption,
             /* numOccurrences= */ 1);
     checkSerializeAndDeserialize(supportElementGroupingType);
-  }
-
-  @Test
-  public void testSetMustBeImmutableConstantFalse() {
-    FunctionArgumentTypeOptions options =
-        FunctionArgumentTypeOptions.builder().setMustBeImmutableConstant(false).build();
-    assertThat(options.getMustBeImmutableConstant()).isFalse();
-
-    FunctionArgumentTypeOptions options2 =
-        FunctionArgumentTypeOptions.builder()
-            .setMustBeImmutableConstant(true)
-            .setMustBeImmutableConstant(false)
-            .build();
-    assertThat(options2.getMustBeImmutableConstant()).isFalse();
-
-    FunctionArgumentTypeOptions options3 =
-        FunctionArgumentTypeOptions.builder()
-            .setMustBeConstant(true)
-            .setMustBeImmutableConstant(false)
-            .build();
-    assertThat(options3.getMustBeConstant()).isFalse();
-    assertThat(options3.getMustBeImmutableConstant()).isFalse();
   }
 }
