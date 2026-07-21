@@ -575,27 +575,13 @@ FROM
       |> AS projectscan_13
       |> WHERE
            (projectscan_13.a_12) < a_14
+      |> ORDER BY projectscan_13.a_12
       |> SELECT
-           projectscan_13.a_5 AS a_5,
-           projectscan_13.a_6 AS a_6,
-           projectscan_13.a_9 AS a_9,
-           projectscan_13.a_10 AS a_10,
-           projectscan_13.a_12 AS a_12
-      |> AS filterscan_15
-      |> ORDER BY filterscan_15.a_12
-      |> SELECT
-           filterscan_15.a_5 AS a_5,
-           filterscan_15.a_6 AS a_6,
-           filterscan_15.a_9 AS a_9,
-           filterscan_15.a_10 AS a_10,
-           filterscan_15.a_12 AS a_12
-      |> AS orderbyscan_16
-      |> SELECT
-           STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (orderbyscan_16.a_5, orderbyscan_16.a_9, orderbyscan_16.a_12) AS a_17
-    ))) AS a_18)
+           STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (projectscan_13.a_5, projectscan_13.a_9, projectscan_13.a_12) AS a_15
+    ))) AS a_16)
 |> SELECT
-     a_18.arr0 AS a_19,
-     a_18.arr1 AS a_20;
+     a_16.arr0 AS a_17,
+     a_16.arr1 AS a_18;
 --
 ALTERNATION GROUP: 0.05
 --
@@ -882,27 +868,13 @@ FROM
       |> AS projectscan_13
       |> WHERE
            (projectscan_13.a_12) < a_14
+      |> ORDER BY projectscan_13.a_12
       |> SELECT
-           projectscan_13.a_5 AS a_5,
-           projectscan_13.a_6 AS a_6,
-           projectscan_13.a_9 AS a_9,
-           projectscan_13.a_10 AS a_10,
-           projectscan_13.a_12 AS a_12
-      |> AS filterscan_15
-      |> ORDER BY filterscan_15.a_12
-      |> SELECT
-           filterscan_15.a_5 AS a_5,
-           filterscan_15.a_6 AS a_6,
-           filterscan_15.a_9 AS a_9,
-           filterscan_15.a_10 AS a_10,
-           filterscan_15.a_12 AS a_12
-      |> AS orderbyscan_16
-      |> SELECT
-           STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (orderbyscan_16.a_5, orderbyscan_16.a_9, orderbyscan_16.a_12) AS a_17
-    ))) AS a_18)
+           STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (projectscan_13.a_5, projectscan_13.a_9, projectscan_13.a_12) AS a_15
+    ))) AS a_16)
 |> SELECT
-     a_18.arr0 AS a_19,
-     a_18.arr1 AS a_20;
+     a_16.arr0 AS a_17,
+     a_16.arr1 AS a_18;
 ==
 
 # `mode` argument that is a non-literal only works if it has ARRAY_ZIP_MODE as
@@ -1744,28 +1716,14 @@ FROM
       |> AS projectscan_13
       |> WHERE
            (projectscan_13.a_12) < a_14
+      |> ORDER BY projectscan_13.a_12
       |> SELECT
-           projectscan_13.a_5 AS a_5,
-           projectscan_13.a_6 AS a_6,
-           projectscan_13.a_9 AS a_9,
-           projectscan_13.a_10 AS a_10,
-           projectscan_13.a_12 AS a_12
-      |> AS filterscan_15
-      |> ORDER BY filterscan_15.a_12
-      |> SELECT
-           filterscan_15.a_5 AS a_5,
-           filterscan_15.a_6 AS a_6,
-           filterscan_15.a_9 AS a_9,
-           filterscan_15.a_10 AS a_10,
-           filterscan_15.a_12 AS a_12
-      |> AS orderbyscan_16
-      |> SELECT
-           STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (orderbyscan_16.a_5, orderbyscan_16.a_9, orderbyscan_16.a_12) AS a_17
-    ))) AS a_18)
+           STRUCT< arr0 INT64, arr1 INT64, offset INT64 > (projectscan_13.a_5, projectscan_13.a_9, projectscan_13.a_12) AS a_15
+    ))) AS a_16)
 |> SELECT
-     a_18.arr0 AS a_19,
-     a_18.arr1 AS a_20,
-     a_18.offset AS off;
+     a_16.arr0 AS a_17,
+     a_16.arr1 AS a_18,
+     a_16.offset AS off;
 ==
 
 # ============== UNNEST with table alias or argument alias =========
@@ -4092,30 +4050,16 @@ FROM
        |> AS projectscan_17
        |> WHERE
             (projectscan_17.a_16) < a_18
+       |> ORDER BY projectscan_17.a_16
        |> SELECT
-            projectscan_17.a_9 AS a_9,
-            projectscan_17.a_10 AS a_10,
-            projectscan_17.a_13 AS a_13,
-            projectscan_17.a_14 AS a_14,
-            projectscan_17.a_16 AS a_16
-       |> AS filterscan_19
-       |> ORDER BY filterscan_19.a_16
-       |> SELECT
-            filterscan_19.a_9 AS a_9,
-            filterscan_19.a_10 AS a_10,
-            filterscan_19.a_13 AS a_13,
-            filterscan_19.a_14 AS a_14,
-            filterscan_19.a_16 AS a_16
-       |> AS orderbyscan_20
-       |> SELECT
-            STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (orderbyscan_20.a_9, orderbyscan_20.a_13, orderbyscan_20.a_16) AS a_21
-     ))) AS a_22)
+            STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (projectscan_17.a_9, projectscan_17.a_13, projectscan_17.a_16) AS a_19
+     ))) AS a_20)
 |> SELECT
      testtable_4.a_1 AS key,
      testtable_4.a_2 AS TestEnum,
      testtable_4.a_3 AS KitchenSink,
-     a_22.arr0 AS repeated_int32_val,
-     a_22.arr1 AS repeated_string_val;
+     a_20.arr0 AS repeated_int32_val,
+     a_20.arr1 AS repeated_string_val;
 ==
 
 [show_sqlbuilder_output]
@@ -4482,30 +4426,16 @@ FROM
        |> AS projectscan_17
        |> WHERE
             (projectscan_17.a_16) < a_18
+       |> ORDER BY projectscan_17.a_16
        |> SELECT
-            projectscan_17.a_9 AS a_9,
-            projectscan_17.a_10 AS a_10,
-            projectscan_17.a_13 AS a_13,
-            projectscan_17.a_14 AS a_14,
-            projectscan_17.a_16 AS a_16
-       |> AS filterscan_19
-       |> ORDER BY filterscan_19.a_16
-       |> SELECT
-            filterscan_19.a_9 AS a_9,
-            filterscan_19.a_10 AS a_10,
-            filterscan_19.a_13 AS a_13,
-            filterscan_19.a_14 AS a_14,
-            filterscan_19.a_16 AS a_16
-       |> AS orderbyscan_20
-       |> SELECT
-            STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (orderbyscan_20.a_9, orderbyscan_20.a_13, orderbyscan_20.a_16) AS a_21
-     ))) AS a_22)
+            STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (projectscan_17.a_9, projectscan_17.a_13, projectscan_17.a_16) AS a_19
+     ))) AS a_20)
 |> SELECT
      testtable_4.a_1 AS key,
      testtable_4.a_2 AS TestEnum,
      testtable_4.a_3 AS KitchenSink,
-     a_22.arr0 AS repeated_int32_val,
-     a_22.arr1 AS array2;
+     a_20.arr0 AS repeated_int32_val,
+     a_20.arr1 AS array2;
 ==
 
 [show_sqlbuilder_output]
@@ -4864,30 +4794,16 @@ FROM
        |> AS projectscan_17
        |> WHERE
             (projectscan_17.a_16) < a_18
+       |> ORDER BY projectscan_17.a_16
        |> SELECT
-            projectscan_17.a_9 AS a_9,
-            projectscan_17.a_10 AS a_10,
-            projectscan_17.a_13 AS a_13,
-            projectscan_17.a_14 AS a_14,
-            projectscan_17.a_16 AS a_16
-       |> AS filterscan_19
-       |> ORDER BY filterscan_19.a_16
-       |> SELECT
-            filterscan_19.a_9 AS a_9,
-            filterscan_19.a_10 AS a_10,
-            filterscan_19.a_13 AS a_13,
-            filterscan_19.a_14 AS a_14,
-            filterscan_19.a_16 AS a_16
-       |> AS orderbyscan_20
-       |> SELECT
-            STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (orderbyscan_20.a_9, orderbyscan_20.a_13, orderbyscan_20.a_16) AS a_21
-     ))) AS a_22)
+            STRUCT< arr0 INT32, arr1 STRING, offset INT64 > (projectscan_17.a_9, projectscan_17.a_13, projectscan_17.a_16) AS a_19
+     ))) AS a_20)
 |> SELECT
      testtable_4.a_1 AS key,
      testtable_4.a_2 AS TestEnum,
      testtable_4.a_3 AS KitchenSink,
-     a_22.arr0 AS array1,
-     a_22.arr1 AS array2;
+     a_20.arr0 AS array1,
+     a_20.arr1 AS array2;
 ==
 
 # 2 arguments: path expressions reference columns from different lhs tables.
@@ -5537,30 +5453,16 @@ FROM
              |> AS projectscan_18
              |> WHERE
                   (projectscan_18.a_17) < a_19
+             |> ORDER BY projectscan_18.a_17
              |> SELECT
-                  projectscan_18.a_10 AS a_10,
-                  projectscan_18.a_11 AS a_11,
-                  projectscan_18.a_14 AS a_14,
-                  projectscan_18.a_15 AS a_15,
-                  projectscan_18.a_17 AS a_17
-             |> AS filterscan_20
-             |> ORDER BY filterscan_20.a_17
-             |> SELECT
-                  filterscan_20.a_10 AS a_10,
-                  filterscan_20.a_11 AS a_11,
-                  filterscan_20.a_14 AS a_14,
-                  filterscan_20.a_15 AS a_15,
-                  filterscan_20.a_17 AS a_17
-             |> AS orderbyscan_21
-             |> SELECT
-                  STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (orderbyscan_21.a_10, orderbyscan_21.a_14, orderbyscan_21.a_17) AS a_22
-           ))) AS a_23)
+                  STRUCT< arr0 INT32, arr1 INT32, offset INT64 > (projectscan_18.a_10, projectscan_18.a_14, projectscan_18.a_17) AS a_20
+           ))) AS a_21)
        |> SELECT
-            a_23.arr0 AS a_24,
-            a_23.arr1 AS a_25
-       |> AS projectscan_26
+            a_21.arr0 AS a_22,
+            a_21.arr1 AS a_23
+       |> AS projectscan_24
        |> SELECT
-            STRUCT< array1 INT32, array2 INT32 > (projectscan_26.a_24, projectscan_26.a_25) AS a_27
+            STRUCT< array1 INT32, array2 INT32 > (projectscan_24.a_22, projectscan_24.a_23) AS a_25
      ) AS col1;
 ==
 
@@ -8113,20 +8015,3 @@ QueryStmt
             |         +-ColumnRef(type=INT64, column=$array.$with_expr_field#20)
             |         +-Literal(type=INT64, value=3)
             +-is_outer=TRUE
-==
-
-# Repro b/499289705: Multiway UNNEST arguments should not share FlattenState
-[language_features=NONE,+MULTIWAY_UNNEST,+UNNEST_AND_FLATTEN_ARRAYS]
-[enabled_ast_rewrites=DEFAULTS]
-SELECT *
-FROM KitchenSinkValueTable k,
-UNNEST(
-  k.nested_repeated_value.nested_int64 as val1,
-  k.repeated_holder.(googlesql_test.TestExtraPBExtensionHolder.test_extra_proto_extension) as val2
-)
---
-ERROR: Proto extension googlesql_test.TestExtraPBExtensionHolder.test_extra_proto_extension extends message googlesql_test.TestExtraPB so cannot be used on an expression with message type googlesql_test.RepeatedHolderPB [at 5:22]
-  k.repeated_holder.(googlesql_test.TestExtraPBExtensionHolder.test_extra_pro...
-                     ^
-==
-

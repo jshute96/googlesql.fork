@@ -183,6 +183,13 @@ std::string QueryExpression::GetFromClauseStandardSQL() const {
 }
 
 std::string QueryExpression::GetFromClausePipeSQL() const {
+  // A pipe operator chain (a subpipeline body) holds a bare sequence of pipe
+  // operators in `from_` (e.g. "WHERE x |> SELECT y"), not a FROM-rooted query,
+  // so it is rendered verbatim -- never prefixed with FROM.
+  if (is_pipe_operator_chain_) {
+    return from_;
+  }
+
   if (from_.empty()) {
     return "";
   }
@@ -921,7 +928,11 @@ bool QueryExpression::CanSetSetOpScanList() const {
          !HasWhereClause() && !HasGroupByClause();
 }
 bool QueryExpression::CanSetGroupByClause() const {
-  return !HasGroupByClause() && HasFromClause() && CanSetSelectClause();
+  // A pipe operator chain (a subpipeline body) has no FROM clause -- its input
+  // is implicit -- but it can still take a `|> AGGREGATE ... GROUP BY ...`
+  // operator, so don't require a FROM clause in that case.
+  return !HasGroupByClause() &&
+         (HasFromClause() || is_pipe_operator_chain_) && CanSetSelectClause();
 }
 bool QueryExpression::CanSetOrderByClause() const {
   return !HasOrderByClause() && !HasLimitClause() && !HasOffsetClause() &&

@@ -272,6 +272,15 @@ class QueryExpression {
 
   absl::string_view FromClause() const { return from_; }
 
+  // In Pipe syntax mode, marks that `from_` holds a bare sequence of pipe
+  // operators (e.g. `WHERE x |> SELECT y`) rather than a FROM-rooted query.
+  // This is how a subpipeline is represented: it starts from an empty
+  // ResolvedSubpipelineInputScan and operators are appended onto it, so it has
+  // no FROM clause. Such a QueryExpression must be rendered as-is (not prefixed
+  // with FROM) and must not be wrapped as a standard subquery.
+  void MarkAsPipeOperatorChain() { is_pipe_operator_chain_ = true; }
+  bool IsPipeOperatorChain() const { return is_pipe_operator_chain_; }
+
   // Returns an immutable reference to select_list_. For QueryExpression built
   // from a SetOp scan, it returns the select_list_ of its first subquery.
   const SQLAliasPairList& SelectList() const;
@@ -495,6 +504,10 @@ class QueryExpression {
 
   // If true, the group-by clause contains only aggregate columns.
   bool group_by_only_aggregate_columns_ = false;
+
+  // If true, `from_` is a bare sequence of pipe operators (a subpipeline body),
+  // not a FROM-rooted query. See MarkAsPipeOperatorChain().
+  bool is_pipe_operator_chain_ = false;
 };
 
 // Returns true if the aliases, which are the values of the given map are not

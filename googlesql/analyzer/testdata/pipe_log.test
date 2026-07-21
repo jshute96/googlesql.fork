@@ -676,9 +676,9 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  logscan_8.a_1 AS Key,
-  logscan_8.a_2 AS Value,
-  (logscan_8.a_1) + 1 AS a_9
+  logscan_5.a_1 AS Key,
+  logscan_5.a_2 AS Value,
+  (logscan_5.a_1) + 1 AS a_6
 FROM
   (
     SELECT
@@ -693,44 +693,16 @@ FROM
           KeyValue
         |> AS keyvalue_3
         |> LOG  (
-             |> SELECT AS STRUCT
-                  *
-             |> AS __StructValue__
-             |> AGGREGATE
-                  ARRAY_AGG(__StructValue__) AS __SubpipelineInput__
-             |> JOIN
-                UNNEST(ARRAY(
-                  SELECT
-                    projectscan_6.a_1 AS a_1,
-                    projectscan_6.a_2 AS a_2,
-                    projectscan_6.a_5 AS a_5
-                  FROM
-                    (
-                      SELECT
-                        subpipelineinputscan_4.a_1 AS a_1,
-                        subpipelineinputscan_4.a_2 AS a_2,
-                        (subpipelineinputscan_4.a_1) * 10 AS a_5
-                      FROM
-                        (
-                          SELECT
-                            *
-                          FROM
-                            UNNEST(__SubpipelineInput__)
-                        ) AS subpipelineinputscan_4
-                      WHERE
-                        (subpipelineinputscan_4.a_1) = 10
-                    ) AS projectscan_6
-                  ORDER BY projectscan_6.a_5
-                  |> AS orderbyscan_7
-                  |> SELECT AS STRUCT
-                       *
-                ))
+             |> WHERE
+                  (keyvalue_3.a_1) = 10
              |> SELECT
-                  *
-             |> AS orderbyscan_7
+                  keyvalue_3.a_1 AS a_1,
+                  keyvalue_3.a_2 AS a_2,
+                  (keyvalue_3.a_1) * 10 AS a_4
+             |> ORDER BY a_4
            )
       )
-  ) AS logscan_8;
+  ) AS logscan_5;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
@@ -741,42 +713,18 @@ FROM
      KeyValue.Value AS a_2
 |> AS keyvalue_3
 |> LOG  (
-     |> SELECT AS STRUCT
-          *
-     |> AS __StructValue__
-     |> AGGREGATE
-          ARRAY_AGG(__StructValue__) AS __SubpipelineInput__
-     |> JOIN
-        UNNEST(ARRAY(
-          FROM
-            UNNEST(__SubpipelineInput__)
-          |> SELECT
-               *
-          |> AS subpipelineinputscan_4
-          |> WHERE
-               (subpipelineinputscan_4.a_1) = 10
-          |> SELECT
-               subpipelineinputscan_4.a_1 AS a_1,
-               subpipelineinputscan_4.a_2 AS a_2,
-               (subpipelineinputscan_4.a_1) * 10 AS a_5
-          |> AS projectscan_6
-          |> ORDER BY projectscan_6.a_5
-          |> SELECT
-               projectscan_6.a_1 AS a_1,
-               projectscan_6.a_2 AS a_2,
-               projectscan_6.a_5 AS a_5
-          |> AS orderbyscan_7
-          |> SELECT AS STRUCT
-               *
-        ))
+     |> WHERE
+          (keyvalue_3.a_1) = 10
      |> SELECT
-          *
-     |> AS orderbyscan_7
+          keyvalue_3.a_1 AS a_1,
+          keyvalue_3.a_2 AS a_2,
+          (keyvalue_3.a_1) * 10 AS a_4
+     |> ORDER BY a_4
    )
 |> SELECT
      keyvalue_3.a_1 AS Key,
      keyvalue_3.a_2 AS Value,
-     (keyvalue_3.a_1) + 1 AS a_8;
+     (keyvalue_3.a_1) + 1 AS a_5;
 ==
 
 # Check for error if we try to log an unretunable type (GRAPH_ELEMENT).
