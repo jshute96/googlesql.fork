@@ -172,10 +172,28 @@
             {{/result_analyzed_post_rewrite}}
             {{/result_analyzed}}
 
+            {{#result_formatted_analyzed}}
+            <h3>Query viewer</h3>
+            <div class="output">{{{result_formatted_analyzed}}}</div>
+            {{/result_formatted_analyzed}}
+
             {{#result_parsed}}
             <h3>Parse</h3>
             <pre class="output parsed"><code class="language-less">{{{result_parsed}}}</code></pre>
             {{/result_parsed}}
+
+            {{#result_formatted_sql}}
+            <h3>Formatted SQL</h3>
+            <div class="formatted-sql-tabs" role="tablist">
+              <button type="button" class="fmt-tab active" data-format="default">Default</button>
+              <button type="button" class="fmt-tab" data-format="simple-box">Simple box</button>
+              <button type="button" class="fmt-tab" data-format="full-box">Full box</button>
+            </div>
+            <div class="output formatted-sql-output">
+              <div class="fmt-pane fmt-pane-default">{{{result_formatted_sql}}}</div>
+              <div class="fmt-pane fmt-pane-boxed">{{{result_formatted_sql_boxed}}}</div>
+            </div>
+            {{/result_formatted_sql}}
 
             {{#result_explained }}
             <h3>Explain</h3>

@@ -203,7 +203,8 @@ absl::Status InternalAnalyzeExpressionFromParserAST(
             options.error_message_options(), sql,
             resolver.deprecation_warnings()),
         type_assignments, resolver.undeclared_positional_parameters(),
-        resolver.max_column_id(), resolver.has_graph_references());
+        resolver.max_column_id(), resolver.has_graph_references(),
+        resolver.ast_node_resolved_info_map());
     AnalyzerOutputMutator(*output).TakeOwnership(
         resolver.release_generated_functions());
     GOOGLESQL_RETURN_IF_ERROR(InternalRewriteResolvedAst(options, sql, catalog,
