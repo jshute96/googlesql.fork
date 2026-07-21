@@ -283,6 +283,7 @@ cc_library(
         "//googlesql/public:analyzer_options",
         "//googlesql/public:analyzer_output_properties",
         "//googlesql/public:anon_function",
+        "//googlesql/public:ast_node_resolved_info",
         "//googlesql/public:builtin_function_cc_proto",
         "//googlesql/public:catalog",
         "//googlesql/public:civil_time",
