@@ -49,13 +49,12 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(ANY_VALUE(simpletypes_3.a_2)
-       GROUP BY simpletypes_3.a_1) AS a_4;
+     SUM(ANY_VALUE(SimpleTypes.int64)
+       GROUP BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: (int64).ANY_VALUE().SUM(GROUP BY int32)
 --
@@ -120,21 +119,13 @@ GROUP BY simpletypes_4.a_3;
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.double AS a_3
-|> AS simpletypes_4
-|> EXTEND
-     simpletypes_4.a_3 AS a_6
 |> AGGREGATE
-     SUM(((simpletypes_4.a_3) + CAST(simpletypes_4.a_1 AS DOUBLE)) + CAST(ANY_VALUE(simpletypes_4.a_2) AS DOUBLE)
-       GROUP BY simpletypes_4.a_3, simpletypes_4.a_1) AS a_5
-   GROUP BY a_6
+     SUM(((SimpleTypes.double) + CAST(SimpleTypes.int32 AS DOUBLE)) + CAST(ANY_VALUE(SimpleTypes.int64) AS DOUBLE)
+       GROUP BY SimpleTypes.double, SimpleTypes.int32) AS a_1
+   GROUP BY SimpleTypes.double AS double_2
+|> AS aggregatescan_2
 |> SELECT
-     a_5
-|> SELECT
-     a_5 AS a_5;
+     aggregatescan_2.a_1;
 ==
 
 # Multi-level aggregates with COUNT(*)
@@ -217,30 +208,20 @@ GROUP BY simpletypes_4.a_3;
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.double AS a_3
-|> AS simpletypes_4
-|> EXTEND
-     simpletypes_4.a_3 AS a_8
 |> AGGREGATE
-     SUM(simpletypes_4.a_2
-       GROUP BY simpletypes_4.a_3, simpletypes_4.a_2) AS a_5,
+     SUM(SimpleTypes.int64
+       GROUP BY SimpleTypes.double, SimpleTypes.int64) AS a_1,
      COUNT(*
-       GROUP BY simpletypes_4.a_3, simpletypes_4.a_2) AS a_6,
-     SUM(((COUNT(*)) + CAST(simpletypes_4.a_1 AS INT64)) + (COUNT(*
-         GROUP BY simpletypes_4.a_3, simpletypes_4.a_1, simpletypes_4.a_2))
-       GROUP BY simpletypes_4.a_3, simpletypes_4.a_1) AS a_7
-   GROUP BY a_8
+       GROUP BY SimpleTypes.double, SimpleTypes.int64) AS a_2,
+     SUM(((COUNT(*)) + CAST(SimpleTypes.int32 AS INT64)) + (COUNT(*
+         GROUP BY SimpleTypes.double, SimpleTypes.int32, SimpleTypes.int64))
+       GROUP BY SimpleTypes.double, SimpleTypes.int32) AS a_3
+   GROUP BY SimpleTypes.double AS double_2
+|> AS aggregatescan_4
 |> SELECT
-     a_5,
-     a_6,
-     a_7
-|> SELECT
-     a_5 AS a_5,
-     a_6 AS a_6,
-     a_7 AS a_7;
+     aggregatescan_4.a_1,
+     aggregatescan_4.a_2,
+     aggregatescan_4.a_3;
 ==
 
 # Repeated equivalent grouping expressions across multi-level aggregates and the
@@ -322,27 +303,18 @@ GROUP BY simpletypes_4.a_3;
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.string AS a_2,
-     SimpleTypes.double AS a_3
-|> AS simpletypes_4
-|> EXTEND
-     simpletypes_4.a_3 AS a_7
 |> AGGREGATE
-     SUM(CAST(simpletypes_4.a_1 AS INT64) + (COUNT(simpletypes_4.a_2
-         GROUP BY simpletypes_4.a_3, simpletypes_4.a_1, simpletypes_4.a_2))
-       GROUP BY simpletypes_4.a_3, simpletypes_4.a_1) AS a_5,
-     MIN(COUNT(simpletypes_4.a_2
-         GROUP BY simpletypes_4.a_3, simpletypes_4.a_1, simpletypes_4.a_2)
-       GROUP BY simpletypes_4.a_3, simpletypes_4.a_1) AS a_6
-   GROUP BY a_7
+     SUM(CAST(SimpleTypes.int32 AS INT64) + (COUNT(SimpleTypes.string
+         GROUP BY SimpleTypes.double, SimpleTypes.int32, SimpleTypes.string))
+       GROUP BY SimpleTypes.double, SimpleTypes.int32) AS a_1,
+     MIN(COUNT(SimpleTypes.string
+         GROUP BY SimpleTypes.double, SimpleTypes.int32, SimpleTypes.string)
+       GROUP BY SimpleTypes.double, SimpleTypes.int32) AS a_2
+   GROUP BY SimpleTypes.double AS double_2
+|> AS aggregatescan_3
 |> SELECT
-     a_5,
-     a_6
-|> SELECT
-     a_5 AS a_5,
-     a_6 AS a_6;
+     aggregatescan_3.a_1,
+     aggregatescan_3.a_2;
 ==
 
 # Test grouping constness for path expression suffixes.
@@ -427,21 +399,15 @@ GROUP BY doublynestedstructtable_3.a_2.f;
 [SQLBUILDER_OUTPUT]
 FROM
   DoublyNestedStructTable
-|> SELECT
-     DoublyNestedStructTable.key AS a_1,
-     DoublyNestedStructTable.doubly_nested_struct AS a_2
-|> AS doublynestedstructtable_3
-|> EXTEND
-     doublynestedstructtable_3.a_2.f AS a_5
 |> AGGREGATE
-     SUM((CAST(doublynestedstructtable_3.a_2.f.c AS INT64) + CAST(doublynestedstructtable_3.a_2.f.d.a AS INT64)) +
-       CAST(doublynestedstructtable_3.a_1 AS INT64)
-       GROUP BY doublynestedstructtable_3.a_2.f, doublynestedstructtable_3.a_2.f.d, doublynestedstructtable_3.a_1) AS a_4
-   GROUP BY a_5
+     SUM((CAST(DoublyNestedStructTable.doubly_nested_struct.f.c AS INT64) + CAST(DoublyNestedStructTable.doubly_nested_struct.f.d.a AS INT64)) +
+       CAST(DoublyNestedStructTable.key AS INT64)
+       GROUP BY DoublyNestedStructTable.doubly_nested_struct.f, DoublyNestedStructTable.doubly_nested_struct.f.d,
+         DoublyNestedStructTable.key) AS a_1
+   GROUP BY DoublyNestedStructTable.doubly_nested_struct.f
+|> AS aggregatescan_2
 |> SELECT
-     a_4
-|> SELECT
-     a_4 AS a_4;
+     aggregatescan_2.a_1;
 ==
 
 # Test grouping constness for path expression suffixes.
@@ -563,23 +529,16 @@ GROUP BY doublynestedstructtable_2.a_1.f.d;
 [SQLBUILDER_OUTPUT]
 FROM
   DoublyNestedStructTable
-|> SELECT
-     DoublyNestedStructTable.doubly_nested_struct AS a_1
-|> AS doublynestedstructtable_2
-|> EXTEND
-     doublynestedstructtable_2.a_1.f.d AS a_5
 |> AGGREGATE
-     SUM(CAST(doublynestedstructtable_2.a_1.e AS INT64) + CAST(doublynestedstructtable_2.a_1.f.d.a AS INT64)
-       GROUP BY doublynestedstructtable_2.a_1.f.d, doublynestedstructtable_2.a_1) AS a_3,
-     SUM(CAST(doublynestedstructtable_2.a_1.f.c AS INT64) + CAST(doublynestedstructtable_2.a_1.f.d.a AS INT64)
-       GROUP BY doublynestedstructtable_2.a_1.f.d, doublynestedstructtable_2.a_1.f.c) AS a_4
-   GROUP BY a_5
+     SUM(CAST(DoublyNestedStructTable.doubly_nested_struct.e AS INT64) + CAST(DoublyNestedStructTable.doubly_nested_struct.f.d.a AS INT64)
+       GROUP BY DoublyNestedStructTable.doubly_nested_struct.f.d, DoublyNestedStructTable.doubly_nested_struct) AS a_1,
+     SUM(CAST(DoublyNestedStructTable.doubly_nested_struct.f.c AS INT64) + CAST(DoublyNestedStructTable.doubly_nested_struct.f.d.a AS INT64)
+       GROUP BY DoublyNestedStructTable.doubly_nested_struct.f.d, DoublyNestedStructTable.doubly_nested_struct.f.c) AS a_2
+   GROUP BY DoublyNestedStructTable.doubly_nested_struct.f.d
+|> AS aggregatescan_3
 |> SELECT
-     a_3,
-     a_4
-|> SELECT
-     a_3 AS a_3,
-     a_4 AS a_4;
+     aggregatescan_3.a_1,
+     aggregatescan_3.a_2;
 ==
 
 # ORDER BY clause can reference post-grouping scalar columns.
@@ -632,14 +591,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     ARRAY_AGG(ANY_VALUE(simpletypes_3.a_2)
-       GROUP BY simpletypes_3.a_1
-       ORDER BY simpletypes_3.a_1) AS a_4;
+     ARRAY_AGG(ANY_VALUE(SimpleTypes.int64)
+       GROUP BY SimpleTypes.int32
+       ORDER BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # ORDER BY clause uses aggregation, but multi-level aggregate arguments don't.
@@ -692,14 +650,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     ARRAY_AGG(simpletypes_3.a_1
-       GROUP BY simpletypes_3.a_1
-       ORDER BY SUM(simpletypes_3.a_2)) AS a_4;
+     ARRAY_AGG(SimpleTypes.int32
+       GROUP BY SimpleTypes.int32
+       ORDER BY SUM(SimpleTypes.int64)) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # ORDER BY clause can reference post-grouping aggregate columns.
@@ -755,14 +712,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     ARRAY_AGG(ANY_VALUE(simpletypes_3.a_2)
-       GROUP BY simpletypes_3.a_1
-       ORDER BY ANY_VALUE(simpletypes_3.a_2)) AS a_4;
+     ARRAY_AGG(ANY_VALUE(SimpleTypes.int64)
+       GROUP BY SimpleTypes.int32
+       ORDER BY ANY_VALUE(SimpleTypes.int64)) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # LIMIT clause test
@@ -813,14 +769,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     ARRAY_AGG(ANY_VALUE(simpletypes_3.a_2)
-       GROUP BY simpletypes_3.a_1
-       LIMIT 5) AS a_4;
+     ARRAY_AGG(ANY_VALUE(SimpleTypes.int64)
+       GROUP BY SimpleTypes.int32
+       LIMIT 5) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # Conditional evaluation test.
@@ -900,23 +855,16 @@ GROUP BY simpletypes_6.a_5;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  IFERROR(CAST(SUM(CAST(ANY_VALUE(simpletypes_6.a_1) AS INT64)
-      GROUP BY simpletypes_6.a_5, simpletypes_6.a_4) AS DOUBLE), SUM(AVG(simpletypes_6.a_2)
-      GROUP BY simpletypes_6.a_5, simpletypes_6.a_3)) AS a_7
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.int64 AS a_2,
-         SimpleTypes.string AS a_3,
-         SimpleTypes.bool AS a_4,
-         SimpleTypes.double AS a_5
-    |> AS simpletypes_6
-  )
-GROUP BY simpletypes_6.a_5;
+  SimpleTypes
+|> AGGREGATE
+     IFERROR(CAST(SUM(CAST(ANY_VALUE(SimpleTypes.int32) AS INT64)
+         GROUP BY SimpleTypes.double, SimpleTypes.bool) AS DOUBLE), SUM(AVG(SimpleTypes.int64)
+         GROUP BY SimpleTypes.double, SimpleTypes.string)) AS a_1
+   GROUP BY SimpleTypes.double AS a_2
+|> AS projectscan_3
+|> SELECT
+     projectscan_3.a_1;
 ==
 
 # Conditional evaluation test.
@@ -1019,25 +967,20 @@ GROUP BY simpletypes_5.a_4;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
-SELECT
-  MIN(IFERROR(AVG(simpletypes_5.a_4), MAX(simpletypes_5.a_4))
-    GROUP BY simpletypes_5.a_4, simpletypes_5.a_3) AS a_6,
-  ARRAY_AGG(simpletypes_5.a_2
-    GROUP BY simpletypes_5.a_4, simpletypes_5.a_2
-    ORDER BY MIN(IFERROR(AVG(simpletypes_5.a_4), MAX(simpletypes_5.a_4))
-      GROUP BY simpletypes_5.a_4, simpletypes_5.a_2, simpletypes_5.a_1)) AS a_7
 FROM
-  (
-    FROM
-      SimpleTypes
-    |> SELECT
-         SimpleTypes.int64 AS a_1,
-         SimpleTypes.string AS a_2,
-         SimpleTypes.bool AS a_3,
-         SimpleTypes.double AS a_4
-    |> AS simpletypes_5
-  )
-GROUP BY simpletypes_5.a_4;
+  SimpleTypes
+|> AGGREGATE
+     MIN(IFERROR(AVG(SimpleTypes.double), MAX(SimpleTypes.double))
+       GROUP BY SimpleTypes.double, SimpleTypes.bool) AS a_1,
+     ARRAY_AGG(SimpleTypes.string
+       GROUP BY SimpleTypes.double, SimpleTypes.string
+       ORDER BY MIN(IFERROR(AVG(SimpleTypes.double), MAX(SimpleTypes.double))
+         GROUP BY SimpleTypes.double, SimpleTypes.string, SimpleTypes.int64)) AS a_2
+   GROUP BY SimpleTypes.double AS a_3
+|> AS projectscan_4
+|> SELECT
+     projectscan_4.a_1,
+     projectscan_4.a_2;
 ==
 
 # Conditional evaluation for aggregate function in ORDER BY modifier
@@ -1113,16 +1056,11 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.string AS a_2,
-     SimpleTypes.bool AS a_3
-|> AS simpletypes_4
 |> AGGREGATE
-     ARRAY_AGG(simpletypes_4.a_2
-       GROUP BY simpletypes_4.a_2
-       ORDER BY SUM(CAST(IFERROR(MAX(simpletypes_4.a_1), MIN(simpletypes_4.a_1)) AS INT64)
-         GROUP BY simpletypes_4.a_2, simpletypes_4.a_3)) AS a_5;
+     ARRAY_AGG(SimpleTypes.string
+       GROUP BY SimpleTypes.string
+       ORDER BY SUM(CAST(IFERROR(MAX(SimpleTypes.int32), MIN(SimpleTypes.int32)) AS INT64)
+         GROUP BY SimpleTypes.string, SimpleTypes.bool)) AS a_1;
 ==
 
 # Multi-level aggregates in the HAVING clause.
@@ -1209,21 +1147,14 @@ WHERE
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
-|> EXTEND
-     simpletypes_3.a_2 AS a_4
 |> AGGREGATE
-     SUM(CAST(CAST(simpletypes_3.a_1 AS INT64) + (simpletypes_3.a_2) AS DOUBLE) + (AVG(simpletypes_3.a_2))
-       GROUP BY simpletypes_3.a_2, simpletypes_3.a_1) AS a_5
-   GROUP BY a_4
-|> AS aggregatescan_6
+     SUM(CAST(CAST(SimpleTypes.int32 AS INT64) + (SimpleTypes.int64) AS DOUBLE) + (AVG(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int64, SimpleTypes.int32) AS a_1
+   GROUP BY SimpleTypes.int64 AS int64_2
 |> WHERE
-     (aggregatescan_6.a_5) > 10.0
+     a_1 > 10.0
 |> SELECT
-     aggregatescan_6.a_4 AS int64;
+     int64_2 AS int64;
 ==
 
 # Multi-level aggregates in the HAVING clause.
@@ -1312,27 +1243,16 @@ WHERE
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.string AS a_3,
-     SimpleTypes.bool AS a_4
-|> AS simpletypes_5
-|> EXTEND
-     simpletypes_5.a_3 AS a_8
 |> AGGREGATE
-     SUM(ANY_VALUE(simpletypes_5.a_2)
-       GROUP BY simpletypes_5.a_3, simpletypes_5.a_4) AS a_6,
-     SUM(CAST(simpletypes_5.a_1 AS DOUBLE) + (AVG(simpletypes_5.a_2))
-       GROUP BY simpletypes_5.a_3, simpletypes_5.a_1) AS a_7
-   GROUP BY a_8
-|> SELECT
-     a_6,
-     a_7
+     SUM(ANY_VALUE(SimpleTypes.int64)
+       GROUP BY SimpleTypes.string, SimpleTypes.bool) AS multi_level_agg,
+     SUM(CAST(SimpleTypes.int32 AS DOUBLE) + (AVG(SimpleTypes.int64))
+       GROUP BY SimpleTypes.string, SimpleTypes.int32) AS a_1
+   GROUP BY SimpleTypes.string AS string_2
 |> WHERE
-     (a_6 > 0) AND (a_7 > 10.0)
+     (multi_level_agg > 0) AND (a_1 > 10.0)
 |> SELECT
-     a_6 AS multi_level_agg;
+     multi_level_agg;
 ==
 
 # Multi-level aggregates in the QUALIFY clause.
@@ -1475,32 +1395,24 @@ WHERE
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.double AS a_3
-|> AS simpletypes_4
-|> EXTEND
-     simpletypes_4.a_2 AS a_5
 |> AGGREGATE
-     SUM((simpletypes_4.a_2) + CAST(MAX(simpletypes_4.a_1) AS INT64)
-       GROUP BY simpletypes_4.a_2, simpletypes_4.a_3) AS a_6,
-     MAX(((simpletypes_4.a_3) + CAST(simpletypes_4.a_2 AS DOUBLE)) + CAST(MIN(simpletypes_4.a_1) AS DOUBLE)
-       GROUP BY simpletypes_4.a_2, simpletypes_4.a_3) AS a_7
-   GROUP BY a_5
-|> AS aggregatescan_8
+     SUM((SimpleTypes.int64) + CAST(MAX(SimpleTypes.int32) AS INT64)
+       GROUP BY SimpleTypes.int64, SimpleTypes.double) AS a_1,
+     MAX(((SimpleTypes.double) + CAST(SimpleTypes.int64 AS DOUBLE)) + CAST(MIN(SimpleTypes.int32) AS DOUBLE)
+       GROUP BY SimpleTypes.int64, SimpleTypes.double) AS a_2
+   GROUP BY SimpleTypes.int64 AS int64_2
+|> AS aggregatescan_3
 |> SELECT
-     aggregatescan_8.a_5 AS a_5,
-     aggregatescan_8.a_6 AS a_6,
-     aggregatescan_8.a_7 AS a_7,
-     SUM(aggregatescan_8.a_5) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS a_9,
-     AVG(aggregatescan_8.a_5) OVER (PARTITION BY aggregatescan_8.a_6
-       ORDER BY aggregatescan_8.a_7 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_10
-|> AS analyticscan_11
+     aggregatescan_3.int64_2,
+     aggregatescan_3.a_1,
+     aggregatescan_3.a_2,
+     SUM(aggregatescan_3.int64_2) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS window_result,
+     AVG(aggregatescan_3.int64_2) OVER (PARTITION BY aggregatescan_3.a_1
+       ORDER BY aggregatescan_3.a_2 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS a_4
 |> WHERE
-     CAST(analyticscan_11.a_9 AS DOUBLE) < (analyticscan_11.a_10)
+     CAST(window_result AS DOUBLE) < a_4
 |> SELECT
-     analyticscan_11.a_9 AS window_result;
+     window_result;
 ==
 
 # Multi-level aggregates in the ORDER BY clause.
@@ -1603,29 +1515,17 @@ ORDER BY aggregatescan_9.a_7, aggregatescan_9.a_8;
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.string AS a_3,
-     SimpleTypes.double AS a_4
-|> AS simpletypes_5
-|> EXTEND
-     simpletypes_5.a_2 AS a_9
 |> AGGREGATE
-     SUM(simpletypes_5.a_2) AS a_6,
-     SUM((CAST(simpletypes_5.a_2 AS DOUBLE) + (simpletypes_5.a_4)) + CAST(MAX(simpletypes_5.a_1) AS DOUBLE)
-       GROUP BY simpletypes_5.a_2, simpletypes_5.a_4) AS a_7,
-     MIN((simpletypes_5.a_2) + (MAX(COUNT(*)
-         GROUP BY simpletypes_5.a_2, simpletypes_5.a_3, simpletypes_5.a_4))
-       GROUP BY simpletypes_5.a_2, simpletypes_5.a_3) AS a_8
-   GROUP BY a_9
+     SUM(SimpleTypes.int64) AS a_1,
+     SUM((CAST(SimpleTypes.int64 AS DOUBLE) + (SimpleTypes.double)) + CAST(MAX(SimpleTypes.int32) AS DOUBLE)
+       GROUP BY SimpleTypes.int64, SimpleTypes.double) AS a_2,
+     MIN((SimpleTypes.int64) + (MAX(COUNT(*)
+         GROUP BY SimpleTypes.int64, SimpleTypes.string, SimpleTypes.double))
+       GROUP BY SimpleTypes.int64, SimpleTypes.string) AS a_3
+   GROUP BY SimpleTypes.int64 AS int64_2
+|> ORDER BY a_2, a_3
 |> SELECT
-     a_6,
-     a_7,
-     a_8
-|> ORDER BY a_7, a_8
-|> SELECT
-     a_6 AS a_6;
+     a_1;
 ==
 
 # DISTINCT and ORDER by on a GROUP BY modifier.
@@ -1674,13 +1574,13 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1
-|> AS simpletypes_2
 |> AGGREGATE
-     ARRAY_AGG(DISTINCT simpletypes_2.a_1
-       GROUP BY simpletypes_2.a_1
-       ORDER BY simpletypes_2.a_1) AS a_3;
+     ARRAY_AGG(DISTINCT SimpleTypes.int32
+       GROUP BY SimpleTypes.int32
+       ORDER BY SimpleTypes.int32) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # ORDER BY a grouping key that is a struct field access.
@@ -1776,21 +1676,15 @@ GROUP BY doublynestedstructtable_2.a_1.e, doublynestedstructtable_2.a_1.f;
 [SQLBUILDER_OUTPUT]
 FROM
   DoublyNestedStructTable
-|> SELECT
-     DoublyNestedStructTable.doubly_nested_struct AS a_1
-|> AS doublynestedstructtable_2
-|> EXTEND
-     doublynestedstructtable_2.a_1.e AS a_4,
-     doublynestedstructtable_2.a_1.f AS a_5
 |> AGGREGATE
-     ARRAY_AGG(CAST(doublynestedstructtable_2.a_1.e AS INT64) + CAST(doublynestedstructtable_2.a_1.f.d.a AS INT64)
-       GROUP BY doublynestedstructtable_2.a_1.e, doublynestedstructtable_2.a_1.f, doublynestedstructtable_2.a_1.f.d.a
-       ORDER BY doublynestedstructtable_2.a_1.f.d.a) AS a_3
-   GROUP BY a_4, a_5
+     ARRAY_AGG(CAST(DoublyNestedStructTable.doubly_nested_struct.e AS INT64) + CAST(DoublyNestedStructTable.doubly_nested_struct.f.d.a AS INT64)
+       GROUP BY DoublyNestedStructTable.doubly_nested_struct.e, DoublyNestedStructTable.doubly_nested_struct.f,
+         DoublyNestedStructTable.doubly_nested_struct.f.d.a
+       ORDER BY DoublyNestedStructTable.doubly_nested_struct.f.d.a) AS a_1
+   GROUP BY DoublyNestedStructTable.doubly_nested_struct.e, DoublyNestedStructTable.doubly_nested_struct.f
+|> AS aggregatescan_2
 |> SELECT
-     a_3
-|> SELECT
-     a_3 AS a_3;
+     aggregatescan_2.a_1;
 ==
 
 # Multi-level aggregation over PROTO fields
@@ -1875,18 +1769,18 @@ FROM
 FROM
   TestTable
 |> SELECT
-     TestTable.KitchenSink AS a_1
-|> AS testtable_2
+     TestTable.KitchenSink
+|> AS testtable_1
 |> LEFT JOIN
-   UNNEST(testtable_2.a_1.repeated_int64_val) AS a_3
+   UNNEST(testtable_1.KitchenSink.repeated_int64_val) AS repeated_int64
 |> AGGREGATE
-     SUM(a_3) AS a_4,
-     SUM(ANY_VALUE(testtable_2.a_1.int64_val)
-       GROUP BY testtable_2.a_1.int64_key_1) AS a_5
-|> AS aggregatescan_6
+     SUM(repeated_int64) AS a_2,
+     SUM(ANY_VALUE(testtable_1.KitchenSink.int64_val)
+       GROUP BY testtable_1.KitchenSink.int64_key_1) AS a_3
+|> AS aggregatescan_4
 |> SELECT
-     aggregatescan_6.a_5 AS a_5,
-     aggregatescan_6.a_4 AS a_4;
+     aggregatescan_4.a_3,
+     aggregatescan_4.a_2;
 ==
 
 # Multi-level aggregation over an UNNESTed array
@@ -1966,18 +1860,18 @@ FROM
 FROM
   TestTable
 |> SELECT
-     TestTable.KitchenSink AS a_1
-|> AS testtable_2
+     TestTable.KitchenSink
+|> AS testtable_1
 |> LEFT JOIN
-   UNNEST(ARRAY< INT64 >[10, 20, 30, 40, 50]) AS a_3
+   UNNEST(ARRAY< INT64 >[10, 20, 30, 40, 50]) AS numbers
 |> AGGREGATE
-     SUM(a_3) AS a_4,
-     SUM(ANY_VALUE(testtable_2.a_1.int64_val)
-       GROUP BY testtable_2.a_1.int64_key_1) AS a_5
-|> AS aggregatescan_6
+     SUM(numbers) AS a_2,
+     SUM(ANY_VALUE(testtable_1.KitchenSink.int64_val)
+       GROUP BY testtable_1.KitchenSink.int64_key_1) AS a_3
+|> AS aggregatescan_4
 |> SELECT
-     aggregatescan_6.a_5 AS a_5,
-     aggregatescan_6.a_4 AS a_4;
+     aggregatescan_4.a_3,
+     aggregatescan_4.a_2;
 ==
 
 # GROUP BY () in the query's GROUP BY clause.
@@ -2026,13 +1920,12 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.string AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(AVG(simpletypes_3.a_1)
-       GROUP BY simpletypes_3.a_2) AS a_4;
+     SUM(AVG(SimpleTypes.int64)
+       GROUP BY SimpleTypes.string) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # Ensure 'grouping-constness' works correctly with CUBE, ROLLUP and GROUPING
@@ -2097,22 +1990,13 @@ GROUP BY simpletypes_4.a_1, simpletypes_4.a_2;
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.string AS a_3
-|> AS simpletypes_4
-|> EXTEND
-     simpletypes_4.a_1 AS a_6,
-     simpletypes_4.a_2 AS a_7
 |> AGGREGATE
-     SUM(((simpletypes_4.a_2) + CAST(simpletypes_4.a_1 AS INT64)) + (MAX(simpletypes_4.a_2))
-       GROUP BY simpletypes_4.a_1, simpletypes_4.a_2, simpletypes_4.a_3) AS a_5
-   GROUP BY a_6, a_7
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64, SimpleTypes.string) AS a_1
+   GROUP BY SimpleTypes.int32 AS int32_2, SimpleTypes.int64 AS int64_2
+|> AS aggregatescan_2
 |> SELECT
-     a_5
-|> SELECT
-     a_5 AS a_5;
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUPS:
     ROLLUP(int32, int64)
@@ -2185,21 +2069,13 @@ GROUP BY simpletypes_3.a_1, simpletypes_3.a_2;
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
-|> EXTEND
-     simpletypes_3.a_1 AS a_5,
-     simpletypes_3.a_2 AS a_6
 |> AGGREGATE
-     SUM(((simpletypes_3.a_2) + CAST(simpletypes_3.a_1 AS INT64)) + (MAX(simpletypes_3.a_2))
-       GROUP BY simpletypes_3.a_1, simpletypes_3.a_2) AS a_4
-   GROUP BY a_5, a_6
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1
+   GROUP BY SimpleTypes.int32 AS int32_2, SimpleTypes.int64 AS int64_2
+|> AS aggregatescan_2
 |> SELECT
-     a_4
-|> SELECT
-     a_4 AS a_4;
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: ROLLUP(int32, int64)
 --
@@ -2262,21 +2138,16 @@ GROUP BY ROLLUP(simpletypes_3.a_1, simpletypes_3.a_2);
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> EXTEND
-     simpletypes_3.a_1 AS a_5,
-     simpletypes_3.a_2 AS a_6
+     SimpleTypes.int32 AS int32_2,
+     SimpleTypes.int64 AS int64_2
 |> AGGREGATE
-     SUM(((simpletypes_3.a_2) + CAST(simpletypes_3.a_1 AS INT64)) + (MAX(simpletypes_3.a_2))
-       GROUP BY simpletypes_3.a_1, simpletypes_3.a_2) AS a_4
-   GROUP BY ROLLUP(a_5, a_6)
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1
+   GROUP BY ROLLUP(int32_2, int64_2)
+|> AS aggregatescan_2
 |> SELECT
-     a_4
-|> SELECT
-     a_4 AS a_4;
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: CUBE(int32, int64)
 --
@@ -2339,21 +2210,16 @@ GROUP BY CUBE(simpletypes_3.a_1, simpletypes_3.a_2);
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> EXTEND
-     simpletypes_3.a_1 AS a_5,
-     simpletypes_3.a_2 AS a_6
+     SimpleTypes.int32 AS int32_2,
+     SimpleTypes.int64 AS int64_2
 |> AGGREGATE
-     SUM(((simpletypes_3.a_2) + CAST(simpletypes_3.a_1 AS INT64)) + (MAX(simpletypes_3.a_2))
-       GROUP BY simpletypes_3.a_1, simpletypes_3.a_2) AS a_4
-   GROUP BY CUBE(a_5, a_6)
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1
+   GROUP BY CUBE(int32_2, int64_2)
+|> AS aggregatescan_2
 |> SELECT
-     a_4
-|> SELECT
-     a_4 AS a_4;
+     aggregatescan_2.a_1;
 --
 ALTERNATION GROUP: GROUPING SETS(int32, int64)
 --
@@ -2414,21 +2280,16 @@ GROUP BY GROUPING SETS(simpletypes_3.a_1, simpletypes_3.a_2);
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2
-|> AS simpletypes_3
 |> EXTEND
-     simpletypes_3.a_1 AS a_5,
-     simpletypes_3.a_2 AS a_6
+     SimpleTypes.int32 AS int32_2,
+     SimpleTypes.int64 AS int64_2
 |> AGGREGATE
-     SUM(((simpletypes_3.a_2) + CAST(simpletypes_3.a_1 AS INT64)) + (MAX(simpletypes_3.a_2))
-       GROUP BY simpletypes_3.a_1, simpletypes_3.a_2) AS a_4
-   GROUP BY GROUPING SETS(a_5, a_6)
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1
+   GROUP BY GROUPING SETS(int32_2, int64_2)
+|> AS aggregatescan_2
 |> SELECT
-     a_4
-|> SELECT
-     a_4 AS a_4;
+     aggregatescan_2.a_1;
 ==
 
 # Ensure 'grouping-constness' works correctly with CUBE, ROLLUP and GROUPING
@@ -2518,28 +2379,19 @@ GROUP BY ROLLUP(simpletypes_6.a_4, simpletypes_6.a_5);
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.uint32 AS a_3,
-     SimpleTypes.string AS a_4,
-     SimpleTypes.bool AS a_5
-|> AS simpletypes_6
 |> EXTEND
-     simpletypes_6.a_4 AS a_9,
-     simpletypes_6.a_5 AS a_10
+     SimpleTypes.string AS string_2,
+     SimpleTypes.bool AS bool_2
 |> AGGREGATE
-     SUM(((simpletypes_6.a_2) + CAST(simpletypes_6.a_1 AS INT64)) + (MAX(simpletypes_6.a_2))
-       GROUP BY simpletypes_6.a_1, simpletypes_6.a_2) AS a_7,
-     AVG(CAST(MIN(simpletypes_6.a_3) AS INT64) + (simpletypes_6.a_2)
-       GROUP BY simpletypes_6.a_2) AS a_8
-   GROUP BY ROLLUP(a_9, a_10)
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1,
+     AVG(CAST(MIN(SimpleTypes.uint32) AS INT64) + (SimpleTypes.int64)
+       GROUP BY SimpleTypes.int64) AS a_2
+   GROUP BY ROLLUP(string_2, bool_2)
+|> AS aggregatescan_3
 |> SELECT
-     a_7,
-     a_8
-|> SELECT
-     a_7 AS a_7,
-     a_8 AS a_8;
+     aggregatescan_3.a_1,
+     aggregatescan_3.a_2;
 --
 ALTERNATION GROUP: CUBE(string, bool)
 --
@@ -2620,28 +2472,19 @@ GROUP BY CUBE(simpletypes_6.a_4, simpletypes_6.a_5);
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.uint32 AS a_3,
-     SimpleTypes.string AS a_4,
-     SimpleTypes.bool AS a_5
-|> AS simpletypes_6
 |> EXTEND
-     simpletypes_6.a_4 AS a_9,
-     simpletypes_6.a_5 AS a_10
+     SimpleTypes.string AS string_2,
+     SimpleTypes.bool AS bool_2
 |> AGGREGATE
-     SUM(((simpletypes_6.a_2) + CAST(simpletypes_6.a_1 AS INT64)) + (MAX(simpletypes_6.a_2))
-       GROUP BY simpletypes_6.a_1, simpletypes_6.a_2) AS a_7,
-     AVG(CAST(MIN(simpletypes_6.a_3) AS INT64) + (simpletypes_6.a_2)
-       GROUP BY simpletypes_6.a_2) AS a_8
-   GROUP BY CUBE(a_9, a_10)
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1,
+     AVG(CAST(MIN(SimpleTypes.uint32) AS INT64) + (SimpleTypes.int64)
+       GROUP BY SimpleTypes.int64) AS a_2
+   GROUP BY CUBE(string_2, bool_2)
+|> AS aggregatescan_3
 |> SELECT
-     a_7,
-     a_8
-|> SELECT
-     a_7 AS a_7,
-     a_8 AS a_8;
+     aggregatescan_3.a_1,
+     aggregatescan_3.a_2;
 --
 ALTERNATION GROUP: GROUPING SETS(string, bool)
 --
@@ -2720,28 +2563,19 @@ GROUP BY GROUPING SETS(simpletypes_6.a_4, simpletypes_6.a_5);
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.int64 AS a_2,
-     SimpleTypes.uint32 AS a_3,
-     SimpleTypes.string AS a_4,
-     SimpleTypes.bool AS a_5
-|> AS simpletypes_6
 |> EXTEND
-     simpletypes_6.a_4 AS a_9,
-     simpletypes_6.a_5 AS a_10
+     SimpleTypes.string AS string_2,
+     SimpleTypes.bool AS bool_2
 |> AGGREGATE
-     SUM(((simpletypes_6.a_2) + CAST(simpletypes_6.a_1 AS INT64)) + (MAX(simpletypes_6.a_2))
-       GROUP BY simpletypes_6.a_1, simpletypes_6.a_2) AS a_7,
-     AVG(CAST(MIN(simpletypes_6.a_3) AS INT64) + (simpletypes_6.a_2)
-       GROUP BY simpletypes_6.a_2) AS a_8
-   GROUP BY GROUPING SETS(a_9, a_10)
+     SUM(((SimpleTypes.int64) + CAST(SimpleTypes.int32 AS INT64)) + (MAX(SimpleTypes.int64))
+       GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1,
+     AVG(CAST(MIN(SimpleTypes.uint32) AS INT64) + (SimpleTypes.int64)
+       GROUP BY SimpleTypes.int64) AS a_2
+   GROUP BY GROUPING SETS(string_2, bool_2)
+|> AS aggregatescan_3
 |> SELECT
-     a_7,
-     a_8
-|> SELECT
-     a_7 AS a_7,
-     a_8 AS a_8;
+     aggregatescan_3.a_1,
+     aggregatescan_3.a_2;
 ==
 
 # Test value table with multilevel aggregation.
@@ -2799,11 +2633,14 @@ FROM
 FROM
   KitchenSinkValueTable
 |> SELECT
-     KitchenSinkValueTable AS a_1
-|> AS kitchensinkvaluetable_2
+     KitchenSinkValueTable AS value
+|> AS kitchensinkvaluetable_1
 |> AGGREGATE
-     MAX(MIN(kitchensinkvaluetable_2.a_1.int64_val)
-       GROUP BY kitchensinkvaluetable_2.a_1.int64_key_1) AS a_3;
+     MAX(MIN(kitchensinkvaluetable_1.value.int64_val)
+       GROUP BY kitchensinkvaluetable_1.value.int64_key_1) AS a_2
+|> AS aggregatescan_3
+|> SELECT
+     aggregatescan_3.a_2;
 ==
 
 # CTE with multi-level aggregation.
@@ -2882,26 +2719,18 @@ WITH
   T AS (
     FROM
       SimpleTypes
-    |> SELECT
-         SimpleTypes.int32 AS a_1,
-         SimpleTypes.int64 AS a_2,
-         SimpleTypes.double AS a_3
-    |> AS simpletypes_4
-    |> EXTEND
-         simpletypes_4.a_1 AS a_6
     |> AGGREGATE
-         MIN(CAST(simpletypes_4.a_2 AS DOUBLE) + (MAX(simpletypes_4.a_3))
-           GROUP BY simpletypes_4.a_1, simpletypes_4.a_2) AS a_5
-       GROUP BY a_6
+         MIN(CAST(SimpleTypes.int64 AS DOUBLE) + (MAX(SimpleTypes.double))
+           GROUP BY SimpleTypes.int32, SimpleTypes.int64) AS a_1
+       GROUP BY SimpleTypes.int32 AS int32_2
+    |> AS aggregatescan_2
     |> SELECT
-         a_5
-    |> SELECT
-         a_5 AS a_5
+         aggregatescan_2.a_1
   )
 FROM
-  T AS withrefscan_7
+  T AS withrefscan_3
 |> SELECT
-     withrefscan_7.a_5 AS a_5;
+     withrefscan_3.a_1;
 ==
 
 # Test various aggregate function modifiers with multi-level aggregation.
@@ -2960,22 +2789,15 @@ GROUP BY simpletypes_3.a_1;
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int32 AS a_1,
-     SimpleTypes.string AS a_2
-|> AS simpletypes_3
-|> EXTEND
-     simpletypes_3.a_1 AS a_5
 |> AGGREGATE
-     ARRAY_AGG(DISTINCT simpletypes_3.a_2 IGNORE NULLS
-       GROUP BY simpletypes_3.a_1, simpletypes_3.a_2
-       ORDER BY simpletypes_3.a_2
-       LIMIT 10) AS a_4
-   GROUP BY a_5
+     ARRAY_AGG(DISTINCT SimpleTypes.string IGNORE NULLS
+       GROUP BY SimpleTypes.int32, SimpleTypes.string
+       ORDER BY SimpleTypes.string
+       LIMIT 10) AS a_1
+   GROUP BY SimpleTypes.int32 AS int32_2
+|> AS aggregatescan_2
 |> SELECT
-     a_4
-|> SELECT
-     a_4 AS a_4;
+     aggregatescan_2.a_1;
 ==
 
 # Regression test for b/379931737
@@ -3031,11 +2853,14 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_1
+  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a
 |> AGGREGATE
      STRING_AGG(CAST(b"HJ:ESN" AS STRING FORMAT "base64")
-       GROUP BY a_1, CAST(b"HJ:ESN" AS STRING FORMAT "base64")
-       ORDER BY a_1) AS a_2;
+       GROUP BY a, CAST(b"HJ:ESN" AS STRING FORMAT "base64")
+       ORDER BY a) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # Regression test for b/379931737
@@ -3118,11 +2943,14 @@ FROM
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
-  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a_1
+  UNNEST(ARRAY< INT64 >[1, 2, 3]) AS a
 |> AGGREGATE
-     STRING_AGG(CAST(ARRAY_FIND(ARRAY< INT64 >[1], (a_3) -> a_3 > 5, CAST("FIRST" AS ARRAY_FIND_MODE)) AS STRING)
-       GROUP BY a_1, CAST(ARRAY_FIND(ARRAY< INT64 >[1], (a_2) -> a_2 > 5, CAST("FIRST" AS ARRAY_FIND_MODE)) AS STRING)
-       ORDER BY a_1) AS a_4;
+     STRING_AGG(CAST(ARRAY_FIND(ARRAY< INT64 >[1], (e_2) -> e_2 > 5, CAST("FIRST" AS ARRAY_FIND_MODE)) AS STRING)
+       GROUP BY a, CAST(ARRAY_FIND(ARRAY< INT64 >[1], (e) -> e > 5, CAST("FIRST" AS ARRAY_FIND_MODE)) AS STRING)
+       ORDER BY a) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # GROUP BY modifier can contain hints
@@ -3172,13 +3000,12 @@ FROM
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(AVG(simpletypes_3.a_1)
-       GROUP @{ abc = 1 } BY simpletypes_3.a_2) AS a_4;
+     SUM(AVG(SimpleTypes.int64)
+       GROUP @{ abc = 1 } BY SimpleTypes.bool) AS a_1
+|> AS aggregatescan_2
+|> SELECT
+     aggregatescan_2.a_1;
 ==
 
 # GROUP BY modifier can contain hints
@@ -3262,21 +3089,16 @@ WHERE
 [SQLBUILDER_OUTPUT]
 FROM
   SimpleTypes
-|> SELECT
-     SimpleTypes.int64 AS a_1,
-     SimpleTypes.bool AS a_2
-|> AS simpletypes_3
 |> AGGREGATE
-     SUM(SUM(simpletypes_3.a_1
-         GROUP @{ abc = 2 } BY simpletypes_3.a_2, simpletypes_3.a_1)
-       GROUP @{ abc = 1 } BY simpletypes_3.a_2) AS a_4,
-     AVG(AVG(simpletypes_3.a_1)
-       GROUP @{ abc = 3 } BY simpletypes_3.a_2) AS a_5
-|> AS aggregatescan_6
+     SUM(SUM(SimpleTypes.int64
+         GROUP @{ abc = 2 } BY SimpleTypes.bool, SimpleTypes.int64)
+       GROUP @{ abc = 1 } BY SimpleTypes.bool) AS a_1,
+     AVG(AVG(SimpleTypes.int64)
+       GROUP @{ abc = 3 } BY SimpleTypes.bool) AS a_2
 |> WHERE
-     (aggregatescan_6.a_5) > 0.0
+     a_2 > 0.0
 |> SELECT
-     aggregatescan_6.a_4 AS a_4;
+     a_1;
 
 ==
 
@@ -3395,19 +3217,23 @@ FROM
 WITH
   t AS (
     SELECT
-      1 AS a_1
+      1 AS x
   )
 FROM
-  t AS withrefscan_2
+  t AS withrefscan_1
 |> SELECT
-     withrefscan_2.a_1 AS a_1,
-     (withrefscan_2.a_1) + 1 AS a_3,
-     (withrefscan_2.a_1) + 1 AS a_4
-|> AS projectscan_5
+     withrefscan_1.x,
+     (withrefscan_1.x) + 1 AS a_2,
+     (withrefscan_1.x) + 1 AS a_3
+|> AS projectscan_4
 |> AGGREGATE
-     ARRAY_AGG(STRUCT< ARRAY< INT64 > > (ARRAY_AGG(DISTINCT projectscan_5.a_3
-           ORDER BY projectscan_5.a_3))
-       GROUP BY (projectscan_5.a_1) + 1) AS a_6,
-     ARRAY_AGG(STRUCT< ARRAY< INT64 > > (ARRAY_AGG(DISTINCT projectscan_5.a_4
-           ORDER BY projectscan_5.a_4))
-       GROUP BY (projectscan_5.a_1) + 1) AS a_7;
+     ARRAY_AGG(STRUCT< ARRAY< INT64 > > (ARRAY_AGG(DISTINCT projectscan_4.a_2
+           ORDER BY projectscan_4.a_2))
+       GROUP BY (projectscan_4.x) + 1) AS a_5,
+     ARRAY_AGG(STRUCT< ARRAY< INT64 > > (ARRAY_AGG(DISTINCT projectscan_4.a_3
+           ORDER BY projectscan_4.a_3))
+       GROUP BY (projectscan_4.x) + 1) AS a_6
+|> AS aggregatescan_7
+|> SELECT
+     aggregatescan_7.a_5,
+     aggregatescan_7.a_6;

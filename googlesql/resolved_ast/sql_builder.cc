@@ -62,6 +62,7 @@
 #include "googlesql/common/graph_element_utils.h"
 #include "googlesql/common/measure_utils.h"
 #include "googlesql/common/thread_stack.h"
+#include "googlesql/common/utf_util.h"
 #include "googlesql/parser/parse_tree.h"
 #include "googlesql/public/annotation/collation.h"
 #include "googlesql/public/builtin_function.pb.h"
@@ -152,9 +153,47 @@ std::string SQLBuilder::GetColumnAlias(const ResolvedColumn& column) {
     return googlesql_base::FindOrDie(computed_column_alias(), column.column_id());
   }
 
-  const std::string alias = GenerateUniqueAliasName();
+  // In Pipe target mode, prefer a readable alias derived from the column's name
+  // (e.g. `int32`, `k`) instead of an opaque `a_<id>`, falling back to the
+  // generated name only for anonymous/internal columns (names that are empty or
+  // start with '$', such as `$col1`) or names that are not well-formed UTF-8
+  // (some internal columns carry binary names, e.g. anonymization partial
+  // aggregates, which cannot be emitted as a valid identifier). Uniqueness is
+  // preserved by suffixing.
+  std::string alias;
+  const absl::string_view name = column.name();
+  if (IsPipeSyntaxTargetMode() && !name.empty() &&
+      !absl::StartsWith(name, "$") && IsWellFormedUTF8(name)) {
+    alias = MakeUniqueColumnAlias(name);
+  } else {
+    alias = GenerateUniqueAliasName();
+  }
   googlesql_base::InsertOrDie(&mutable_computed_column_alias(), column.column_id(), alias);
   return alias;
+}
+
+bool SQLBuilder::ColumnAliasIsTaken(absl::string_view alias) const {
+  // SQL identifiers are case-insensitive, so aliases must be unique ignoring
+  // case (e.g. a table column `Value` and a group-by key `value` collide).
+  for (const auto& [column_id, column_alias] : computed_column_alias()) {
+    if (absl::EqualsIgnoreCase(column_alias, alias)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string SQLBuilder::MakeUniqueColumnAlias(absl::string_view name) {
+  std::string candidate = ToIdentifierLiteral(name);
+  if (!ColumnAliasIsTaken(candidate)) {
+    return candidate;
+  }
+  for (int suffix = 2;; ++suffix) {
+    candidate = ToIdentifierLiteral(absl::StrCat(name, "_", suffix));
+    if (!ColumnAliasIsTaken(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 std::string SQLBuilder::UpdateColumnAlias(const ResolvedColumn& column) {
@@ -2702,25 +2741,53 @@ absl::Status SQLBuilder::GetSelectList(
   // If any group_by column is computed in the select list, then update the sql
   // text for those columns in group_by_list inside the QueryExpression,
   // reflecting the ordinal position of select clause.
+  absl::flat_hash_set<int> materialized_group_by_columns;
   for (int pos = 0; pos < column_list.size(); ++pos) {
     const ResolvedColumn& col = column_list[pos];
     if (query_expression->HasGroupByColumn(col.column_id())) {
       query_expression->SetGroupByColumn(
           col.column_id(),
           absl::StrCat(pos + 1) /* select list ordinal position */);
+      materialized_group_by_columns.insert(col.column_id());
     }
   }
 
-  if (column_list.empty()) {
-    GOOGLESQL_RET_CHECK_EQ(select_list->size(), 0);
-    // Add a dummy value "NULL" to the select list if the column list is empty.
-    // This ensures that we form a valid query for scans with empty columns.
-    const std::string alias =
-        IsPipeSyntaxTargetMode() && query_expression->HasAnyGroupByColumn()
-            // In presence of group by columns, an alias in needed in Pipe
-            // syntax mode to form a syntactically correct query.
-            ? GenerateUniqueAliasName()
-            : "" /* no select alias */;
+  // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY <key>` must reference every
+  // group-by key by a (unique) alias, so each key has to be materialized in the
+  // select list. A key that is not in `column_list` -- e.g. a grouping key the
+  // resolver pruned from this scan's output -- was not assigned a select ordinal
+  // above and still holds its raw expression SQL in the group-by list. Append it
+  // here with a generated unique alias and record its ordinal, so the query can
+  // be formed in Pipe syntax instead of falling back to Standard syntax. The
+  // extra output column is harmless: a later operator (and the resolver, on
+  // re-analysis) prunes any column the query does not output. In the common case
+  // the aggregate already materializes every key, so nothing is appended here.
+  //
+  // Note: whether a key is already materialized is tracked explicitly
+  // (`materialized_group_by_columns`) rather than inferred from its stored
+  // value, because a group-by list entry holds either a select ordinal or the
+  // raw expression SQL, and the two are indistinguishable for an integer-valued
+  // key expression (e.g. `GROUP BY 1+2` or `GROUP BY CAST(1 AS INT64)`).
+  if (IsPipeSyntaxTargetMode()) {
+    for (const auto& [column_id, expr_sql] : query_expression->GroupByList()) {
+      if (materialized_group_by_columns.contains(column_id)) {
+        continue;
+      }
+      select_list->push_back(
+          std::make_pair(expr_sql, GenerateUniqueAliasName()));
+      query_expression->SetGroupByColumn(
+          column_id, absl::StrCat(select_list->size()) /* ordinal */);
+    }
+  }
+
+  if (select_list->empty()) {
+    // The scan has no output columns and no group-by keys were materialized
+    // above. Add a dummy value "NULL" to the select list. This ensures that we
+    // form a valid query for scans with empty columns. (In Pipe syntax mode a
+    // scan with group-by keys but an empty column list materializes those keys
+    // above, so it does not reach here and does not need this placeholder.)
+    GOOGLESQL_RET_CHECK(column_list.empty());
+    const std::string alias = "" /* no select alias */;
     select_list->push_back(std::make_pair("NULL", alias));
   }
 
@@ -3430,16 +3497,9 @@ absl::Status SQLBuilder::VisitResolvedAlignScan(const ResolvedAlignScan* node) {
 
 bool SQLBuilder::IsDegenerateProjectScan(
     const ResolvedProjectScan* node, const QueryExpression* query_expression) {
-  // In Pipe syntax mode, we cannot mark the project scan as degenerate
-  // when it wraps over an aggregate scan with group-by columns.
-  // Otherwise, the select list is overwritten with the output columns, and that
-  // causes a bad query to be output if there are duplicate column names.
-  if (IsPipeSyntaxTargetMode() &&
-      node->input_scan()->Is<ResolvedAggregateScanBase>() &&
-      query_expression->HasAnyGroupByColumn()) {
-    return false;
-  }
-
+  // Only reached in Standard syntax mode: Pipe syntax mode never elides a
+  // degenerate ProjectScan (see VisitResolvedProjectScan), so it does not call
+  // this.
   return node->expr_list_size() == 0     // no computed columns
          && node->hint_list_size() == 0  // no hints
          // same column list as the input scan
@@ -3514,7 +3574,13 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
     SetPathForColumnList(node->column_list(), alias);
   }
 
-  if (IsDegenerateProjectScan(node, query_expression.get()) &&
+  // In Pipe syntax mode, do not elide a degenerate (pass-through) ProjectScan:
+  // emit it through the normal path so every ResolvedProjectScan maps to a pipe
+  // operator (kept 1:1 even though the resulting `|> SELECT` is a no-op). In
+  // Standard syntax mode the elision is still applied -- a redundant nested
+  // SELECT there is pure noise.
+  if (!IsPipeSyntaxTargetMode() &&
+      IsDegenerateProjectScan(node, query_expression.get()) &&
       query_expression->CanFormSQLQuery()) {
     // NOTE: any future fields added to ProjectScan that are not IGNORABLE will
     // fail at CheckFieldsAccessed() when this condition is met.
@@ -3526,6 +3592,12 @@ absl::Status SQLBuilder::VisitResolvedProjectScan(
 
   // Capture has_group_by_clause before possibly wrapping the query.
   bool has_group_by_clause = query_expression->HasGroupByClause();
+  // For a plain table-scan input in Pipe mode, reference its columns by their
+  // natural names so we append `|> SELECT/EXTEND` directly onto `FROM <table>`
+  // rather than wrapping the scan under a fresh alias.
+  GOOGLESQL_RETURN_IF_ERROR(
+      TryUseLeafTableScanColumns(node->input_scan(), query_expression.get())
+          .status());
   if (query_expression->CanFormSQLQuery()) {
     GOOGLESQL_RETURN_IF_ERROR(
         WrapQueryExpression(node->input_scan(), query_expression.get()));
@@ -4303,6 +4375,33 @@ absl::Status SQLBuilder::SetPathForColumnsInScan(const ResolvedScan* scan,
                                           ToIdentifierLiteral(column.name())));
   }
   return absl::OkStatus();
+}
+
+absl::StatusOr<bool> SQLBuilder::TryUseLeafTableScanColumns(
+    const ResolvedScan* input_scan, QueryExpression* input_qe) {
+  if (!IsPipeSyntaxTargetMode()) {
+    return false;
+  }
+  if (input_scan->node_kind() != RESOLVED_TABLE_SCAN) {
+    return false;
+  }
+  const auto* table_scan = input_scan->GetAs<ResolvedTableScan>();
+  if (table_scan->table()->IsValueTable()) {
+    return false;
+  }
+  GOOGLESQL_RETURN_IF_ERROR(SetPathForColumnsInScan(
+      table_scan,
+      googlesql_base::FindWithDefault(table_alias_map(), table_scan->table())));
+  // Reserve a (natural-name) alias for each table column so that columns later
+  // derived from them -- e.g. a group-by key `k := <table_column>` -- are made
+  // globally unique against them and don't produce ambiguous bare references.
+  // When the table scan is collapsed into a consumer (e.g. an aggregate) its
+  // columns are otherwise referenced only by path and never get an alias.
+  for (const ResolvedColumn& column : table_scan->column_list()) {
+    GetColumnAlias(column);
+  }
+  input_qe->ResetSelectClause();
+  return true;
 }
 
 absl::Status SQLBuilder::SetPathForColumnsInReturningExpr(
@@ -5693,6 +5792,23 @@ static absl::Status CheckNoSuccessiveAggregateScansWithDeferredColumns(
   return absl::OkStatus();
 }
 
+// Returns the set of group-by key column ids that, in Pipe syntax mode, must
+// always be materialized by a preceding `|> EXTEND` rather than inlined into the
+// pipe GROUP BY clause: constant/literal keys, since a bare literal is rejected
+// there as an ordinal or "GROUP BY literal value". (Additional keys may be
+// materialized at render time inside ROLLUP/CUBE/grouping-sets; see
+// QueryExpression::TryAppendGroupByClause.)
+static absl::flat_hash_set<int> ComputePipeGroupByForcedExtendColumns(
+    const ResolvedAggregateScanBase* node) {
+  absl::flat_hash_set<int> columns_to_extend;
+  for (const auto& computed_col : node->group_by_list()) {
+    if (computed_col->expr()->Is<ResolvedLiteral>()) {
+      columns_to_extend.insert(computed_col->column().column_id());
+    }
+  }
+  return columns_to_extend;
+}
+
 absl::Status SQLBuilder::ProcessAggregateScanBase(
     const ResolvedAggregateScanBase* node, bool is_differencial_privacy_scan,
     absl::flat_hash_map<int, int> grouping_column_id_map,
@@ -5704,6 +5820,11 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
         node->grouping_set_list(), node->rollup_column_list(),
         rollup_column_id_list, grouping_set_ids_info));
   }
+  // For a plain table-scan input in Pipe mode, reference its columns by their
+  // natural names so we append `|> AGGREGATE` directly onto `FROM <table>`
+  // rather than wrapping the scan under a fresh alias.
+  GOOGLESQL_RETURN_IF_ERROR(
+      TryUseLeafTableScanColumns(node->input_scan(), query_expression).status());
   if (!query_expression->CanSetGroupByClause()) {
     GOOGLESQL_RETURN_IF_ERROR(WrapQueryExpression(node->input_scan(), query_expression));
   }
@@ -5769,15 +5890,18 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
         group_by_list, group_by_hints, grouping_set_ids_info,
         rollup_column_id_list));
   }
+  query_expression->SetGroupByForcedExtendColumns(
+      ComputePipeGroupByForcedExtendColumns(node));
   if (!scans_to_collapse_.contains(node)) {
     // In Pipe syntax mode, `|> AGGREGATE ... GROUP BY` emits an output column
     // for every grouping key. When the aggregate groups by columns that the
     // resolver pruned from its output column list, add those columns to the
     // select list so the grouping keys get aliases (required by pipe syntax).
-    // The pipe AGGREGATE then emits them as extra trailing output columns; the
-    // aggregate visitor appends a `|> SELECT` that projects them away again (see
-    // AppendPipeAggregateOutputProjectionIfNeeded). In the common case (all
-    // grouping keys are already output) nothing is added.
+    // The pipe AGGREGATE then emits them as extra trailing output columns. This
+    // is harmless -- the aggregate faithfully computes those grouping keys -- and
+    // a later operator (e.g. the statement's final projection) drops any that the
+    // query does not output. In the common case (all grouping keys are already
+    // output) nothing is added.
     //
     // Scans that are unsupported in pipe syntax (anonymized / aggregation
     // threshold) are rendered as a standard-syntax subquery by their consumer,
@@ -5810,42 +5934,6 @@ absl::Status SQLBuilder::ProcessAggregateScanBase(
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<QueryExpression>>
-SQLBuilder::AppendPipeAggregateOutputProjectionIfNeeded(
-    const ResolvedColumnList& output_column_list,
-    std::unique_ptr<QueryExpression> query_expression) {
-  if (!IsPipeSyntaxTargetMode()) {
-    return query_expression;
-  }
-  // ProcessAggregateScanBase appends grouping keys that are not in the
-  // aggregate's output (pruned by the resolver) after the real output columns
-  // in the select list, so that a valid pipe AGGREGATE can be formed. When it
-  // did, the pipe AGGREGATE emits those keys as extra trailing output columns;
-  // append a `|> SELECT` operator that projects back to exactly the aggregate's
-  // output columns (the leading select-list entries, referenced by alias). In
-  // the common case the select list matches the output columns and nothing is
-  // appended.
-  //
-  // An aggregate with an empty output column list (select_list is then a single
-  // "NULL" placeholder) never augments its grouping keys, so it is left alone.
-  if (output_column_list.empty()) {
-    return query_expression;
-  }
-  const QueryExpression::SQLAliasPairList& select_list =
-      query_expression->SelectList();
-  if (select_list.size() <= output_column_list.size()) {
-    return query_expression;
-  }
-  std::vector<std::string> output_column_aliases;
-  output_column_aliases.reserve(output_column_list.size());
-  for (int i = 0; i < output_column_list.size(); ++i) {
-    output_column_aliases.push_back(select_list[i].second);
-  }
-  return AppendPipeOperator(
-      query_expression->GetSQLQuery(QueryExpression::TargetSyntaxMode::kPipe),
-      absl::StrCat("SELECT ", absl::StrJoin(output_column_aliases, ", ")));
-}
-
 absl::Status SQLBuilder::VisitResolvedAggregateScan(
     const ResolvedAggregateScan* node) {
   GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<QueryFragment> input_result,
@@ -5859,10 +5947,6 @@ absl::Status SQLBuilder::VisitResolvedAggregateScan(
   GOOGLESQL_RETURN_IF_ERROR(
       ProcessAggregateScanBase(node, /*is_differencial_privacy_scan=*/false,
                                grouping_column_id_map, query_expression.get()));
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      query_expression,
-      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
-                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }
@@ -5888,10 +5972,6 @@ absl::Status SQLBuilder::VisitResolvedAnonymizedAggregateScan(
   GOOGLESQL_RET_CHECK(query_expression->TrySetWithAnonymizationClause(
       anonymization_options_sql));
 
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      query_expression,
-      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
-                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
 
   // The k_threshold is not mapped back to sql, so we can safely ignore it.
@@ -5921,10 +6001,6 @@ absl::Status SQLBuilder::VisitResolvedDifferentialPrivacyAggregateScan(
   GOOGLESQL_RETURN_IF_ERROR(AppendOptions(node->option_list(), &options_sql));
   GOOGLESQL_RET_CHECK(query_expression->TrySetWithAnonymizationClause(options_sql));
 
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      query_expression,
-      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
-                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
 
   // The group_selection_threshold_expr is not mapped back to sql, so we can
@@ -5959,10 +6035,6 @@ absl::Status SQLBuilder::VisitResolvedAggregationThresholdAggregateScan(
   GOOGLESQL_RETURN_IF_ERROR(AppendOptions(node->option_list(), &options_sql));
   GOOGLESQL_RET_CHECK(query_expression->TrySetWithAnonymizationClause(options_sql));
 
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      query_expression,
-      AppendPipeAggregateOutputProjectionIfNeeded(node->column_list(),
-                                                  std::move(query_expression)));
   PushSQLForQueryExpression(node, query_expression.release());
   return absl::OkStatus();
 }
@@ -12311,9 +12383,19 @@ absl::StatusOr<std::string> SQLBuilder::GetInputPipeSQL(
   // columns the caller already bound -- so it is rendered directly with no
   // re-aliasing wrapper. GetSQLQuery(kPipe) supplies the leading FROM keyword
   // for a bare table and emits an already-pipe string verbatim.
-  if (input_qe->CanFormSQLQuery()) {
-    GOOGLESQL_RETURN_IF_ERROR(
-        MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
+  //
+  // For a plain table-scan input, expose its columns by their natural names so
+  // the operator appends directly onto `FROM <table>`. For any other input that
+  // already carries a SELECT / AGGREGATE / set operation, reference its output
+  // columns by the (unique) bare aliases it already produced, rather than
+  // binding them under a fresh `|> AS <rangevar>`. A bare pipe head (a running
+  // pipe query whose columns the caller already bound) is rendered directly.
+  GOOGLESQL_ASSIGN_OR_RETURN(bool used_leaf_columns,
+                   TryUseLeafTableScanColumns(input_scan, input_qe));
+  if (!used_leaf_columns && input_qe->CanFormSQLQuery()) {
+    for (const ResolvedColumn& column : input_scan->column_list()) {
+      SetPathForColumn(column, GetColumnAlias(column));
+    }
   }
   return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
 }
@@ -12479,8 +12561,17 @@ absl::StatusOr<std::string> SQLBuilder::RenderPipeOperatorInput(
     // The input is a subpipeline operator chain; append directly onto it.
     return std::string(input_qe->FromClause());
   }
-  GOOGLESQL_RETURN_IF_ERROR(
-      MaybeWrapStandardQueryAsPipeQuery(input_scan, input_qe));
+  // For a plain table-scan input, reference its columns by their natural names.
+  // For a structured input (carrying a SELECT / AGGREGATE / set operation),
+  // reference its output columns by their bare aliases. A bare pipe head is
+  // rendered directly. None of these need a `|> AS <rangevar>` wrapper.
+  GOOGLESQL_ASSIGN_OR_RETURN(bool used_leaf_columns,
+                   TryUseLeafTableScanColumns(input_scan, input_qe));
+  if (!used_leaf_columns && input_qe->CanFormSQLQuery()) {
+    for (const ResolvedColumn& column : input_scan->column_list()) {
+      SetPathForColumn(column, GetColumnAlias(column));
+    }
+  }
   return input_qe->GetSQLQuery(TargetSyntaxMode::kPipe);
 }
 

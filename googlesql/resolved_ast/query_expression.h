@@ -297,6 +297,12 @@ class QueryExpression {
   // Returns the alias of the group-by column by its column id.
   std::string GetGroupByColumnAliasOrDie(int column_id) const;
 
+  // Returns the select-list SQL expression of the group-by column by its column
+  // id. Used in Pipe syntax mode to inline a group-by key expression (e.g.
+  // inside `ROLLUP(...)`/`CUBE(...)`/`GROUPING SETS(...)`, where the grammar
+  // forbids aliases) instead of referencing a preceding `|> EXTEND` alias.
+  std::string GetGroupByColumnSqlOrDie(int column_id) const;
+
   // Returns true if all group-by columns have aliases.
   bool AllGroupByColumnsHaveAliases() const;
 
@@ -319,6 +325,14 @@ class QueryExpression {
 
   void SetGroupByColumn(int column_id, std::string column_sql) {
     group_by_list_.insert_or_assign(column_id, column_sql);
+  }
+
+  // Records the set of group-by key column ids that must always be materialized
+  // via a preceding `|> EXTEND` instead of being inlined into the pipe
+  // `GROUP BY` clause (constant/literal keys). See
+  // `group_by_forced_extend_columns_`.
+  void SetGroupByForcedExtendColumns(absl::flat_hash_set<int> column_ids) {
+    group_by_forced_extend_columns_ = std::move(column_ids);
   }
 
   absl::Status SetGroupByAllClause(
@@ -360,7 +374,8 @@ class QueryExpression {
   // Appenders for each clause. If the clause exists, they create the SQL for
   // the clause and append it to <sql>. They return true if the clause SQL is
   // appended, false otherwise.
-  bool TryAppendSelectClause(std::string& sql) const;
+  bool TryAppendSelectClause(std::string& sql,
+                             bool omit_redundant_aliases = false) const;
   bool TryAppendSetOpClauses(std::string& sql,
                              TargetSyntaxMode target_syntax_mode) const;
   bool TryAppendPivotClause(std::string& sql) const;
@@ -478,6 +493,15 @@ class QueryExpression {
   std::vector<int> rollup_column_id_list_;
   // Column IDs of group by keys.
   GroupingSetIdsInfo grouping_set_ids_info_;
+
+  // Column IDs of the group-by keys that, in Pipe syntax mode, must always be
+  // materialized via a preceding `|> EXTEND ... AS <alias>` and then referenced
+  // by alias, rather than inlined directly into the pipe GROUP BY clause. These
+  // are constant/literal keys: a bare literal is rejected as an ordinal or
+  // "GROUP BY literal value". Inside ROLLUP/CUBE/grouping-sets, additional keys
+  // are materialized at render time (see TryAppendGroupByClause) because the
+  // grammar forbids aliases there.
+  absl::flat_hash_set<int> group_by_forced_extend_columns_;
 
   std::string group_by_hints_;
 

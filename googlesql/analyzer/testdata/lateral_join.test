@@ -123,30 +123,26 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> CROSS JOIN
    LATERAL
    (
      FROM
        KeyValue
      |> SELECT
-          KeyValue.Key AS a_4,
-          KeyValue.Value AS a_5
-     |> AS keyvalue_6
-     |> SELECT
-          keyvalue_6.a_4 AS a_4,
-          keyvalue_6.a_5 AS a_5,
-          RAND() AS a_7
-     |> AS projectscan_8
+          KeyValue.Key AS Key_2,
+          KeyValue.Value AS Value_2,
+          RAND() AS r
+     |> AS projectscan_2
    )
 |> SELECT
-     keyvalue_3.a_1 AS Key,
-     keyvalue_3.a_2 AS Value,
-     projectscan_8.a_4 AS Key,
-     projectscan_8.a_5 AS Value,
-     projectscan_8.a_7 AS r;
+     keyvalue_1.Key,
+     keyvalue_1.Value,
+     projectscan_2.Key_2 AS Key,
+     projectscan_2.Value_2 AS Value,
+     projectscan_2.r;
 ==
 
 # LATERAL cannot be combined with postfix operators.
@@ -231,30 +227,26 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> CROSS JOIN
    LATERAL
    (
      FROM
        KeyValue
      |> SELECT
-          KeyValue.Key AS a_4,
-          KeyValue.Value AS a_5
-     |> AS keyvalue_6
-     |> SELECT
-          keyvalue_6.a_4 AS a_4,
-          keyvalue_6.a_5 AS a_5,
-          RAND() AS a_7
-     |> AS projectscan_8
+          KeyValue.Key AS Key_2,
+          KeyValue.Value AS Value_2,
+          RAND() AS r
+     |> AS projectscan_2
    )
 |> SELECT
-     keyvalue_3.a_1 AS Key,
-     keyvalue_3.a_2 AS Value,
-     projectscan_8.a_4 AS Key,
-     projectscan_8.a_5 AS Value,
-     projectscan_8.a_7 AS r;
+     keyvalue_1.Key,
+     keyvalue_1.Value,
+     projectscan_2.Key_2 AS Key,
+     projectscan_2.Value_2 AS Value,
+     projectscan_2.r;
 ==
 
 # Ensure the scoping visibility for LATERAL on an LHS of a join that itself is
@@ -407,44 +399,44 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> RIGHT JOIN
    (
      FROM
        KeyValue
      |> SELECT
-          KeyValue.Key AS a_4,
-          KeyValue.Value AS a_5
-     |> AS keyvalue_6
+          KeyValue.Key AS Key_2,
+          KeyValue.Value AS Value_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_3.a_1) = (keyvalue_6.a_4)
+   ON (keyvalue_1.Key) = (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2,
-     keyvalue_6.a_4 AS a_4,
-     keyvalue_6.a_5 AS a_5
-|> AS joinscan_7
+     keyvalue_1.Key,
+     keyvalue_1.Value,
+     keyvalue_2.Key_2,
+     keyvalue_2.Value_2
+|> AS joinscan_3
 |> CROSS JOIN
    LATERAL
    (
      FROM
        KeyValue
      |> WHERE
-          (KeyValue.Key) < ((joinscan_7.a_1) + (joinscan_7.a_4))
+          (KeyValue.Key) < ((joinscan_3.Key) + (joinscan_3.Key_2))
      |> SELECT
-          KeyValue.Key AS a_8,
-          KeyValue.Value AS a_9
-     |> AS projectscan_10
+          KeyValue.Key AS Key_3,
+          KeyValue.Value AS Value_3
+     |> AS projectscan_4
    )
 |> SELECT
-     joinscan_7.a_1 AS Key,
-     joinscan_7.a_2 AS Value,
-     joinscan_7.a_4 AS Key,
-     joinscan_7.a_5 AS Value,
-     projectscan_10.a_8 AS Key,
-     projectscan_10.a_9 AS Value;
+     joinscan_3.Key,
+     joinscan_3.Value,
+     joinscan_3.Key_2 AS Key,
+     joinscan_3.Value_2 AS Value,
+     projectscan_4.Key_3 AS Key,
+     projectscan_4.Value_3 AS Value;
 --
 ALTERNATION GROUPS:
     FULL,
@@ -546,44 +538,44 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> FULL JOIN
    (
      FROM
        KeyValue
      |> SELECT
-          KeyValue.Key AS a_4,
-          KeyValue.Value AS a_5
-     |> AS keyvalue_6
+          KeyValue.Key AS Key_2,
+          KeyValue.Value AS Value_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_3.a_1) = (keyvalue_6.a_4)
+   ON (keyvalue_1.Key) = (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2,
-     keyvalue_6.a_4 AS a_4,
-     keyvalue_6.a_5 AS a_5
-|> AS joinscan_7
+     keyvalue_1.Key,
+     keyvalue_1.Value,
+     keyvalue_2.Key_2,
+     keyvalue_2.Value_2
+|> AS joinscan_3
 |> CROSS JOIN
    LATERAL
    (
      FROM
        KeyValue
      |> WHERE
-          (KeyValue.Key) < ((joinscan_7.a_1) + (joinscan_7.a_4))
+          (KeyValue.Key) < ((joinscan_3.Key) + (joinscan_3.Key_2))
      |> SELECT
-          KeyValue.Key AS a_8,
-          KeyValue.Value AS a_9
-     |> AS projectscan_10
+          KeyValue.Key AS Key_3,
+          KeyValue.Value AS Value_3
+     |> AS projectscan_4
    )
 |> SELECT
-     joinscan_7.a_1 AS Key,
-     joinscan_7.a_2 AS Value,
-     joinscan_7.a_4 AS Key,
-     joinscan_7.a_5 AS Value,
-     projectscan_10.a_8 AS Key,
-     projectscan_10.a_9 AS Value;
+     joinscan_3.Key,
+     joinscan_3.Value,
+     joinscan_3.Key_2 AS Key,
+     joinscan_3.Value_2 AS Value,
+     projectscan_4.Key_3 AS Key,
+     projectscan_4.Value_3 AS Value;
 ==
 
 # LATERAL after RIGHT/FULL JOIN, but not underneath it.
@@ -699,45 +691,45 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> RIGHT JOIN
    (
      FROM
        KeyValue
      |> SELECT
-          KeyValue.Key AS a_4,
-          KeyValue.Value AS a_5
-     |> AS keyvalue_6
+          KeyValue.Key AS Key_2,
+          KeyValue.Value AS Value_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_3.a_1) < (keyvalue_6.a_4)
+   ON (keyvalue_1.Key) < (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2,
-     keyvalue_6.a_4 AS a_4,
-     keyvalue_6.a_5 AS a_5
-|> AS joinscan_7
+     keyvalue_1.Key,
+     keyvalue_1.Value,
+     keyvalue_2.Key_2,
+     keyvalue_2.Value_2
+|> AS joinscan_3
 |> INNER JOIN
    LATERAL
    (
      FROM
        KeyValue
      |> WHERE
-          (KeyValue.Key) < ((joinscan_7.a_1) + (joinscan_7.a_4))
+          (KeyValue.Key) < ((joinscan_3.Key) + (joinscan_3.Key_2))
      |> SELECT
-          KeyValue.Key AS a_8,
-          KeyValue.Value AS a_9
-     |> AS projectscan_10
+          KeyValue.Key AS Key_3,
+          KeyValue.Value AS Value_3
+     |> AS projectscan_4
    )
-   ON (joinscan_7.a_1) = (projectscan_10.a_8)
+   ON (joinscan_3.Key) = (projectscan_4.Key_3)
 |> SELECT
-     joinscan_7.a_1 AS Key,
-     joinscan_7.a_2 AS Value,
-     joinscan_7.a_4 AS Key,
-     joinscan_7.a_5 AS Value,
-     projectscan_10.a_8 AS Key,
-     projectscan_10.a_9 AS Value;
+     joinscan_3.Key,
+     joinscan_3.Value,
+     joinscan_3.Key_2 AS Key,
+     joinscan_3.Value_2 AS Value,
+     projectscan_4.Key_3 AS Key,
+     projectscan_4.Value_3 AS Value;
 --
 ALTERNATION GROUPS:
     FULL,
@@ -844,45 +836,45 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> FULL JOIN
    (
      FROM
        KeyValue
      |> SELECT
-          KeyValue.Key AS a_4,
-          KeyValue.Value AS a_5
-     |> AS keyvalue_6
+          KeyValue.Key AS Key_2,
+          KeyValue.Value AS Value_2
+     |> AS keyvalue_2
    )
-   ON (keyvalue_3.a_1) < (keyvalue_6.a_4)
+   ON (keyvalue_1.Key) < (keyvalue_2.Key_2)
 |> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2,
-     keyvalue_6.a_4 AS a_4,
-     keyvalue_6.a_5 AS a_5
-|> AS joinscan_7
+     keyvalue_1.Key,
+     keyvalue_1.Value,
+     keyvalue_2.Key_2,
+     keyvalue_2.Value_2
+|> AS joinscan_3
 |> INNER JOIN
    LATERAL
    (
      FROM
        KeyValue
      |> WHERE
-          (KeyValue.Key) < ((joinscan_7.a_1) + (joinscan_7.a_4))
+          (KeyValue.Key) < ((joinscan_3.Key) + (joinscan_3.Key_2))
      |> SELECT
-          KeyValue.Key AS a_8,
-          KeyValue.Value AS a_9
-     |> AS projectscan_10
+          KeyValue.Key AS Key_3,
+          KeyValue.Value AS Value_3
+     |> AS projectscan_4
    )
-   ON (joinscan_7.a_1) = (projectscan_10.a_8)
+   ON (joinscan_3.Key) = (projectscan_4.Key_3)
 |> SELECT
-     joinscan_7.a_1 AS Key,
-     joinscan_7.a_2 AS Value,
-     joinscan_7.a_4 AS Key,
-     joinscan_7.a_5 AS Value,
-     projectscan_10.a_8 AS Key,
-     projectscan_10.a_9 AS Value;
+     joinscan_3.Key,
+     joinscan_3.Value,
+     joinscan_3.Key_2 AS Key,
+     joinscan_3.Value_2 AS Value,
+     projectscan_4.Key_3 AS Key,
+     projectscan_4.Value_3 AS Value;
 ==
 
 # LATERAL join referencing an outer correlated column.
@@ -986,33 +978,30 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Value AS a_1
-|> AS keyvalue_2
-|> SELECT
      EXISTS(
        FROM
          KeyValue
        |> SELECT
-            KeyValue.Key AS a_4,
-            KeyValue.Value AS a_5
-       |> AS keyvalue_6
+            KeyValue.Key,
+            KeyValue.Value AS Value_2
+       |> AS keyvalue_1
        |> CROSS JOIN
           LATERAL
           (
             FROM
               KeyValue
             |> WHERE
-                 ((KeyValue.Key) < (keyvalue_6.a_4)) AND ((KeyValue.Value) < (keyvalue_2.a_1))
+                 ((KeyValue.Key) < (keyvalue_1.Key)) AND ((KeyValue.Value) < (KeyValue.Value))
             |> SELECT
-                 KeyValue.Key AS a_7,
-                 KeyValue.Value AS a_8
-            |> AS projectscan_9
+                 KeyValue.Key AS Key_2,
+                 KeyValue.Value AS Value_3
+            |> AS projectscan_2
           )
        |> SELECT
-            keyvalue_6.a_4 AS a_4,
-            keyvalue_6.a_5 AS a_5,
-            projectscan_9.a_7 AS a_7,
-            projectscan_9.a_8 AS a_8
+            keyvalue_1.Key,
+            keyvalue_1.Value_2,
+            projectscan_2.Key_2,
+            projectscan_2.Value_3
      ) AS e;
 ==
 

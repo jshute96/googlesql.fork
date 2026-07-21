@@ -12478,32 +12478,33 @@ FROM
 FROM
   CollatedTable
 |> SELECT
-     CollatedTable.string_ci AS a_1,
-     CollatedTable.string_binary AS a_2
-|> AS collatedtable_3
-|> SELECT
-     collatedtable_3.a_1 AS a_1,
-     collatedtable_3.a_2 AS a_2,
-     CONCAT(collatedtable_3.a_1, collatedtable_3.a_1) AS a_4,
-     CONCAT(collatedtable_3.a_2, collatedtable_3.a_2) AS a_5,
-     CONCAT(collatedtable_3.a_2, collatedtable_3.a_2) AS a_6
-|> AS projectscan_7
+     CollatedTable.string_ci,
+     CollatedTable.string_binary,
+     CONCAT(CollatedTable.string_ci, CollatedTable.string_ci) AS a_1,
+     CONCAT(CollatedTable.string_binary, CollatedTable.string_binary) AS a_2,
+     CONCAT(CollatedTable.string_binary, CollatedTable.string_binary) AS a_3
+|> AS projectscan_4
 |> MATCH_RECOGNIZE(
-     PARTITION BY projectscan_7.a_4, projectscan_7.a_5
-     ORDER BY projectscan_7.a_6 DESC NULLS FIRST
+     PARTITION BY projectscan_4.a_1, projectscan_4.a_2
+     ORDER BY projectscan_4.a_3 DESC NULLS FIRST
      MEASURES
-       MIN(projectscan_7.a_2) AS a_8,
-       MATCH_NUMBER() AS a_9
+       MIN(projectscan_4.string_binary) AS a_5,
+       MATCH_NUMBER() AS a_6
      AFTER MATCH SKIP PAST LAST ROW
      PATTERN ((A  A))
      DEFINE
-       A AS(LENGTH(projectscan_7.a_2)) < 10
+       A AS(LENGTH(projectscan_4.string_binary)) < 10
    )
-   AS matchrecognizescan_10
+   AS matchrecognizescan_7
 |> SELECT
-     matchrecognizescan_10.a_4 AS a_4,
-     matchrecognizescan_10.a_5 AS a_5,
-     matchrecognizescan_10.a_8 AS x;
+     matchrecognizescan_7.a_1,
+     matchrecognizescan_7.a_2,
+     matchrecognizescan_7.a_5 AS x
+|> AS projectscan_8
+|> SELECT
+     projectscan_8.a_1,
+     projectscan_8.a_2,
+     projectscan_8.x;
 ==
 
 # Collation through the MEASURES clause.

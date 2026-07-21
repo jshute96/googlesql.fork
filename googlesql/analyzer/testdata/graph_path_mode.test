@@ -1701,16 +1701,19 @@ FROM
     aml
     MATCH
       TRAIL
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
+      -[a_2 IS (% | ! %)]-
+      (b IS (% | ! %))
       -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
-      -[a_5 IS (% | ! %)]-
-      (a_6 IS (% | ! %))
+      (c IS (% | ! %))
     RETURN
-      42 AS a_7
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # WALK path mode on top-level path.
@@ -1843,16 +1846,19 @@ FROM
     aml
     MATCH
       WALK
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
+      -[a_2 IS (% | ! %)]-
+      (b IS (% | ! %))
       -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
-      -[a_5 IS (% | ! %)]-
-      (a_6 IS (% | ! %))
+      (c IS (% | ! %))
     RETURN
-      42 AS a_7
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # SIMPLE path mode on top-level path.
@@ -1985,16 +1991,19 @@ FROM
     aml
     MATCH
       SIMPLE
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
+      -[a_2 IS (% | ! %)]-
+      (b IS (% | ! %))
       -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
-      -[a_5 IS (% | ! %)]-
-      (a_6 IS (% | ! %))
+      (c IS (% | ! %))
     RETURN
-      42 AS a_7
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # ACYCLIC path mode on top-level path.
@@ -2127,16 +2136,19 @@ FROM
     aml
     MATCH
       ACYCLIC
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
+      -[a_2 IS (% | ! %)]-
+      (b IS (% | ! %))
       -[a_3 IS (% | ! %)]-
-      (a_4 IS (% | ! %))
-      -[a_5 IS (% | ! %)]-
-      (a_6 IS (% | ! %))
+      (c IS (% | ! %))
     RETURN
-      42 AS a_7
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # TRAIL path mode does not apply to whole graph pattern.
@@ -2395,23 +2407,26 @@ FROM
     aml
     MATCH
       TRAIL
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
+      -[a_2 IS (% | ! %)]-
+      (b IS ((% | ! %) &(% | ! %)))
       -[a_3 IS (% | ! %)]-
-      (a_4 IS ((% | ! %) &(% | ! %)))
+      (c IS ((% | ! %) &(% | ! %))),
+      (b_2 IS ((% | ! %) &(% | ! %)))
+      -[a_4 IS (% | ! %)]-
+      (c_2 IS ((% | ! %) &(% | ! %)))
       -[a_5 IS (% | ! %)]-
-      (a_6 IS ((% | ! %) &(% | ! %))),
-      (a_7 IS ((% | ! %) &(% | ! %)))
-      -[a_8 IS (% | ! %)]-
-      (a_9 IS ((% | ! %) &(% | ! %)))
-      -[a_10 IS (% | ! %)]-
-      (a_11 IS (% | ! %))
+      (d IS (% | ! %))
       WHERE
-        (a_4 = a_7) AND (a_6 = a_9)
+        (b = b_2) AND (c = c_2)
     RETURN
-      42 AS a_12
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_12 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_6
+|> SELECT
+     graphtablescan_6.the_answer;
 ==
 
 # TRAIL path mode works with quantified paths.
@@ -2560,18 +2575,21 @@ FROM
     aml
     MATCH
       TRAIL
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
       (
+        (a_2 IS (% | ! %))
+        -[e IS (% | ! %)]-
         (a_3 IS (% | ! %))
-        -[a_4 IS (% | ! %)]-
-        (a_5 IS (% | ! %))
       ) { 1, 3 }
-      (a_6 IS (% | ! %))
+      (b IS (% | ! %))
     RETURN
-      42 AS a_7
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # ACYCLIC path mode works with quantified paths.
@@ -2720,18 +2738,21 @@ FROM
     aml
     MATCH
       ACYCLIC
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
       (
+        (a_2 IS (% | ! %))
+        -[e IS (% | ! %)]-
         (a_3 IS (% | ! %))
-        -[a_4 IS (% | ! %)]-
-        (a_5 IS (% | ! %))
       ) { 1, 3 }
-      (a_6 IS (% | ! %))
+      (b IS (% | ! %))
     RETURN
-      42 AS a_7
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # Nested path modes work.
@@ -2873,19 +2894,22 @@ FROM
     aml
     MATCH
       TRAIL
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
       (
         SIMPLE
+        (a_2 IS (% | ! %))
+        -[e IS (% | ! %)]-
         (a_3 IS (% | ! %))
-        -[a_4 IS (% | ! %)]-
-        (a_5 IS (% | ! %))
       )
-      (a_6 IS (% | ! %))
+      (c IS (% | ! %))
     RETURN
-      42 AS a_7
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_7 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 
@@ -3081,24 +3105,27 @@ FROM
   GRAPH_TABLE(
     aml
     MATCH
-      (a_2 IS (% | ! %))
+      (a IS (% | ! %))
       (
         ACYCLIC
-        (a_3 IS (% | ! %))
-        -[a_4 IS (% | ! %)]-
-        (a_5 IS (% | ! %))
+        (a_2 IS (% | ! %))
+        -[e1 IS (% | ! %)]-
+        (n1 IS (% | ! %))
         (
-          (a_6 IS (% | ! %))
-          -[a_7 IS (% | ! %)]-
-          (a_8 IS (% | ! %))
+          (a_3 IS (% | ! %))
+          -[e2 IS (% | ! %)]-
+          (a_4 IS (% | ! %))
         ) { 1, 3 }
       )
-      (a_9 IS (% | ! %))
+      (b IS (% | ! %))
     RETURN
-      42 AS a_10
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_10 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 # TRAIL path mode works with paths created from quantified edges.
@@ -3237,17 +3264,20 @@ FROM
       (
         (
           (a_2 IS (% | ! %))
-          -[a_3 IS (% | ! %)]-
-          (a_4 IS (% | ! %))
+          -[e IS (% | ! %)]-
+          (a_3 IS (% | ! %))
         ) { 1, 3 }
         WHERE
           20 > 10
       )
     RETURN
-      42 AS a_5
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_4
+|> SELECT
+     graphtablescan_4.the_answer;
 ==
 
 # Path modes work with paths that have ASTGraphPathPattern nodes stripped.
@@ -3370,10 +3400,13 @@ FROM
         (a_4 IS (% | ! %))
       )
     RETURN
-      42 AS a_5
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 # Path modes work with quantified paths that have been converted from quantified
@@ -3503,10 +3536,13 @@ FROM
         (a_4 IS (% | ! %))
       ) { 5, 5 }
     RETURN
-      42 AS a_5
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 # Nested path modes work with quantified paths that have been converted from
@@ -3649,10 +3685,13 @@ FROM
         ) { 5, 5 }
       )
     RETURN
-      42 AS a_5
+      42 AS the_answer
   ) AS aml_1
 |> SELECT
-     aml_1.a_5 AS the_answer;
+     aml_1.the_answer
+|> AS graphtablescan_5
+|> SELECT
+     graphtablescan_5.the_answer;
 ==
 
 [default language_features=NONE,+SQL_GRAPH,+SQL_GRAPH_ADVANCED_QUERY,+SQL_GRAPH_BOUNDED_PATH_QUANTIFICATION,+SQL_GRAPH_PATH_MODE]
@@ -6309,4 +6348,3 @@ SELECT one FROM GRAPH_TABLE(
 ERROR: Path pattern with path mode and search prefix is not allowed [at 3:9]
   MATCH ANY SHORTEST TRAIL -[b]->
         ^
-

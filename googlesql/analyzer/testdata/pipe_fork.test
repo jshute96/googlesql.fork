@@ -1511,15 +1511,7 @@ GeneralizedQueryStmt
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> ORDER BY keyvalue_3.a_1
-|> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2
-|> AS orderbyscan_4
+|> ORDER BY KeyValue.Key
 |> FORK (
      |> LIMIT 1
    );
@@ -1532,22 +1524,15 @@ GeneralizedQueryStmt
 +-query=
   +-PipeForkScan
     +-input_scan=
-    | +-ProjectScan
+    | +-OrderByScan
     |   +-column_list=KeyValue.[Key#1, Value#2]
     |   +-is_ordered=TRUE
     |   +-input_scan=
-    |     +-OrderByScan
-    |       +-column_list=KeyValue.[Key#1, Value#2]
-    |       +-is_ordered=TRUE
-    |       +-input_scan=
-    |       | +-ProjectScan
-    |       |   +-column_list=KeyValue.[Key#1, Value#2]
-    |       |   +-input_scan=
-    |       |     +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
-    |       +-order_by_item_list=
-    |         +-OrderByItem
-    |           +-column_ref=
-    |             +-ColumnRef(type=INT64, column=KeyValue.Key#1)
+    |   | +-TableScan(column_list=KeyValue.[Key#1, Value#2], table=KeyValue, column_index_list=[0, 1])
+    |   +-order_by_item_list=
+    |     +-OrderByItem
+    |       +-column_ref=
+    |         +-ColumnRef(type=INT64, column=KeyValue.Key#1)
     +-subpipeline_list=
       +-GeneralizedQuerySubpipeline
         +-subpipeline=
@@ -1562,8 +1547,8 @@ GeneralizedQueryStmt
         +-output_schema=
           +-OutputSchema
             +-output_column_list=
-              +-KeyValue.Key#1 AS a_1 [INT64]
-              +-KeyValue.Value#2 AS a_2 [STRING]
+              +-KeyValue.Key#1 AS Key [INT64]
+              +-KeyValue.Value#2 AS Value [STRING]
 
 [REWRITTEN AST]
 MultiStmt

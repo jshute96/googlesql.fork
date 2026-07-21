@@ -7591,11 +7591,11 @@ FROM
       1 AS a_1
     |> AS projectscan_2
     |> SELECT
-         a_1 AS a_1
+         a_1
   )) AS tvfscan_3
 |> SELECT
-     tvfscan_3.column_bool AS column_bool,
-     tvfscan_3.column_bytes AS column_bytes;
+     tvfscan_3.column_bool,
+     tvfscan_3.column_bytes;
 ==
 
 # Test with named table after named struct.
@@ -7886,15 +7886,15 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> SELECT
-     a_1 AS Key,
-     a_2 AS Value
-|> CALL TVF_OPTIONAL_RELATION_NAMED_SCALAR(foobar  => "a") AS tvfscan_4
+     Key,
+     Value
+|> CALL TVF_OPTIONAL_RELATION_NAMED_SCALAR(foobar  => "a") AS tvfscan_2
 |> SELECT
-     tvfscan_4 AS a_5;
+     tvfscan_2 AS a_3;
 ==
 
 # Test with optional relation and named scalar arguments.
@@ -8006,15 +8006,15 @@ FROM
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
+     KeyValue.Key,
+     KeyValue.Value
+|> AS keyvalue_1
 |> SELECT
-     a_1 AS Key,
-     a_2 AS Value
-|> CALL TVF_OPTIONAL_RELATIONS_NAMED_SCALAR() AS tvfscan_4
+     Key,
+     Value
+|> CALL TVF_OPTIONAL_RELATIONS_NAMED_SCALAR() AS tvfscan_2
 |> SELECT
-     tvfscan_4 AS a_5;
+     tvfscan_2 AS a_3;
 ==
 
 # Test with optional relation and named scalar arguments.

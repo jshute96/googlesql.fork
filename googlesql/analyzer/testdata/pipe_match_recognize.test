@@ -132,102 +132,88 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  staticdescribescan_14.a_4 AS key,
-  staticdescribescan_14.a_11 AS m
+  staticdescribescan_13.a_4 AS key,
+  staticdescribescan_13.a_11 AS m
 FROM
   (
     SELECT
-      filterscan_13.a_4 AS a_4,
-      filterscan_13.a_11 AS a_11
+      projectscan_12.a_4 AS a_4,
+      projectscan_12.a_11 AS a_11
     FROM
       (
-        SELECT
-          projectscan_12.a_4 AS a_4,
-          projectscan_12.a_11 AS a_11
-        FROM
-          (
-            SELECT
-              matchrecognizescan_10.a_4 AS a_4,
-              (matchrecognizescan_10.a_8) - (matchrecognizescan_10.a_7) AS a_11
-            FROM
-              (
-                SELECT
-                  keyvalue_3.a_1 AS a_1,
-                  keyvalue_3.a_2 AS a_2,
-                  keyvalue_3.a_1 AS a_4,
-                  (keyvalue_3.a_1) + 1 AS a_5
-                FROM
-                  (
-                    SELECT
-                      KeyValue.Key AS a_1,
-                      KeyValue.Value AS a_2
-                    FROM
-                      KeyValue
-                  ) AS keyvalue_3
-              ) AS projectscan_6 MATCH_RECOGNIZE(
-                PARTITION BY projectscan_6.a_4
-                ORDER BY projectscan_6.a_5 DESC
-                MEASURES
-                  MIN(LENGTH(projectscan_6.a_2)) AS a_7,
-                  MAX(LENGTH(a.a_2)) AS a_8,
-                  MATCH_NUMBER() AS a_9
-                AFTER MATCH SKIP TO NEXT ROW
-                PATTERN (a)
-                DEFINE
-                  a AS(LENGTH(projectscan_6.a_2)) < 10
-                OPTIONS(use_longest_match = true)
-              )
-              AS matchrecognizescan_10
-          ) AS projectscan_12
-        WHERE
-          ((projectscan_12.a_11) + (projectscan_12.a_4)) > 10
-        |> AS filterscan_13
+        (
+          SELECT
+            matchrecognizescan_10.a_4 AS a_4,
+            (matchrecognizescan_10.a_8) - (matchrecognizescan_10.a_7) AS a_11
+          FROM
+            (
+              SELECT
+                keyvalue_3.a_1 AS a_1,
+                keyvalue_3.a_2 AS a_2,
+                keyvalue_3.a_1 AS a_4,
+                (keyvalue_3.a_1) + 1 AS a_5
+              FROM
+                (
+                  SELECT
+                    KeyValue.Key AS a_1,
+                    KeyValue.Value AS a_2
+                  FROM
+                    KeyValue
+                ) AS keyvalue_3
+            ) AS projectscan_6 MATCH_RECOGNIZE(
+              PARTITION BY projectscan_6.a_4
+              ORDER BY projectscan_6.a_5 DESC
+              MEASURES
+                MIN(LENGTH(projectscan_6.a_2)) AS a_7,
+                MAX(LENGTH(a.a_2)) AS a_8,
+                MATCH_NUMBER() AS a_9
+              AFTER MATCH SKIP TO NEXT ROW
+              PATTERN (a)
+              DEFINE
+                a AS(LENGTH(projectscan_6.a_2)) < 10
+              OPTIONS(use_longest_match = true)
+            )
+            AS matchrecognizescan_10
+        ) AS projectscan_12
+        |> WHERE
+             ((projectscan_12.a_11) + (projectscan_12.a_4)) > 10
         |> STATIC_DESCRIBE
       )
-  ) AS staticdescribescan_14;
+  ) AS staticdescribescan_13;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2,
-     keyvalue_3.a_1 AS a_4,
-     (keyvalue_3.a_1) + 1 AS a_5
-|> AS projectscan_6
+     KeyValue.Key,
+     KeyValue.Value,
+     KeyValue.Key AS key_2,
+     (KeyValue.Key) + 1 AS a_1
+|> AS projectscan_2
 |> MATCH_RECOGNIZE(
-     PARTITION BY projectscan_6.a_4
-     ORDER BY projectscan_6.a_5 DESC
+     PARTITION BY projectscan_2.key_2
+     ORDER BY projectscan_2.a_1 DESC
      MEASURES
-       MIN(LENGTH(projectscan_6.a_2)) AS a_7,
-       MAX(LENGTH(a.a_2)) AS a_8,
-       MATCH_NUMBER() AS a_9
+       MIN(LENGTH(projectscan_2.Value)) AS a_3,
+       MAX(LENGTH(a.Value)) AS a_4,
+       MATCH_NUMBER() AS a_5
      AFTER MATCH SKIP TO NEXT ROW
      PATTERN (a)
      DEFINE
-       a AS(LENGTH(projectscan_6.a_2)) < 10
+       a AS(LENGTH(projectscan_2.Value)) < 10
      OPTIONS(use_longest_match = true)
    )
-   AS matchrecognizescan_10
+   AS matchrecognizescan_6
 |> SELECT
-     matchrecognizescan_10.a_4 AS a_4,
-     (matchrecognizescan_10.a_8) - (matchrecognizescan_10.a_7) AS a_11
-|> AS projectscan_12
+     matchrecognizescan_6.key_2,
+     (matchrecognizescan_6.a_4) - (matchrecognizescan_6.a_3) AS m
 |> WHERE
-     ((projectscan_12.a_11) + (projectscan_12.a_4)) > 10
-|> SELECT
-     projectscan_12.a_4 AS a_4,
-     projectscan_12.a_11 AS a_11
-|> AS filterscan_13
+     (m + key_2) > 10
 |> STATIC_DESCRIBE
 |> SELECT
-     filterscan_13.a_4 AS key,
-     filterscan_13.a_11 AS m;
+     key_2 AS key,
+     m;
 ==
 
 # References to the alias don't work when it's absent.
@@ -355,102 +341,88 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  staticdescribescan_14.a_4 AS key,
-  staticdescribescan_14.a_11 AS m
+  staticdescribescan_13.a_4 AS key,
+  staticdescribescan_13.a_11 AS m
 FROM
   (
     SELECT
-      filterscan_13.a_4 AS a_4,
-      filterscan_13.a_11 AS a_11
+      projectscan_12.a_4 AS a_4,
+      projectscan_12.a_11 AS a_11
     FROM
       (
-        SELECT
-          projectscan_12.a_4 AS a_4,
-          projectscan_12.a_11 AS a_11
-        FROM
-          (
-            SELECT
-              matchrecognizescan_10.a_4 AS a_4,
-              (matchrecognizescan_10.a_8) - (matchrecognizescan_10.a_7) AS a_11
-            FROM
-              (
-                SELECT
-                  keyvalue_3.a_1 AS a_1,
-                  keyvalue_3.a_2 AS a_2,
-                  keyvalue_3.a_1 AS a_4,
-                  (keyvalue_3.a_1) + 1 AS a_5
-                FROM
-                  (
-                    SELECT
-                      KeyValue.Key AS a_1,
-                      KeyValue.Value AS a_2
-                    FROM
-                      KeyValue
-                  ) AS keyvalue_3
-              ) AS projectscan_6 MATCH_RECOGNIZE(
-                PARTITION BY projectscan_6.a_4
-                ORDER BY projectscan_6.a_5 DESC
-                MEASURES
-                  MIN(LENGTH(projectscan_6.a_2)) AS a_7,
-                  MAX(LENGTH(a.a_2)) AS a_8,
-                  MATCH_NUMBER() AS a_9
-                AFTER MATCH SKIP TO NEXT ROW
-                PATTERN (a)
-                DEFINE
-                  a AS(LENGTH(projectscan_6.a_2)) < 10
-                OPTIONS(use_longest_match = true)
-              )
-              AS matchrecognizescan_10
-          ) AS projectscan_12
-        WHERE
-          ((((projectscan_12.a_11) + (projectscan_12.a_11)) + (projectscan_12.a_4)) + (projectscan_12.a_4)) > 10
-        |> AS filterscan_13
+        (
+          SELECT
+            matchrecognizescan_10.a_4 AS a_4,
+            (matchrecognizescan_10.a_8) - (matchrecognizescan_10.a_7) AS a_11
+          FROM
+            (
+              SELECT
+                keyvalue_3.a_1 AS a_1,
+                keyvalue_3.a_2 AS a_2,
+                keyvalue_3.a_1 AS a_4,
+                (keyvalue_3.a_1) + 1 AS a_5
+              FROM
+                (
+                  SELECT
+                    KeyValue.Key AS a_1,
+                    KeyValue.Value AS a_2
+                  FROM
+                    KeyValue
+                ) AS keyvalue_3
+            ) AS projectscan_6 MATCH_RECOGNIZE(
+              PARTITION BY projectscan_6.a_4
+              ORDER BY projectscan_6.a_5 DESC
+              MEASURES
+                MIN(LENGTH(projectscan_6.a_2)) AS a_7,
+                MAX(LENGTH(a.a_2)) AS a_8,
+                MATCH_NUMBER() AS a_9
+              AFTER MATCH SKIP TO NEXT ROW
+              PATTERN (a)
+              DEFINE
+                a AS(LENGTH(projectscan_6.a_2)) < 10
+              OPTIONS(use_longest_match = true)
+            )
+            AS matchrecognizescan_10
+        ) AS projectscan_12
+        |> WHERE
+             ((((projectscan_12.a_11) + (projectscan_12.a_11)) + (projectscan_12.a_4)) + (projectscan_12.a_4)) > 10
         |> STATIC_DESCRIBE
       )
-  ) AS staticdescribescan_14;
+  ) AS staticdescribescan_13;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
 |> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
-|> SELECT
-     keyvalue_3.a_1 AS a_1,
-     keyvalue_3.a_2 AS a_2,
-     keyvalue_3.a_1 AS a_4,
-     (keyvalue_3.a_1) + 1 AS a_5
-|> AS projectscan_6
+     KeyValue.Key,
+     KeyValue.Value,
+     KeyValue.Key AS key_2,
+     (KeyValue.Key) + 1 AS a_1
+|> AS projectscan_2
 |> MATCH_RECOGNIZE(
-     PARTITION BY projectscan_6.a_4
-     ORDER BY projectscan_6.a_5 DESC
+     PARTITION BY projectscan_2.key_2
+     ORDER BY projectscan_2.a_1 DESC
      MEASURES
-       MIN(LENGTH(projectscan_6.a_2)) AS a_7,
-       MAX(LENGTH(a.a_2)) AS a_8,
-       MATCH_NUMBER() AS a_9
+       MIN(LENGTH(projectscan_2.Value)) AS a_3,
+       MAX(LENGTH(a.Value)) AS a_4,
+       MATCH_NUMBER() AS a_5
      AFTER MATCH SKIP TO NEXT ROW
      PATTERN (a)
      DEFINE
-       a AS(LENGTH(projectscan_6.a_2)) < 10
+       a AS(LENGTH(projectscan_2.Value)) < 10
      OPTIONS(use_longest_match = true)
    )
-   AS matchrecognizescan_10
+   AS matchrecognizescan_6
 |> SELECT
-     matchrecognizescan_10.a_4 AS a_4,
-     (matchrecognizescan_10.a_8) - (matchrecognizescan_10.a_7) AS a_11
-|> AS projectscan_12
+     matchrecognizescan_6.key_2,
+     (matchrecognizescan_6.a_4) - (matchrecognizescan_6.a_3) AS m
 |> WHERE
-     ((((projectscan_12.a_11) + (projectscan_12.a_11)) + (projectscan_12.a_4)) + (projectscan_12.a_4)) > 10
-|> SELECT
-     projectscan_12.a_4 AS a_4,
-     projectscan_12.a_11 AS a_11
-|> AS filterscan_13
+     (((m + m) + key_2) + key_2) > 10
 |> STATIC_DESCRIBE
 |> SELECT
-     filterscan_13.a_4 AS key,
-     filterscan_13.a_11 AS m;
+     key_2 AS key,
+     m;
 ==
 
 # On a value table.
@@ -573,85 +545,77 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  staticdescribescan_11.a_8 AS m
+  staticdescribescan_10.a_8 AS m
 FROM
   (
     SELECT
-      filterscan_10.a_8 AS a_8
+      projectscan_9.a_8 AS a_8
     FROM
       (
-        SELECT
-          projectscan_9.a_8 AS a_8
-        FROM
-          (
-            SELECT
-              matchrecognizescan_7.a_5 AS a_8
-            FROM
-              (
-                SELECT
-                  testextravaluetable_2.a_1 AS a_1,
-                  CAST(testextravaluetable_2.a_1.int32_val2 AS INT64) + 1 AS a_3
-                FROM
-                  (
-                    SELECT
-                      TestExtraValueTable AS a_1
-                    FROM
-                      TestExtraValueTable
-                  ) AS testextravaluetable_2
-              ) AS projectscan_4 MATCH_RECOGNIZE(
-                ORDER BY projectscan_4.a_3 DESC
-                MEASURES
-                  ANY_VALUE(projectscan_4.a_1) AS a_5,
-                  MATCH_NUMBER() AS a_6
-                AFTER MATCH SKIP TO NEXT ROW
-                PATTERN (a)
-                DEFINE
-                  a AS true
-                OPTIONS(use_longest_match = true)
-              )
-              AS matchrecognizescan_7
-          ) AS projectscan_9
-        WHERE
-          (CAST(projectscan_9.a_8.int32_val1 AS INT64) + CAST(projectscan_9.a_8.int32_val2 AS INT64)) > 10
-        |> AS filterscan_10
+        (
+          SELECT
+            matchrecognizescan_7.a_5 AS a_8
+          FROM
+            (
+              SELECT
+                testextravaluetable_2.a_1 AS a_1,
+                CAST(testextravaluetable_2.a_1.int32_val2 AS INT64) + 1 AS a_3
+              FROM
+                (
+                  SELECT
+                    TestExtraValueTable AS a_1
+                  FROM
+                    TestExtraValueTable
+                ) AS testextravaluetable_2
+            ) AS projectscan_4 MATCH_RECOGNIZE(
+              ORDER BY projectscan_4.a_3 DESC
+              MEASURES
+                ANY_VALUE(projectscan_4.a_1) AS a_5,
+                MATCH_NUMBER() AS a_6
+              AFTER MATCH SKIP TO NEXT ROW
+              PATTERN (a)
+              DEFINE
+                a AS true
+              OPTIONS(use_longest_match = true)
+            )
+            AS matchrecognizescan_7
+        ) AS projectscan_9
+        |> WHERE
+             (CAST(projectscan_9.a_8.int32_val1 AS INT64) + CAST(projectscan_9.a_8.int32_val2 AS INT64)) > 10
         |> STATIC_DESCRIBE
       )
-  ) AS staticdescribescan_11;
+  ) AS staticdescribescan_10;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
   TestExtraValueTable
 |> SELECT
-     TestExtraValueTable AS a_1
-|> AS testextravaluetable_2
+     TestExtraValueTable AS value
+|> AS testextravaluetable_1
 |> SELECT
-     testextravaluetable_2.a_1 AS a_1,
-     CAST(testextravaluetable_2.a_1.int32_val2 AS INT64) + 1 AS a_3
-|> AS projectscan_4
+     testextravaluetable_1.value,
+     CAST(testextravaluetable_1.value.int32_val2 AS INT64) + 1 AS a_2
+|> AS projectscan_3
 |> MATCH_RECOGNIZE(
-     ORDER BY projectscan_4.a_3 DESC
+     ORDER BY projectscan_3.a_2 DESC
      MEASURES
-       ANY_VALUE(projectscan_4.a_1) AS a_5,
-       MATCH_NUMBER() AS a_6
+       ANY_VALUE(projectscan_3.value) AS a_4,
+       MATCH_NUMBER() AS a_5
      AFTER MATCH SKIP TO NEXT ROW
      PATTERN (a)
      DEFINE
        a AS true
      OPTIONS(use_longest_match = true)
    )
-   AS matchrecognizescan_7
+   AS matchrecognizescan_6
 |> SELECT
-     matchrecognizescan_7.a_5 AS a_8
-|> AS projectscan_9
+     matchrecognizescan_6.a_4 AS m
 |> WHERE
-     (CAST(projectscan_9.a_8.int32_val1 AS INT64) + CAST(projectscan_9.a_8.int32_val2 AS INT64)) > 10
-|> SELECT
-     projectscan_9.a_8 AS a_8
-|> AS filterscan_10
+     (CAST(m.int32_val1 AS INT64) + CAST(m.int32_val2 AS INT64)) > 10
 |> STATIC_DESCRIBE
 |> SELECT
-     filterscan_10.a_8 AS m;
+     m;
 ==
 
 # Error cases work normally. This is not an exhaustive list, as it's identical

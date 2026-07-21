@@ -1070,6 +1070,14 @@ class SQLBuilder : public ResolvedASTVisitor {
   // Returns the alias to be used to select the column.
   std::string GetColumnAlias(const ResolvedColumn& column);
 
+  // In Pipe target mode, derives a readable column alias from a meaningful base
+  // name (the ResolvedColumn's name), made globally unique among already-assigned
+  // column aliases by appending a numeric suffix (`name`, `name_2`, ...).
+  std::string MakeUniqueColumnAlias(absl::string_view name);
+
+  // Returns true if `alias` has already been assigned to some column.
+  bool ColumnAliasIsTaken(absl::string_view alias) const;
+
   // Create a new alias to be used for the column, replacing any existing alias.
   std::string UpdateColumnAlias(const ResolvedColumn& column);
 
@@ -1272,17 +1280,6 @@ class SQLBuilder : public ResolvedASTVisitor {
                           int /*grouping_argument_group_by_column_id*/>
           grouping_column_id_map,
       QueryExpression* query_expression);
-
-  // In Pipe syntax mode, if ProcessAggregateScanBase augmented the aggregate's
-  // select list with grouping keys that are not in `output_column_list` (so a
-  // valid pipe AGGREGATE could be formed), appends a `|> SELECT` operator that
-  // projects back to exactly the output columns, dropping the extra grouping
-  // keys that pipe AGGREGATE emits. Returns `query_expression` unchanged when no
-  // projection is needed.
-  absl::StatusOr<std::unique_ptr<QueryExpression>>
-  AppendPipeAggregateOutputProjectionIfNeeded(
-      const ResolvedColumnList& output_column_list,
-      std::unique_ptr<QueryExpression> query_expression);
 
   // Helper function to return corresponding SQL for a list of
   // ResolvedAlterActions.
@@ -1528,6 +1525,15 @@ class SQLBuilder : public ResolvedASTVisitor {
   // `input_qe` is consumed for its text; it may be mutated by the wrap.
   absl::StatusOr<std::string> GetInputPipeSQL(const ResolvedScan* input_scan,
                                               QueryExpression* input_qe);
+
+  // In Pipe syntax mode, if `input_scan` is a plain (non-value) table scan,
+  // expose its columns by their natural table-qualified names and drop the
+  // scan's SELECT list, so a pipe operator can be appended directly onto
+  // `FROM <table>` instead of forcing a `|> SELECT ... |> AS <alias>`
+  // re-aliasing wrapper. Returns true if the optimization was applied. A no-op
+  // (returns false) in Standard syntax mode or for non-table-scan inputs.
+  absl::StatusOr<bool> TryUseLeafTableScanColumns(const ResolvedScan* input_scan,
+                                                  QueryExpression* input_qe);
 
   // Builds a "running pipe query" QueryExpression whose FROM clause carries the
   // complete pipe-syntax string `pipe_sql`. The result does not carry a SELECT,

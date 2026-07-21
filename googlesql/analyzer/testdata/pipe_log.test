@@ -676,55 +676,50 @@ QueryStmt
 [SQLBUILDER_TARGET_SYNTAX_MODE standard]
 [SQLBUILDER_OUTPUT]
 SELECT
-  logscan_5.a_1 AS Key,
-  logscan_5.a_2 AS Value,
-  (logscan_5.a_1) + 1 AS a_6
+  logscan_3.a_1 AS Key,
+  logscan_3.a_2 AS Value,
+  (logscan_3.a_1) + 1 AS a_4
 FROM
   (
     SELECT
-      keyvalue_3.a_1 AS a_1,
-      keyvalue_3.a_2 AS a_2
+      a_1 AS a_1,
+      a_2 AS a_2
     FROM
       (
-        SELECT
-          KeyValue.Key AS a_1,
-          KeyValue.Value AS a_2
         FROM
           KeyValue
-        |> AS keyvalue_3
+        |> SELECT
+             KeyValue.Key AS a_1,
+             KeyValue.Value AS a_2
         |> LOG  (
              |> WHERE
-                  (keyvalue_3.a_1) = 10
+                  a_1 = 10
              |> SELECT
-                  keyvalue_3.a_1 AS a_1,
-                  keyvalue_3.a_2 AS a_2,
-                  (keyvalue_3.a_1) * 10 AS a_4
-             |> ORDER BY a_4
+                  a_1 AS a_1,
+                  a_2 AS a_2,
+                  a_1 * 10 AS k10
+             |> ORDER BY k10
            )
       )
-  ) AS logscan_5;
+  ) AS logscan_3;
 
 [SQLBUILDER_TARGET_SYNTAX_MODE pipe]
 [SQLBUILDER_OUTPUT]
 FROM
   KeyValue
-|> SELECT
-     KeyValue.Key AS a_1,
-     KeyValue.Value AS a_2
-|> AS keyvalue_3
 |> LOG  (
      |> WHERE
-          (keyvalue_3.a_1) = 10
+          (KeyValue.Key) = 10
      |> SELECT
-          keyvalue_3.a_1 AS a_1,
-          keyvalue_3.a_2 AS a_2,
-          (keyvalue_3.a_1) * 10 AS a_4
-     |> ORDER BY a_4
+          KeyValue.Key AS Key,
+          KeyValue.Value AS Value,
+          (KeyValue.Key) * 10 AS k10
+     |> ORDER BY k10
    )
 |> SELECT
-     keyvalue_3.a_1 AS Key,
-     keyvalue_3.a_2 AS Value,
-     (keyvalue_3.a_1) + 1 AS a_5;
+     KeyValue.Key,
+     KeyValue.Value,
+     (KeyValue.Key) + 1 AS a_1;
 ==
 
 # Check for error if we try to log an unretunable type (GRAPH_ELEMENT).
